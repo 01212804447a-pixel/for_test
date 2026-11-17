@@ -18,6 +18,7 @@ npm run serve          # python3 -m http.server 8080 → http://localhost:8080
 npm install
 npm run dev            # esbuild --watch + сервер на http://localhost:8000
 npm run build          # минифицированная сборка в dist/game.js
+npm run single         # однофайловая версия dist/negs-zapolyarye.html (удобно пересылать)
 ```
 
 ## Главная фишка: реалистичная стрельба

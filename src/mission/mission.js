@@ -140,6 +140,7 @@ export class Mission {
     }
     // первый этап
     this.nextStage();
+    this.player.computePose(0.016);
     this.updateCamera(0);
   }
 
@@ -587,7 +588,8 @@ export class Mission {
         this.scopeDraw = { scope: SCOPES.pp61, marks: this._pktMarks, extra: [], offX: 0, offY: 0 };
       } else fov = 60;
     } else if (p.seat === 1) {
-      // «Тигр»: стрелок в люке
+      // «Тигр»: стрелок в люке (сам пулемёт показан как оружие от первого лица)
+      v.model.gun.visible = false;
       const tp = new THREE.Vector3(); v.model.turret.getWorldPosition(tp);
       look.position.set(tp.x, tp.y + 0.55, tp.z);
       look.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
@@ -618,6 +620,7 @@ export class Mission {
       }
       look.position.copy(cam.position); look.quaternion.copy(cam.quaternion); look.updateMatrixWorld(true);
     }
+    for (const vv of this.vehicles) if (vv.model.gun && vv.type.gunExposed && !(v === vv && p.seat === 1)) vv.model.gun.visible = true;
     // тряска
     if (p.shake > 0.001) {
       const k = p.shake * 0.012;

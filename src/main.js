@@ -78,8 +78,9 @@ class App {
       if (!locked && this.mode === 'hq' && !this.ui.isOpen()) this.ui.clickToPlay('Нажмите на экран, чтобы продолжить');
     };
     addEventListener('keydown', (e) => {
-      if (e.code === 'Escape' && this.input.fallbackLook && this.mode === 'mission' && !this.ui.isOpen()) { this.input.releaseLock(); this.pause(); }
-      if (e.code === 'Escape' && this.input.fallbackLook && this.mode === 'hq' && !this.ui.isOpen()) { this.input.releaseLock(); this.ui.clickToPlay('Нажмите на экран, чтобы продолжить'); }
+      if (e.code === 'Escape' && this.mode === 'mission' && !this.ui.isOpen() && this.mission && !this.mission.finished) { this.input.releaseLock(); this.pause(); }
+      else if (e.code === 'Escape' && this.mode === 'hq' && !this.ui.isOpen()) { this.input.releaseLock(); this.ui.clickToPlay('Нажмите на экран, чтобы продолжить'); }
+      else if (e.code === 'Escape' && this.ui.isOpen() && this.mode !== 'menu' && this.mode !== 'loading' && !this.paused) this.ui.close();
     });
     this.ui.mainMenu();
     window.__game = this;
@@ -134,7 +135,7 @@ class App {
         this.hud.show();
         this.mode = 'mission';
         this.paused = false;
-        this.ui.clickToPlay(`${def.title}: нажмите на экран, чтобы начать`);
+        this.ui.clickToPlay(`<b>${def.title}</b>: нажмите на экран, чтобы начать<br><span style="font-size:12px;color:#9aa8b2">ЛКМ — огонь · ПКМ — прицел (целик/мушка, оптика) · колесо при прицеливании — установка прицела · Shift — задержать дыхание · F/H/T/V — приказы · Tab — отделение · M — карта · Esc — меню</span>`);
         this.hud.message(def.code, 4, true);
       } catch (e) {
         console.error(e);

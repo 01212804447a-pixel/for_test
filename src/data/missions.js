@@ -282,7 +282,7 @@ export const MISSIONS = [
     start: { x: 30, z: 640, yaw: 0 }, navCenter: { x: 0, z: 0 }, navSize: 1000,
     build(ctx) {
       const { S } = ctx;
-      S.fence({ pts: [[-150, -100], [-9, -100]] }); S.fence({ pts: [[9, -100], [150, -100], [150, -420], [-150, -420], [-150, -100]] });
+      S.fence({ pts: [[-150, -100], [-9, -100]] }); S.fence({ pts: [[9, -100], [150, -100], [150, -420], [8, -420]] }); S.fence({ pts: [[-8, -420], [-150, -420], [-150, -100]] });
       const towers = [S.tower({ x: -140, z: -110, h: 6 }), S.tower({ x: 140, z: -110, h: 6 }), S.tower({ x: 140, z: -410, h: 6 })];
       S.bunker({ x: -60, z: -160, yaw: 0 }); S.bunker({ x: 60, z: -170, yaw: 0 });
       S.building({ x: -90, z: -260, w: 14, d: 7, h: 3, material: 'wood', roof: 'gable', interior: 'barracks', doors: [{ side: 'e', at: 0 }] });

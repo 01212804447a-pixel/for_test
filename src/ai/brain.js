@@ -200,7 +200,7 @@ export class Brain {
       const sp = t.vel ? Math.hypot(t.vel.x, t.vel.z) : 0;
       const moveF = sp > 3 ? 2 : sp > 0.6 ? 1.4 : 1;
       const camoF = t.team === 'negs' && !t.isVehicle ? (g.isNight ? 0.85 : 0.7) : 1;
-      const distF = Math.pow(clamp(1 - d / range, 0, 1), 1.3) * 2.5 + (d < 30 ? 1.5 : 0);
+      const distF = Math.pow(clamp(1 - d / range, 0, 1), 2) * 2.2 + (d < 40 ? 1.5 : 0);
       const alertF = this.state === 'combat' ? 2.8 : this.state === 'alert' || this.state === 'search' ? 1.7 : 1;
       const rate = distF * stanceF * moveF * camoF * fov * flashBoost * alertF * (t.isVehicle ? 2 : 1) * (0.55 + s.skill.reaction * 0.8) * (1 - s.suppression * 0.5);
       m.detect = Math.min(1.5, m.detect + rate * tdt);

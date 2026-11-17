@@ -148,8 +148,9 @@ export function makeLighting(scene, p) {
     night ? 0x9fb4ff : dusk ? 0xffb08a : 0xfff0dc,
     night ? 0.35 : dusk ? 1.1 : 2.4 * (1 - (p.overcast || 0) * 0.55),
   );
-  // Ночью «луна» светит с высоты 25°
+  // Ночью «луна» светит с высоты 25°; в сумерках рассеянный свет идёт чуть выше горизонта
   if (night) sunDir.set(-0.4, 0.45, 0.6).normalize();
+  else if (sunDir.y < 0.08) { sunDir.y = 0.08; sunDir.normalize(); }
   sun.position.copy(sunDir).multiplyScalar(200);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);

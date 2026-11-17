@@ -28,12 +28,14 @@ export class Terrain {
     this.h = new Float32Array(this.n * this.n);
     this.mask = new Uint8Array(this.n * this.n); // 1 — дорога, 2 — лёд, 3 — пляж
     this.hasSea = features.some((f) => f.type === 'coast');
+    // на приморских картах суша гарантированно выше уровня моря
+    this.landOffset = this.hasSea ? amp * 0.6 + 6 : 0;
     this._generate();
   }
 
   largeScale(x, z) {
     const n = this.noise, a = this.amp;
-    return n.fbm(x / 900, z / 900, 4) * a + n.ridged(x / 450 + 3, z / 450 - 7, 3) * a * 0.55 - a * 0.3;
+    return n.fbm(x / 900, z / 900, 4) * a + n.ridged(x / 450 + 3, z / 450 - 7, 3) * a * 0.55 - a * 0.3 + this.landOffset;
   }
 
   baseHeight(x, z) {
@@ -225,7 +227,7 @@ export class Terrain {
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, map: snowTexture(), normalMap: snowNormal(), normalScale: new THREE.Vector2(0.6, 0.6),
+      vertexColors: true, map: snowTexture(), normalMap: snowNormal(), normalScale: new THREE.Vector2(0.45, 0.45),
       roughness: 0.88, metalness: 0,
     });
     const mesh = new THREE.Mesh(geo, mat);

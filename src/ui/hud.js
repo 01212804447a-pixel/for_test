@@ -124,7 +124,7 @@ export class HUD {
           `<div>${def.mag > 1 ? 'Магазин' : 'Ствол'}: ${magWord(aw.mag, def.mag)}${p.reloadT > 0 ? ' · <b>перезарядка</b>' : ''}</div>` +
           `<div class="mags">${def.mag > 1 ? mags : `запас: ${aw.spare.length}`}</div>` +
           `<div class="ws">${p.sightLabel(aw)}</div>` +
-          (ws.ugl && !p.uglMode ? `<div class="ws">ГП-25: ${ws.ugl.mag + ws.ugl.spare.length} ВОГ (X)</div>` : '');
+          (ws.ugl && !p.uglMode && aw === ws ? `<div class="ws">ГП-25: ${ws.ugl.mag + ws.ugl.spare.length} ВОГ (X)</div>` : '');
       }
     }
     if (!p.vehicle || p.seat === 1) wh += `<div class="ws">Гранаты: ${p.slots[2].count} · ИПП: ${b.medkits}${p.slots[1] ? ` · РПГ: ${p.slots[1].mag + p.slots[1].spare.length}` : ''}</div>`;

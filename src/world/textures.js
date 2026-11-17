@@ -251,3 +251,25 @@ export function flashTexture() {
     return toTex(c, { repeat: false });
   });
 }
+
+// Бревенчатая стена избы
+export function logTexture() {
+  return cached('logs', () => {
+    const S = 256, c = canvas(S), g = c.getContext('2d');
+    const rnd = mulberry32(77);
+    const lh = 32;
+    for (let y = 0; y < S; y += lh) {
+      const k = 0.85 + rnd() * 0.25;
+      const gr = g.createLinearGradient(0, y, 0, y + lh);
+      gr.addColorStop(0, `rgb(${45 * k | 0},${33 * k | 0},${24 * k | 0})`);
+      gr.addColorStop(0.35, `rgb(${105 * k | 0},${80 * k | 0},${58 * k | 0})`);
+      gr.addColorStop(0.7, `rgb(${88 * k | 0},${66 * k | 0},${48 * k | 0})`);
+      gr.addColorStop(1, `rgb(${30 * k | 0},${22 * k | 0},${16 * k | 0})`);
+      g.fillStyle = gr; g.fillRect(0, y, S, lh);
+      for (let i = 0; i < 20; i++) { g.strokeStyle = `rgba(20,14,8,${rnd() * 0.25})`; g.beginPath(); const yy = y + rnd() * lh; g.moveTo(0, yy); g.lineTo(S, yy + (rnd() - 0.5) * 4); g.stroke(); }
+      // мох/пакля между брёвнами
+      g.fillStyle = 'rgba(120,110,80,0.5)'; g.fillRect(0, y + lh - 2, S, 2);
+    }
+    return toTex(c);
+  });
+}

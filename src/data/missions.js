@@ -34,6 +34,7 @@ export const MISSIONS = [
       // флажки ветра
       for (const d of [100, 300, 500, 700]) ctx.windFlag(-25, -d);
       ctx.scatter({ x: 0, z: -300, r: 900, rocks: 40, trees: 60, avoid: [{ x: 0, z: -500, r: 140 }, { x: 0, z: 0, r: 60 }] });
+      ctx.poi.ruin({ x: -160, z: -260, yaw: 0.2 }); ctx.poi.chum({ x: 140, z: 80, seed: 1 }); ctx.forest({ x: 200, z: -100, r: 120, trees: 22, seed: 2 }); ctx.forest({ x: -220, z: 60, r: 100, trees: 18, seed: 3 });
       ctx.weaponRack(-6, 4);
       ctx.ammoCrate(6, 4);
       ctx.stage([ctx.objCustom('Свободная стрельба. Таблицы стрельбы — в штабе. Esc → «Вернуться в штаб»', () => false)]);
@@ -50,6 +51,7 @@ export const MISSIONS = [
       { type: 'lake', x: -260, z: -380, r: 85, fall: 25 },
       { type: 'road', pts: [[10, 760], [70, 520], [25, 320], [-30, 120], [0, -95]], w: 7, fall: 7 },
       { type: 'flat', x: 0, z: -150, r: 72, fall: 40 },
+      { type: 'flat', x: -230, z: 420, r: 60, fall: 35 }, { type: 'flat', x: 210, z: -40, r: 16, fall: 12 }, { type: 'flat', x: -150, z: 120, r: 14, fall: 12 }, { type: 'flat', x: 337, z: 160, r: 25, fall: 15 },
     ] },
     start: { x: 10, z: 690, yaw: 0 }, navCenter: { x: 0, z: 150 }, navSize: 900,
     build(ctx) {
@@ -70,6 +72,12 @@ export const MISSIONS = [
       S.wreck({ x: 40, z: 40, yaw: 1 });
       ctx.scatter({ x: 0, z: 250, r: 560, rocks: 110, trees: 40, avoid: [{ x: 0, z: -150, r: 80 }], road: true });
       ctx.scatter({ x: 0, z: -200, r: 900, rocks: 60, trees: 80, avoid: [{ x: 0, z: -150, r: 90 }] });
+      ctx.poi.village({ x: -230, z: 420, yaw: 0.3, n: 6, seed: 11, name: 'пос. Верхний Кильдин' });
+      ctx.poi.powerLine({ pts: [[-230, 400], [-120, 330], [-48, 150], [-50, -60], [-30, -100]] });
+      ctx.poi.truckWreck({ x: 92, z: 430, yaw: 1.2 });
+      ctx.poi.chum({ x: 330, z: 150, seed: 4 }); ctx.poi.chum({ x: 346, z: 170, seed: 5 });
+      ctx.poi.ruin({ x: 210, z: -40, yaw: 0.4 }); ctx.poi.ruin({ x: -150, z: 120, yaw: -0.2, w: 10, d: 7, seed: 6 });
+      ctx.forest({ x: -200, z: 230, r: 110, trees: 26, seed: 3 }); ctx.forest({ x: 260, z: 420, r: 100, trees: 22, seed: 4 }); ctx.forest({ x: 170, z: -300, r: 130, trees: 28, seed: 5 });
       const g = ctx.group('station');
       ctx.enemy({ x: 36, z: -110, y: tw.top, yaw: PI, weapon: 'svd', role: 'sniper', static: true, group: g, skill: { aim: 0.6, reaction: 0.5 } });
       ctx.enemy({ x: 0, z: -107.5, yaw: PI, weapon: 'pkm', role: 'mg', mode: 'guard', group: g });
@@ -104,6 +112,7 @@ export const MISSIONS = [
       { type: 'valley', pts: [[-1200, 0], [-500, 20], [0, 0], [500, -30], [1200, -10]], w: 70, depth: 7 },
       { type: 'road', pts: [[-1200, 0], [-500, 20], [0, 0], [500, -30], [1200, -10]], w: 8, fall: 8 },
       { type: 'flat', x: 460, z: -30, r: 30, fall: 20 },
+      { type: 'flat', x: -480, z: 330, r: 50, fall: 30 }, { type: 'flat', x: -160, z: 250, r: 16, fall: 12 }, { type: 'flat', x: 280, z: 380, r: 15, fall: 10 },
     ] },
     start: { x: 30, z: 470, yaw: 0 }, navCenter: { x: 100, z: 120 }, navSize: 900,
     build(ctx) {
@@ -117,6 +126,12 @@ export const MISSIONS = [
       S.sign({ x: 440, z: -40, text: 'СТОЙ!', sub: 'Проезд закрыт' });
       ctx.scatter({ x: 0, z: 180, r: 450, rocks: 120, trees: 50, avoid: [{ x: 460, z: -30, r: 40 }], road: true });
       ctx.scatter({ x: 0, z: -220, r: 700, rocks: 80, trees: 90, road: true });
+      ctx.poi.powerLine({ pts: [[-1000, 42], [-500, 62], [0, 42], [500, 12], [1000, 30]] });
+      ctx.poi.truckWreck({ x: -220, z: 30, yaw: -0.2 }); ctx.poi.truckWreck({ x: 262, z: -55, yaw: 2.9, burnt: false });
+      ctx.poi.ruin({ x: -160, z: 250, yaw: 0.3 });
+      ctx.poi.chum({ x: 280, z: 380, seed: 2 });
+      ctx.poi.village({ x: -480, z: 330, yaw: 0, n: 4, seed: 21, name: 'Рудник «Белый»' });
+      ctx.forest({ x: 150, z: 300, r: 120, trees: 24, seed: 8 }); ctx.forest({ x: -300, z: -320, r: 150, trees: 30, seed: 9 }); ctx.forest({ x: 400, z: -380, r: 120, trees: 22, seed: 10 });
       const cp = ctx.group('checkpoint');
       ctx.enemy({ x: 452, z: -41, yaw: -PI / 2, mode: 'guard', group: cp, weapon: 'pkm', role: 'mg' });
       ctx.enemy({ x: 468, z: -19, yaw: PI / 2, mode: 'guard', group: cp, weapon: 'akm' });
@@ -158,6 +173,7 @@ export const MISSIONS = [
       { type: 'flat', x: 0, z: -330, r: 58, fall: 28 },
       { type: 'road', pts: [[0, -1150], [30, -800], [10, -560], [0, -390]], w: 7, fall: 6 },
       { type: 'hill', x: 380, z: 260, r: 170, h: 20 }, { type: 'hill', x: -400, z: 300, r: 190, h: 22 },
+      { type: 'flat', x: -140, z: 220, r: 16, fall: 12 }, { type: 'flat', x: 170, z: 90, r: 14, fall: 12 },
     ] },
     start: { x: 0, z: 660, yaw: 0 }, navCenter: { x: 0, z: 0 }, navSize: 1000,
     build(ctx) {
@@ -178,6 +194,12 @@ export const MISSIONS = [
       for (let i = 0; i < 6; i++) S.berm({ x: rand(-260, 260), z: rand(-120, 450), yaw: rand(0, 3), len: rand(5, 9), h: 1 });
       ctx.scatter({ x: 0, z: 200, r: 650, rocks: 140, trees: 20, avoid: [c] });
       ctx.scatter({ x: 0, z: -400, r: 900, rocks: 60, trees: 40, avoid: [{ ...c, r: 90 }], road: true });
+      ctx.poi.pipeline({ pts: [[-650, 360], [-200, 330], [-14, 338]] }); ctx.poi.pipeline({ pts: [[14, 339], [250, 345], [650, 300]] });
+      ctx.poi.ruin({ x: -140, z: 220, yaw: 0.2 }); ctx.poi.ruin({ x: 170, z: 90, yaw: -0.4, seed: 7, w: 10, d: 8 });
+      ctx.poi.truckWreck({ x: 60, z: 470, yaw: 0.8 });
+      ctx.poi.chum({ x: -320, z: 520, seed: 3 });
+      ctx.poi.powerLine({ pts: [[12, -470], [30, -800], [0, -1100]] });
+      ctx.forest({ x: -380, z: 120, r: 130, trees: 26, seed: 12 }); ctx.forest({ x: 400, z: 520, r: 110, trees: 20, seed: 13 });
       const g = ctx.group('post');
       const s1 = ctx.enemy({ x: -38, z: -290, y: t1.top, yaw: 0.2 + PI, weapon: 'svd', role: 'sniper', static: true, group: g, skill: { aim: 0.72, reaction: 0.6 } });
       const s2 = ctx.enemy({ x: 38, z: -293, y: t2.top, yaw: PI - 0.2, weapon: 'svd', role: 'sniper', static: true, group: g, skill: { aim: 0.72, reaction: 0.6 } });
@@ -216,6 +238,7 @@ export const MISSIONS = [
       { type: 'flat', x: 20, z: -240, r: 170, fall: 60, h: 3 },
       { type: 'hill', x: -300, z: 300, r: 220, h: 24 }, { type: 'hill', x: 350, z: 350, r: 200, h: 20 },
       { type: 'road', pts: [[1100, -150], [500, -170], [150, -200]], w: 8, fall: 6 },
+      { type: 'flat', x: -330, z: 330, r: 60, fall: 35 },
     ] },
     start: { x: -150, z: 600, yaw: 0.3 }, navCenter: { x: 0, z: 0 }, navSize: 1000,
     build(ctx) {
@@ -235,6 +258,12 @@ export const MISSIONS = [
       S.fence({ pts: [[-140, -160], [-10, -160]] }); S.fence({ pts: [[10, -160], [230, -160], [230, -320]] });
       S.sign({ x: 14, z: -155, text: 'ПОРТ «ЛЕДЯНОЙ»', sub: 'Въезд по пропускам' });
       ctx.scatter({ x: -100, z: 250, r: 600, rocks: 100, trees: 60, avoid: [{ x: 20, z: -240, r: 190 }] });
+      ctx.poi.village({ x: -330, z: 330, yaw: -0.2, n: 6, seed: 41, name: 'пос. Ледяной' });
+      ctx.poi.powerLine({ pts: [[-330, 310], [-150, 100], [-70, -150]] });
+      ctx.poi.hummocks({ x0: -900, x1: 900, z: -365, n: 160 });
+      ctx.poi.truckWreck({ x: 118, z: -172, yaw: 0.1 });
+      ctx.poi.pipeline({ pts: [[200, -236], [400, -206], [700, -214]] });
+      ctx.forest({ x: 150, z: 300, r: 140, trees: 28, seed: 14 }); ctx.forest({ x: -520, z: 120, r: 120, trees: 24, seed: 15 });
       const g = ctx.group('port');
       ctx.enemy({ x: -6, z: -156, yaw: PI, mode: 'guard', group: g, weapon: 'akm' });
       ctx.enemy({ x: 6, z: -156, yaw: PI, mode: 'guard', group: g, weapon: 'ak74m' });
@@ -278,6 +307,7 @@ export const MISSIONS = [
       { type: 'flat', x: 0, z: -260, r: 185, fall: 60 },
       { type: 'hill', x: -380, z: 250, r: 200, h: 26 }, { type: 'hill', x: 360, z: 200, r: 190, h: 22 },
       { type: 'road', pts: [[0, 900], [40, 500], [0, 150], [0, -100]], w: 8, fall: 7 },
+      { type: 'flat', x: -230, z: 20, r: 16, fall: 12 }, { type: 'flat', x: 210, z: -40, r: 16, fall: 12 },
     ] },
     start: { x: 30, z: 640, yaw: 0 }, navCenter: { x: 0, z: 0 }, navSize: 1000,
     build(ctx) {
@@ -296,6 +326,12 @@ export const MISSIONS = [
       S.pier({ x: 0, z: -530, len: 14, w: 40, yaw: PI / 2, top: 1.6 });
       S.sign({ x: 14, z: -96, text: 'ОБЪЕКТ-17', sub: 'Запретная зона' });
       ctx.scatter({ x: 0, z: 300, r: 600, rocks: 110, trees: 50, avoid: [{ x: 0, z: -260, r: 200 }], road: true });
+      ctx.poi.pipeline({ pts: [[-600, 60], [-14, 78]] }); ctx.poi.pipeline({ pts: [[14, 78], [600, 40]] });
+      ctx.poi.ruin({ x: -230, z: 20, yaw: 0.5 }); ctx.poi.ruin({ x: 210, z: -40, yaw: -0.3, seed: 9 });
+      ctx.poi.truckWreck({ x: 70, z: 260, yaw: 1.4 }); ctx.poi.truckWreck({ x: -40, z: 150, yaw: -0.4 });
+      ctx.poi.powerLine({ pts: [[60, 600], [70, 300], [26, 0], [16, -95]] });
+      ctx.poi.hummocks({ x0: -900, x1: 900, z: -548, n: 160 });
+      ctx.forest({ x: -350, z: 320, r: 140, trees: 28, seed: 16 }); ctx.forest({ x: 380, z: 260, r: 120, trees: 24, seed: 17 });
       const g = ctx.group('base');
       const gate = ctx.vehicle('mtlb', { x: 0, z: -122, yaw: PI, team: 'denter', crew: [{}, { weapon: 'akm' }], group: g, parked: true });
       towers.forEach((t, i) => ctx.enemy({ x: [-140, 140, 140][i], z: [-110, -110, -410][i], y: t.top, yaw: PI * (i === 2 ? 0.5 : 1), static: true, group: g, weapon: i === 0 ? 'svd' : 'pkm', role: i === 0 ? 'sniper' : 'mg' }));

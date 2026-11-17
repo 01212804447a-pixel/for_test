@@ -36,6 +36,8 @@ export class World {
     this._static = new Map(); // material -> {geos:[], cast:boolean}
     this.interactables = [];
     this.targets = []; // мишени полигона
+    this.smokes = []; // дымы из труб
+    this.signs = [];
   }
 
   // ---------- регистрация препятствий ----------

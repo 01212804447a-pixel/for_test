@@ -52,7 +52,11 @@ export class Input {
       if (this.onLockChange) this.onLockChange(this.locked);
     });
     document.addEventListener('pointerlockerror', () => {
-      // Например, во встроенном фрейме — переходим на запасной режим обзора
+      // Во встроенном фрейме без доступа к захвату — запасной режим обзора.
+      // Ошибку из-за отсутствия жеста пользователя (обычная страница) игнорируем.
+      let framed = false;
+      try { framed = window.top !== window; } catch (e) { framed = true; }
+      if (!framed) return;
       this.fallbackLook = true;
       if (this.onLockChange) this.onLockChange(true);
     });
@@ -63,7 +67,11 @@ export class Input {
     if (this.fallbackLook) return;
     try {
       const p = this.el.requestPointerLock && this.el.requestPointerLock();
-      if (p && p.catch) p.catch(() => { this.fallbackLook = true; if (this.onLockChange) this.onLockChange(true); });
+      if (p && p.catch) p.catch(() => {
+        let framed = false;
+        try { framed = window.top !== window; } catch (e) { framed = true; }
+        if (framed) { this.fallbackLook = true; if (this.onLockChange) this.onLockChange(true); }
+      });
     } catch (e) {
       this.fallbackLook = true;
     }

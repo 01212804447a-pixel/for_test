@@ -48,6 +48,13 @@ export class UI {
     this.openState = false;
     const cb = this.onClose; this.onClose = null;
     if (cb) cb();
+    // вернуть управление сразу (клик по кнопке — пользовательский жест для захвата мыши)
+    const a = this.app;
+    const gesture = !navigator.userActivation || navigator.userActivation.isActive;
+    if (gesture && (a.mode === 'hq' || (a.mode === 'mission' && !a.paused)) && !this.openState) {
+      a.input.requestLock();
+      this.hqPrompt(null);
+    }
   }
 
   bind(sel, fn) { this.panel.querySelectorAll(sel).forEach((e) => e.addEventListener('click', (ev) => { this.app.audio.click(); fn(e, ev); })); }

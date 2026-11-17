@@ -1,9 +1,10 @@
 // Строения и объекты уровня: казармы, вышки, мешки, контейнеры, цистерны,
 // камни, ели, РЛС, бункеры, мишени полигона.
 import * as THREE from 'three';
-import { woodTexture, concreteTexture, metalTexture, rockTexture, textTexture, targetTexture } from './textures.js';
+import { woodTexture, concreteTexture, metalTexture, rockTexture, textTexture, targetTexture, logTexture } from './textures.js';
 import { boxGeo, SNOW_MAT } from './world.js';
 import { mulberry32 } from '../core/math.js';
+import { spruceGeometry, birchGeometry } from './flora.js';
 
 export function makeMats() {
   const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, ...o });
@@ -22,7 +23,10 @@ export function makeMats() {
     white: std({ map: metalTexture('#d8dcdf', 0.1, 'w'), metalness: 0.2, roughness: 0.6 }),
     sandbag: std({ map: concreteTexture(), color: 0xc9bd98, roughness: 1 }),
     rock: std({ map: rockTexture(), vertexColors: true, roughness: 0.95 }),
-    spruce: std({ vertexColors: true, roughness: 0.95, flatShading: true }),
+    spruce: std({ vertexColors: true, roughness: 0.95, flatShading: true, side: THREE.DoubleSide }),
+    log: std({ map: logTexture() }),
+    roofTin: std({ map: metalTexture('#5d6266', 0.45, 'tin'), metalness: 0.45, roughness: 0.6 }),
+    hide: std({ color: 0x6b5a48, roughness: 1, side: THREE.DoubleSide }),
     dark: std({ color: 0x1b1d20, roughness: 0.8 }),
     glass: new THREE.MeshStandardMaterial({ color: 0x1a2430, roughness: 0.1, metalness: 0.6 }),
     lamp: new THREE.MeshStandardMaterial({ color: 0xfff1c0, emissive: 0xffd890, emissiveIntensity: 2 }),
@@ -37,7 +41,7 @@ export const l2w = (cx, cz, yaw, lx, lz) => ({
 });
 
 // Стена с проёмами вдоль локальной оси X от a до b, на смещении lz
-function wall(world, cx, cz, yaw, y0, a, b, lz, h, th, openings, mat, opts) {
+function wall(world, cx, cz, yaw, y0, a, b, lz, h, th, openings, mat, opts, frameMat) {
   const ops = openings.slice().sort((p, q) => p.at - q.at);
   let cur = a;
   const seg = (from, to, yb, yt) => {
@@ -51,17 +55,27 @@ function wall(world, cx, cz, yaw, y0, a, b, lz, h, th, openings, mat, opts) {
     seg(cur, s, -1, h);
     seg(s, e, -1, o.bottom);
     seg(s, e, o.top, h);
+    if (frameMat) {
+      // наличники/рамы проёмов
+      const fw = 0.07, fd = th + 0.06;
+      const fr = (lx, yb, w, hh) => { const c = l2w(cx, cz, yaw, lx, lz); world.addBox({ x: c.x, z: c.z, y0: y0 + yb, w, d: fd, h: hh, yaw, material: frameMat, collide: false, castShadow: false }); };
+      fr(s - fw / 2, Math.max(0, o.bottom), fw, o.top - Math.max(0, o.bottom));
+      fr(e + fw / 2, Math.max(0, o.bottom), fw, o.top - Math.max(0, o.bottom));
+      fr((s + e) / 2, o.top, e - s + fw * 2, fw);
+      if (o.bottom > 0) { fr((s + e) / 2, o.bottom - fw, e - s + fw * 2, fw); fr((s + e) / 2, (o.bottom + o.top) / 2, fw * 0.6, o.top - o.bottom); }
+    }
     cur = e;
   }
   seg(cur, b, -1, h);
 }
 
-export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, material = 'wood', doors = [{ side: 's', at: 0 }], windows = 2, roof = 'gable', interior = 'barracks', groundY }) {
+export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, material = 'wood', doors = [{ side: 's', at: 0 }], windows = 2, roof = 'gable', interior = 'barracks', groundY, roofMat }) {
   const y0 = groundY ?? world.terrain.heightAt(x, z);
-  const isWood = material === 'wood';
-  const mat = isWood ? m.wood : m.concrete;
+  const isWood = material === 'wood' || material === 'log';
+  const mat = material === 'log' ? m.log : isWood ? m.wood : m.concrete;
+  const frameMat = isWood ? m.woodLight : m.white;
   const th = isWood ? 0.22 : 0.32;
-  const opts = { mat: isWood ? 'wood' : 'concrete', pen: isWood ? 30 : 0 };
+  const opts = { mat: isWood ? 'wood' : 'concrete', pen: isWood ? (material === 'log' ? 120 : 30) : 0 };
   const sides = { s: [], n: [], e: [], w: [] };
   for (const dr of doors) sides[dr.side].push({ at: dr.at || 0, width: dr.width || 1.9, bottom: -1, top: 2.15 });
   const addWins = (side, len) => {
@@ -74,13 +88,13 @@ export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, materi
   addWins('s', w); addWins('n', w);
   if (d > 7) { addWins('e', d); addWins('w', d); } else { sides.e.push(...[]); }
   // южная (+z) и северная (-z) стены — вдоль X
-  wall(world, x, z, yaw, y0, -w / 2, w / 2, d / 2 - th / 2, h, th, sides.s, mat, opts);
-  wall(world, x, z, yaw, y0, -w / 2, w / 2, -d / 2 + th / 2, h, th, sides.n, mat, opts);
+  wall(world, x, z, yaw, y0, -w / 2, w / 2, d / 2 - th / 2, h, th, sides.s, mat, opts, frameMat);
+  wall(world, x, z, yaw, y0, -w / 2, w / 2, -d / 2 + th / 2, h, th, sides.n, mat, opts, frameMat);
   // восточная и западная — вдоль Z: поворот на 90°
   const yaw2 = yaw + Math.PI / 2;
   const ce = l2w(x, z, yaw, w / 2 - th / 2, 0), cw = l2w(x, z, yaw, -w / 2 + th / 2, 0);
-  wall(world, ce.x, ce.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.e.map((o) => ({ ...o, at: -o.at })), mat, opts);
-  wall(world, cw.x, cw.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.w.map((o) => ({ ...o, at: -o.at })), mat, opts);
+  wall(world, ce.x, ce.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.e.map((o) => ({ ...o, at: -o.at })), mat, opts, frameMat);
+  wall(world, cw.x, cw.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.w.map((o) => ({ ...o, at: -o.at })), mat, opts, frameMat);
   // пол
   world.addBox({ x, z, y0: y0 - 0.6, w: w - 0.1, d: d - 0.1, h: 0.62, yaw, material: m.woodDark, mat: 'wood', cover: false, castShadow: false });
   // крыша
@@ -96,7 +110,7 @@ export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, materi
       const c = l2w(x, z, yaw, 0, sgn * d / 4);
       g.rotateY(yaw);
       g.translate(c.x, y0 + h + rh / 2, c.z);
-      world.addStaticGeometry(m.metalGrey, g, true);
+      world.addStaticGeometry(roofMat || m.metalGrey, g, true);
       const sg = boxGeo(w + 0.62, 0.06, slopeLen, 2);
       sg.translate(0, 0.08, 0);
       sg.rotateX(sgn * ang); sg.rotateY(yaw); sg.translate(c.x, y0 + h + rh / 2 + 0.02, c.z);
@@ -268,35 +282,21 @@ export function rock(world, m, { x, z, s = 1.5, seed = 1, collide = true }) {
   if (collide && s > 0.6) world.addCylCollider({ x, z, y0: y0 - 0.5, r: s * 0.82, h: s * 1.05 + 0.5, mat: 'rock' });
 }
 
-// Ель со снегом
+// Ель со снегом (ярусы лап) и карликовая берёза
 export function spruce(world, m, { x, z, h = 7, seed = 1 }) {
-  const rnd = mulberry32(seed);
   const y0 = world.terrain.heightAt(x, z);
-  const trunk = new THREE.CylinderGeometry(0.12, 0.2, h * 0.35, 6);
-  trunk.translate(x, y0 + h * 0.17, z);
-  const tc = new Float32Array(trunk.attributes.position.count * 3);
-  for (let i = 0; i < tc.length; i += 3) { tc[i] = 0.28; tc[i + 1] = 0.2; tc[i + 2] = 0.14; }
-  trunk.setAttribute('color', new THREE.BufferAttribute(tc, 3));
-  world.addStaticGeometry(m.spruce, trunk.toNonIndexed(), true);
-  const layers = 4;
-  for (let i = 0; i < layers; i++) {
-    const r = (1 - i / layers) * h * 0.28 + 0.3;
-    const ch = h * 0.38;
-    const cone = new THREE.ConeGeometry(r, ch, 7);
-    cone.rotateY(rnd() * 3);
-    cone.translate(x, y0 + h * 0.22 + i * h * 0.19 + ch / 2, z);
-    const ng = cone.toNonIndexed();
-    ng.computeVertexNormals();
-    const nn = ng.attributes.normal;
-    const c = new Float32Array(nn.count * 3);
-    for (let k = 0; k < nn.count; k++) {
-      const snow = nn.getY(k) > 0.35 && rnd() > 0.25;
-      if (snow) { c[k * 3] = 0.86; c[k * 3 + 1] = 0.9; c[k * 3 + 2] = 0.95; } else { c[k * 3] = 0.08; c[k * 3 + 1] = 0.17; c[k * 3 + 2] = 0.12; }
-    }
-    ng.setAttribute('color', new THREE.BufferAttribute(c, 3));
-    world.addStaticGeometry(m.spruce, ng, true);
-  }
-  world.addCylCollider({ x, z, y0, r: 0.22, h: h * 0.6, mat: 'wood', pen: 60, cover: false });
+  const g = spruceGeometry(h, seed);
+  g.rotateY(seed * 1.7);
+  g.translate(x, y0 - 0.1, z);
+  world.addStaticGeometry(m.spruce, g, true);
+  world.addCylCollider({ x, z, y0, r: 0.2, h: h * 0.6, mat: 'wood', pen: 60, cover: false });
+}
+
+export function birch(world, m, { x, z, h = 4, seed = 1 }) {
+  const y0 = world.terrain.heightAt(x, z);
+  const g = birchGeometry(h, seed);
+  g.translate(x, y0 - 0.05, z);
+  world.addStaticGeometry(m.spruce, g, true);
 }
 
 export function antenna(world, m, { x, z, h = 18 }) {

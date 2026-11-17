@@ -146,11 +146,11 @@ export function makeLighting(scene, p) {
   const sunDir = sky.uniforms.uSunDir.value.clone();
   const sun = new THREE.DirectionalLight(
     night ? 0x9fb4ff : dusk ? 0xffb08a : 0xfff0dc,
-    night ? 0.35 : dusk ? 1.1 : 2.4 * (1 - (p.overcast || 0) * 0.55),
+    night ? 0.35 : dusk ? 1.1 : 3.4 * (1 - (p.overcast || 0) * 0.5),
   );
   // Ночью «луна» светит с высоты 25°; в сумерках рассеянный свет идёт чуть выше горизонта
   if (night) sunDir.set(-0.4, 0.45, 0.6).normalize();
-  else if (sunDir.y < 0.08) { sunDir.y = 0.08; sunDir.normalize(); }
+  else if (sunDir.y < (dusk ? 0.08 : 0.19)) { sunDir.y = dusk ? 0.08 : 0.19; sunDir.normalize(); }
   sun.position.copy(sunDir).multiplyScalar(200);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -159,8 +159,8 @@ export function makeLighting(scene, p) {
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
   scene.add(sun); scene.add(sun.target);
   const hemi = new THREE.HemisphereLight(
-    night ? 0x2a3a66 : dusk ? 0x8090c0 : 0xbcd2ff,
-    night ? 0x0c1018 : dusk ? 0x6a6470 : 0xd8dce4,
+    night ? 0x2a3a66 : dusk ? 0x8a90b8 : 0xdbe4f2,
+    night ? 0x0c1018 : dusk ? 0x6a6470 : 0xf2eee8,
     night ? 0.55 : dusk ? 0.9 : 1.2,
   );
   if (p.aurora && night) hemi.color.lerp(new THREE.Color(0x30ff90), 0.18 * p.aurora);

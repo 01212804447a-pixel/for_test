@@ -2,7 +2,8 @@
 // Простая, но «честная» динамика: сцепление со снегом, уклоны, подвеска по 4 точкам,
 // столкновения (OBB), бронирование по проекциям, турели, места десанта.
 import * as THREE from 'three';
-import { camoTexture } from '../world/textures.js';
+import { buildTigr, buildNiva, buildMTLB } from './vehicleModels.js';
+import { blobShadow } from '../world/flora.js';
 import { WEAPONS } from '../data/weapons.js';
 import { clamp, rand, randn, wrapAngle } from '../core/math.js';
 import { solverFor } from './soldier.js';
@@ -31,103 +32,9 @@ export const VEHICLE_TYPES = {
   },
 };
 
-function m(color, opts = {}) { return new THREE.MeshStandardMaterial({ color, roughness: 0.7, ...opts }); }
-function bx(g, w, h, d, mat, x, y, z, rx = 0, ry = 0, rz = 0) {
-  const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  o.position.set(x, y, z); o.rotation.set(rx, ry, rz); o.castShadow = true; o.receiveShadow = true; g.add(o); return o;
-}
-function wheel(g, r, w, x, y, z, tire, rim) {
-  const grp = new THREE.Group();
-  const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 18), tire); t.rotation.z = Math.PI / 2; t.castShadow = true;
-  const h = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r * 0.55, w + 0.02, 10), rim); h.rotation.z = Math.PI / 2;
-  grp.add(t, h); grp.position.set(x, y, z); g.add(grp); return grp;
-}
-
 function buildModel(type) {
   const T = VEHICLE_TYPES[type];
-  const g = new THREE.Group();
-  const camo = new THREE.MeshStandardMaterial({ map: camoTexture(T.camo, 'veh' + type, 2.5), roughness: 0.65, metalness: 0.25 });
-  const dark = m(0x161718, { roughness: 0.8 });
-  const glass = m(0x152230, { roughness: 0.08, metalness: 0.7 });
-  const tire = m(0x151515, { roughness: 0.95 });
-  const rim = m(0x3a3d40, { metalness: 0.6, roughness: 0.5 });
-  const lamp = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff0c0, emissiveIntensity: 1.2 });
-  const res = { group: g, wheels: [], turret: null, gun: null, mats: [camo, dark, glass, tire, rim] };
-  if (type === 'tigr') {
-    bx(g, 2.3, 0.85, 5.3, camo, 0, 0.95, 0);
-    bx(g, 2.2, 0.95, 3.5, camo, 0, 1.85, 0.75);
-    bx(g, 2.2, 0.5, 1.5, camo, 0, 1.6, -1.85, 0.08);
-    bx(g, 2.0, 0.62, 0.08, glass, 0, 2.02, -0.95, -0.35);
-    for (const s of [-1, 1]) {
-      bx(g, 0.06, 0.4, 0.7, glass, s * 1.11, 2.0, -0.2);
-      bx(g, 0.06, 0.4, 0.7, glass, s * 1.11, 2.0, 0.85);
-      bx(g, 0.06, 0.35, 0.5, glass, s * 1.11, 2.0, 1.9);
-      bx(g, 0.5, 0.25, 4.6, camo, s * 1.08, 1.28, 0.1);
-      bx(g, 0.1, 0.12, 0.2, dark, s * 1.25, 2.15, -0.95);
-    }
-    bx(g, 2.4, 0.3, 0.25, dark, 0, 0.75, -2.72);
-    bx(g, 1.6, 0.35, 0.05, dark, 0, 1.25, -2.62);
-    for (const s of [-1, 1]) bx(g, 0.22, 0.14, 0.05, lamp, s * 0.85, 1.35, -2.62);
-    const sp = wheel(g, 0.5, 0.3, 0, 1.4, 2.78, tire, rim); sp.rotation.y = Math.PI / 2;
-    for (const [x, z] of [[-1.05, -1.65], [1.05, -1.65], [-1.05, 1.65], [1.05, 1.65]]) res.wheels.push(wheel(g, 0.56, 0.38, x, 0.56, z, tire, rim));
-    // турель с ПКП
-    const tur = new THREE.Group();
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.06, 8, 20), dark); ring.rotation.x = Math.PI / 2; tur.add(ring);
-    const gun = new THREE.Group();
-    bx(gun, 0.08, 0.1, 0.9, dark, 0, 0, -0.45);
-    bx(gun, 0.1, 0.12, 0.12, m(0x3e4a33), 0.08, -0.08, -0.1);
-    bx(gun, 0.5, 0.35, 0.03, camo, 0, 0.05, -0.55);
-    gun.position.set(0, 0.35, -0.2);
-    tur.add(gun);
-    tur.position.set(0, 2.34, 0.6);
-    g.add(tur);
-    res.turret = tur; res.gun = gun;
-  } else if (type === 'niva') {
-    bx(g, 1.66, 0.62, 3.7, camo, 0, 0.72, 0);
-    bx(g, 1.56, 0.58, 2.05, camo, 0, 1.3, 0.35);
-    bx(g, 1.5, 0.56, 0.06, glass, 0, 1.32, -0.72, -0.5);
-    bx(g, 1.4, 0.45, 0.05, glass, 0, 1.33, 1.38, 0.2);
-    for (const s of [-1, 1]) {
-      bx(g, 0.04, 0.42, 1.0, glass, s * 0.79, 1.33, 0.0);
-      bx(g, 0.04, 0.4, 0.6, glass, s * 0.79, 1.33, 0.95);
-      bx(g, 0.06, 0.18, 3.0, dark, s * 0.84, 0.55, 0);
-      const hl = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.05, 14), lamp);
-      hl.rotation.x = Math.PI / 2; hl.position.set(s * 0.55, 0.85, -1.86); g.add(hl);
-    }
-    bx(g, 0.7, 0.18, 0.04, dark, 0, 0.85, -1.86);
-    bx(g, 1.7, 0.16, 0.14, dark, 0, 0.48, -1.9);
-    bx(g, 1.7, 0.16, 0.14, dark, 0, 0.48, 1.9);
-    bx(g, 1.3, 0.06, 1.4, dark, 0, 1.62, 0.35);
-    for (const [x, z] of [[-0.72, -1.1], [0.72, -1.1], [-0.72, 1.1], [0.72, 1.1]]) res.wheels.push(wheel(g, 0.34, 0.2, x, 0.34, z, tire, rim));
-  } else {
-    // МТ-ЛБ
-    bx(g, 2.6, 0.95, 5.2, camo, 0, 1.05, 0.55);
-    bx(g, 2.6, 0.9, 1.3, camo, 0, 0.95, -2.5, -0.55);
-    bx(g, 2.6, 0.25, 1.1, camo, 0, 1.4, -1.85, 0.12);
-    for (const s of [-1, 1]) {
-      bx(g, 0.48, 0.75, 6.1, dark, s * 1.22, 0.42, 0.1);
-      for (let i = 0; i < 6; i++) {
-        const w = wheel(g, 0.3, 0.5, s * 1.22, 0.32, -2.2 + i * 0.9, tire, rim);
-        res.wheels.push(w);
-      }
-      bx(g, 0.5, 0.08, 6.2, camo, s * 1.22, 0.83, 0.1);
-      bx(g, 0.16, 0.12, 0.14, lamp, s * 0.9, 1.45, -2.45);
-    }
-    bx(g, 0.9, 0.06, 0.6, dark, -0.6, 1.56, 1.2);
-    bx(g, 0.9, 0.06, 0.6, dark, 0.5, 1.56, 1.2);
-    bx(g, 0.3, 0.15, 0.4, dark, -0.7, 1.6, -1.2);
-    const tur = new THREE.Group();
-    const tb = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.42, 16), camo); tb.castShadow = true; tur.add(tb);
-    const gun = new THREE.Group();
-    bx(gun, 0.07, 0.07, 0.95, dark, 0, 0, -0.55);
-    bx(gun, 0.2, 0.16, 0.26, camo, 0, 0, -0.05);
-    gun.position.set(0, 0.06, -0.3);
-    tur.add(gun);
-    tur.position.set(0.55, 1.74, -1.45);
-    g.add(tur);
-    res.turret = tur; res.gun = gun;
-  }
-  return res;
+  return type === 'tigr' ? buildTigr(T.camo) : type === 'niva' ? buildNiva(T.camo) : buildMTLB(T.camo);
 }
 
 export class Vehicle {
@@ -147,6 +54,8 @@ export class Vehicle {
     this.model = mdl;
     this.mesh = mdl.group;
     game.scene.add(this.mesh);
+    this.blob = blobShadow(this.type.width * 1.5, this.type.len * 1.25, 0.6);
+    game.scene.add(this.blob);
     this.seats = [];
     for (let i = 0; i < this.type.seats; i++) this.seats.push(null);
     this.turretYaw = 0; this.gunPitch = 0;
@@ -315,9 +224,11 @@ export class Vehicle {
     this._collide(dt);
     this._place(dt);
     // колёса
-    this.wheelRot += (vF / T.wheelR) * dt;
-    for (const wh of this.model.wheels) wh.rotation.x = -this.wheelRot;
-    if (!T.tracked) for (let i = 0; i < 2 && i < this.model.wheels.length; i++) this.model.wheels[i].rotation.y = this.steer;
+    // колёса: качение вокруг своей оси, руль — отдельной группой
+    this.wheelRot += vF * dt;
+    for (const wh of this.model.wheels) wh.spin.rotation.x = -this.wheelRot / wh.r;
+    for (const wh of this.model.steerWheels) wh.steer.rotation.y = this.steer;
+    if (this.model.trackTex) this.model.trackTex.offset.y -= vF * dt * 0.42;
     // звук двигателя
     if (this.driver && this.driver.alive) {
       if (!this.engine) this.engine = g.audio.createEngine(T.engine);
@@ -372,6 +283,7 @@ export class Vehicle {
     this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = this.pitch; this.mesh.rotation.z = -this.roll;
     this.mesh.updateMatrixWorld(true);
     this._updateCollider();
+    if (this.blob) { this.blob.position.set(this.pos.x, gy + 0.06, this.pos.z); this.blob.rotation.z = this.yaw; }
   }
 
   _collide(dt) {
@@ -541,7 +453,7 @@ export class Vehicle {
   }
 
   dispose() {
-    this.game.scene.remove(this.mesh);
+    this.game.scene.remove(this.mesh); this.game.scene.remove(this.blob);
     if (this.engine) this.engine.stop();
   }
 }

@@ -6,6 +6,8 @@ import { makeLighting } from '../world/sky.js';
 import { Snowfall } from '../world/weather.js';
 import * as ST from '../world/structures.js';
 import { Effects } from '../fx/effects.js';
+import * as POI from '../world/poi.js';
+import { scatterGround, GroundCover } from '../world/flora.js';
 import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
@@ -61,7 +63,7 @@ export class Mission {
     if (sea) this.scene.add(sea);
     this.lights = makeLighting(this.scene, { time: e.time, sunElev: e.sunElev, sunAz: e.sunAz, overcast: e.overcast, aurora: e.aurora, fog: e.fog });
     this.lights.sun.shadow.mapSize.set(q.shadow, q.shadow);
-    this.renderer.toneMappingExposure = e.time === 'night' ? 1.5 : e.time === 'dusk' ? 1.15 : 0.82;
+    this.renderer.toneMappingExposure = e.time === 'night' ? 1.5 : e.time === 'dusk' ? 1.15 : 1.08;
     // окружение для отражений (IBL) по цветам неба
     {
       const u = this.lights.sky.uniforms;
@@ -105,6 +107,9 @@ export class Mission {
     // скрипт миссии
     const ctx = this.makeCtx();
     def.build(ctx);
+    // вешки вдоль дорог, таблички
+    for (const f of def.terrain.features) if (f.type === 'road') POI.roadPoles(this.world, this.mats, { pts: f.pts });
+    for (const sg of this.world.signs) ST.sign(this.world, this.mats, sg);
     // техника на старте
     const vlist = def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
     for (const v of vlist) this.addVehicle(v.type, { x: v.x, z: v.z, yaw: v.yaw, team: 'negs' });
@@ -125,6 +130,14 @@ export class Mission {
       });
     }
     this.world.finalize({ navCenter: def.navCenter || { x: 0, z: 0 }, navSize: def.navSize || 800 });
+    const qk = this.settings.quality === 'low' ? 0.5 : this.settings.quality === 'high' ? 1.4 : 1;
+    scatterGround(this.scene, this.terrain, this.world, { seed: def.terrain.seed, wind: this.wind, grass: Math.floor(9000 * qk), shrubs: Math.floor(3000 * qk), stones: Math.floor(1500 * qk), drifts: Math.floor(500 * qk), radius: 950, avoid: [{ x: def.start.x, z: def.start.z, r: 12 }, ...(def.clearZones || [])] });
+    for (const sp of this.world.smokes) this.fx.addSmoke(sp, 1);
+    this.cover = new GroundCover(this.scene, this.terrain, this.world, { density: qk, radius: this.settings.quality === 'low' ? 100 : 150 });
+    this.terrain.terrainUniforms.uSunDir.value.copy(this.lights.sunDir);
+    this.terrain.terrainUniforms.uSparkle.value = e.time === 'night' ? 0.25 : e.time === 'dusk' ? 0.6 : 1;
+    this.app.post.preset(e.time);
+    this.app.post.bloom.enabled = this.settings.quality !== 'low';
     this.mapImage = this.terrain.makeMapImage(512, 1100);
     const mg = this.mapImage.getContext('2d');
     mg.fillStyle = 'rgba(40,40,45,0.85)';
@@ -142,6 +155,7 @@ export class Mission {
     this.nextStage();
     this.player.computePose(0.016);
     this.updateCamera(0);
+    this.cover.update(this.camPos);
   }
 
   makeCtx() {
@@ -170,6 +184,8 @@ export class Mission {
       objCustom: (text, fn, marker) => ({ text, check: fn, marker: marker || (() => null) }),
       scatter: (o) => self.scatter(o),
       windFlag: (x, z) => self.addWindFlag(x, z),
+      poi: Object.fromEntries(Object.entries(POI).map(([k, fn]) => [k, (o) => fn(w, m, o)])),
+      forest: (o) => self.scatter({ rocks: 0, ...o, forest: true }),
       weaponRack: (x, z) => self.addWeaponRack(x, z),
       ammoCrate: (x, z) => self.addAmmoCrate(x, z),
     };
@@ -251,7 +267,7 @@ export class Mission {
     this.flags.push({ mesh: flag, base: geo.attributes.position.array.slice() });
   }
 
-  scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7 }) {
+  scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false }) {
     const rnd = mulberry32(seed + Math.floor(x * 3 + z * 7 + r));
     const ok = (px, pz) => {
       if (Math.hypot(px, pz) > 1080) return false;
@@ -274,11 +290,14 @@ export class Mission {
       const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * r;
       const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
       if (!ok(px, pz)) continue;
-      // ели растут группами в низинах
-      const n = 1 + Math.floor(rnd() * 4);
+      // ели и карликовые берёзы растут группами
+      const n = forest ? 3 + Math.floor(rnd() * 6) : 1 + Math.floor(rnd() * 4);
+      const spread = forest ? 22 : 12;
       for (let k = 0; k < n; k++) {
-        const qx = px + (rnd() - 0.5) * 12, qz = pz + (rnd() - 0.5) * 12;
-        if (ok(qx, qz)) ST.spruce(this.world, this.mats, { x: qx, z: qz, h: 3 + rnd() * 6, seed: i * 7 + k });
+        const qx = px + (rnd() - 0.5) * spread, qz = pz + (rnd() - 0.5) * spread;
+        if (!ok(qx, qz)) continue;
+        if (rnd() < 0.3) ST.birch(this.world, this.mats, { x: qx, z: qz, h: 2.5 + rnd() * 3, seed: i * 7 + k + seed });
+        else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: 3 + rnd() * 8, seed: i * 7 + k + seed });
       }
     }
   }
@@ -533,6 +552,7 @@ export class Mission {
     this.updateCamera(dt);
     this.fx.update(dt);
     if (this.snow) this.snow.update(dt, this.camPos);
+    if (this.cover) this.cover.update(this.camPos);
     this.lights.sky.update(dt, this.camPos);
     // тень вокруг камеры
     const sun = this.lights.sun;
@@ -652,11 +672,7 @@ export class Mission {
   }
 
   render() {
-    const r = this.renderer;
-    r.autoClear = false;
-    r.clear();
-    r.render(this.scene, this.camera);
-    if (this.vmVisible) { r.clearDepth(); r.render(this.vmScene, this.vmCamera); }
+    this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
     const sc = this.hud.scopeCanvas;
     if (this.scopeDraw) {
       const W = sc.width, H = sc.height;

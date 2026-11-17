@@ -1,6 +1,7 @@
 // Боец (общий класс для своих, противника и тела игрока)
 import * as THREE from 'three';
 import { SoldierModel } from './soldierModel.js';
+import { blobShadow } from '../world/flora.js';
 import { WEAPONS, AMMO } from '../data/weapons.js';
 import { BallisticSolver } from '../physics/ballistics.js';
 import { clamp } from '../core/math.js';
@@ -59,6 +60,7 @@ export class Soldier {
     if (!this.isPlayer) {
       this.model = new SoldierModel(this.faction, VM_KIND[this.weaponId] || 'ak', { scale: opts.scale || 1 });
       game.scene.add(this.model.root);
+      this.blob = blobShadow(0.9, 0.9, 0.45); game.scene.add(this.blob);
     }
     this.hitboxes = [];
     this.moveDir = new THREE.Vector3();
@@ -149,8 +151,10 @@ export class Soldier {
     if (this.model) {
       const m = this.model;
       m.root.visible = !this.hidden;
+      if (this.blob) this.blob.visible = !this.hidden;
       if (!this.hidden) {
         m.root.position.copy(this.pos);
+        if (this.blob) { this.blob.position.set(this.pos.x, this.pos.y + 0.04, this.pos.z); this.blob.scale.set(this.stance === 'prone' || !this.alive ? 1.3 : 1, this.stance === 'prone' || !this.alive ? 2.2 : 1, 1); this.blob.rotation.z = this.yaw; }
         m.root.rotation.y = this.yaw;
         // направление движения в локальной системе тела
         const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
@@ -162,6 +166,7 @@ export class Soldier {
           stance: this.stance, aimPitch: this.aimPitch, aiming: this.brain ? this.brain.aiming : false, dead: !this.alive,
         });
         m.root.updateMatrixWorld(true);
+        if (this.game.camPos) m.setDetail(this.pos.distanceToSquared(this.game.camPos) < 3600);
         if (this.alive) m.hitboxes(this.hitboxes);
         // шаги
         if (sp > 0.6 && this.alive) {

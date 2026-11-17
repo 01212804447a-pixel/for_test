@@ -11,6 +11,7 @@ import { missionById, MISSIONS } from './data/missions.js';
 import { Terrain } from './world/terrain.js';
 import { makeLighting } from './world/sky.js';
 import { Snowfall } from './world/weather.js';
+import { PostFX } from './fx/post.js';
 
 class MenuScene {
   constructor(app) {
@@ -56,6 +57,7 @@ class App {
     this.input = new Input(canvas);
     this.audio = new AudioSys();
     this.audio.setVolume(this.settings.volume);
+    this.post = new PostFX(this.renderer);
     this.hud = new HUD(document.getElementById('hud'));
     this.hud.hide();
     this.ui = new UI(this, document.getElementById('ui'));
@@ -66,7 +68,7 @@ class App {
     this.paused = false;
     this.last = performance.now();
     this.fps = 60;
-    addEventListener('resize', () => { this.renderer.setSize(innerWidth, innerHeight); });
+    addEventListener('resize', () => { this.renderer.setSize(innerWidth, innerHeight); this.post.resize(); });
     // первый жест — запуск звука
     const unlock = () => { this.audio.init(); };
     addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);

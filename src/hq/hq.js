@@ -255,6 +255,8 @@ export class HQ {
     r.autoClear = true;
     r.toneMappingExposure = 1.0;
     if (this.camera.aspect !== innerWidth / innerHeight) { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); }
-    r.render(this.scene, this.camera);
+    this.app.post.preset('day');
+    this.app.post.bloom.enabled = true;
+    this.app.post.render(this.scene, this.camera, null, null);
   }
 }

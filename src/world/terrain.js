@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Noise2D } from '../core/noise.js';
 import { clamp, lerp, smoothstep } from '../core/math.js';
-import { snowTexture, snowNormal } from './textures.js';
+import { snowTexture, snowNormal, rockTexture } from './textures.js';
 
 function distToPolyline(x, z, pts) {
   let best = 1e9, bestT = 0;
@@ -197,7 +197,7 @@ export class Terrain {
         nor[i * 3] = v.x; nor[i * 3 + 1] = v.y; nor[i * 3 + 2] = v.z;
         const slope = 1 - v.y;
         const patch = noise.noise(x / 25, z / 25) * 0.5 + noise.noise(x / 7, z / 7) * 0.25;
-        let r = 0.93, g = 0.95, b = 0.99;
+        let r = 0.96, g = 0.965, b = 0.985;
         // лёгкая синева в низинах
         const low = clamp((8 - h) / 30, 0, 1) * 0.04;
         r -= low; g -= low * 0.5;
@@ -227,9 +227,48 @@ export class Terrain {
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, map: snowTexture(), normalMap: snowNormal(), normalScale: new THREE.Vector2(0.45, 0.45),
-      roughness: 0.88, metalness: 0,
+      vertexColors: true, map: snowTexture(), normalMap: snowNormal(), normalScale: new THREE.Vector2(0.22, 0.22),
+      roughness: 0.86, metalness: 0,
     });
+    // Шейдер: снег в двух масштабах + макро-вариации, триплановый камень на склонах, искры снега
+    const rock = rockTexture();
+    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 } };
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, this.terrainUniforms);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm;')
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNrm = normalize(mat3(modelMatrix) * objectNormal);');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+varying vec3 vWPos; varying vec3 vWNrm;
+uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle;
+float tHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
+vec3 triRock(vec3 p, vec3 n){
+  vec3 w = pow(abs(n), vec3(4.0)); w /= (w.x + w.y + w.z);
+  return texture2D(uRock, p.yz * 0.33).rgb * w.x + texture2D(uRock, p.xz * 0.33).rgb * w.y + texture2D(uRock, p.xy * 0.33).rgb * w.z;
+}`)
+        .replace('#include <map_fragment>', `
+  vec3 sn1 = texture2D(map, vWPos.xz / 7.0).rgb;
+  vec3 sn2 = texture2D(map, vWPos.xz / 41.0 + 0.37).rgb;
+  float macro = texture2D(map, vWPos.xz / 380.0).r * 0.5 + texture2D(map, vWPos.xz / 97.0 + 0.5).g * 0.5;
+  vec3 snowC = mix(sn1, sn2, 0.45) * (0.9 + (macro - 0.92) * 1.6);
+  float slope = 1.0 - normalize(vWNrm).y;
+  float rockW = smoothstep(0.2, 0.42, slope + (sn2.r - 0.93) * 2.0);
+  vec3 rockC = triRock(vWPos, normalize(vWNrm)) * vec3(0.95, 0.97, 1.02) * 1.15;
+  vec4 sampledDiffuseColor = vec4(mix(snowC, rockC / max(vColor.rgb, vec3(0.2)), rockW), 1.0);
+  diffuseColor *= sampledDiffuseColor;
+  float snowW = 1.0 - rockW;`)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  {
+    vec2 cell = floor(vWPos.xz * 22.0);
+    float h = tHash(cell);
+    vec3 V = normalize(cameraPosition - vWPos);
+    vec3 R = reflect(-V, normalize(vWNrm + vec3(tHash(cell + 1.0) - 0.5, 0.0, tHash(cell + 2.0) - 0.5) * 0.6));
+    float gl = step(0.975, h) * pow(max(dot(R, uSunDir), 0.0), 24.0);
+    float fadeD = 1.0 - smoothstep(10.0, 60.0, length(cameraPosition - vWPos));
+    totalEmissiveRadiance += vec3(1.0, 0.97, 0.9) * gl * snowW * fadeD * 2.5 * uSparkle;
+  }`);
+    };
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'terrain';

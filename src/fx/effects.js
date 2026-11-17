@@ -250,6 +250,9 @@ export class Effects {
   addFire(pos, scale = 1, duration = 60) {
     this.emitters.push({ pos: pos.clone(), scale, t: 0, duration, acc: 0 });
   }
+  addSmoke(pos, scale = 1) {
+    this.emitters.push({ pos: pos.clone(), scale, t: 0, duration: 1e9, acc: Math.random(), smokeOnly: true });
+  }
 
   rocketSmoke(pos, vel) {
     this.smoke.emit(pos.x, pos.y, pos.z, -vel.x * 0.02 + rand(-0.3, 0.3), rand(0, 0.4), -vel.z * 0.02 + rand(-0.3, 0.3), rand(1.5, 3), 0.25, 1.6, 0.8, 0.8, 0.8, 0.45, 0, 0.6, -0.15);
@@ -296,6 +299,15 @@ export class Effects {
   update(dt) {
     for (const e of this.emitters) {
       e.t += dt;
+      if (e.smokeOnly) {
+        e.acc += dt * 2.5;
+        while (e.acc > 1) {
+          e.acc -= 1;
+          const c = rand(0.55, 0.7);
+          this.smoke.emit(e.pos.x, e.pos.y, e.pos.z, rand(-0.2, 0.2), rand(0.6, 1.1), rand(-0.2, 0.2), rand(7, 12), 0.5 * e.scale, 4.5 * e.scale, c, c, c * 1.03, 0.4, 0, 0.25, -0.05);
+        }
+        continue;
+      }
       const fade = Math.max(0, 1 - e.t / e.duration);
       if (fade <= 0) continue;
       e.acc += dt * 30 * e.scale * fade;

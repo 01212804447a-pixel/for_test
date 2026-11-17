@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { camoTexture, snowNormal } from '../world/textures.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { SkinRig, skinAvailable } from './skinRig.js';
 import { clamp, lerp } from '../core/math.js';
 
 const FACTIONS = {
@@ -247,16 +246,7 @@ export class SoldierModel {
     this.weapon = buildThirdPersonWeapon(weaponKind, mm);
     R.add(this.weapon);
     this.detailVisible = true;
-    // скелетная модель вместо примитивов, если доступны ассеты
     this.skin = null;
-    if (skinAvailable()) {
-      const rig = new SkinRig(faction);
-      if (rig.ok) {
-        this.skin = rig;
-        for (const c of [...R.children]) if (c !== this.weapon) R.remove(c);
-        R.add(rig.holder);
-      }
-    }
 
     // опорные точки (в системе root)
     this.P = {

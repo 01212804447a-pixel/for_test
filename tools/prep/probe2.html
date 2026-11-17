@@ -1,0 +1,16 @@
+<!doctype html><html><head>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const out = {};
+const g = await new GLTFLoader().loadAsync('/assets/models/anims.glb');
+const rig = g.scene.getObjectByName('Rig'); rig.updateMatrixWorld(true);
+out.meta = Object.keys(rig.userData.meta || {}).length;
+const names = []; rig.traverse(b => { if (b.isBone) names.push(b.name + '<' + b.parent.name); });
+out.names = names.join(' ');
+const ax = (n) => { const b = rig.getObjectByName(n); const q = b.getWorldQuaternion(new THREE.Quaternion()); const f = (v) => v.applyQuaternion(q).toArray().map(x => x.toFixed(2)).join(','); return n + ' pos=' + b.getWorldPosition(new THREE.Vector3()).toArray().map(x=>x.toFixed(3)).join(',') + ' X=' + f(new THREE.Vector3(1,0,0)) + ' Y=' + f(new THREE.Vector3(0,1,0)) + ' Z=' + f(new THREE.Vector3(0,0,1)); };
+out.axes = ['mixamorigHips','mixamorigSpine2','mixamorigHead','mixamorigRightShoulder','mixamorigRightArm','mixamorigRightForeArm','mixamorigRightHand','mixamorigRightHandIndex1','mixamorigRightHandIndex2','mixamorigRightHandThumb1','mixamorigRightHandMiddle1','mixamorigLeftHand','mixamorigLeftHandIndex1','mixamorigLeftHandThumb1','mixamorigRightUpLeg','mixamorigRightFoot','mixamorigRightToeBase'].map(ax);
+out.clips = g.animations.map(c => c.name + ':' + c.tracks.length + ':' + c.tracks[1].times.length);
+window.out = out; window.done = true;
+</script></body></html>

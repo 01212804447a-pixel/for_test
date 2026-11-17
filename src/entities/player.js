@@ -233,6 +233,7 @@ export class Player {
   handleWeapons(dt, inp) {
     const g = this.game, b = this.body;
     this.fireCD -= dt; this.flashT -= dt;
+    this.shotAge = (this.shotAge ?? 9) + dt;
     // смена оружия
     let want = -1;
     for (let i = 0; i < 4; i++) if (inp.bh('slot' + (i + 1))) want = i;
@@ -278,6 +279,7 @@ export class Player {
       if (this.reloadT <= 0) this.finishReload(aw);
     } else if (inp.bh('reload') && aw.spare.length && aw.mag < aw.def.mag + (aw.def.mag > 1 ? 1 : 0)) {
       this.reloadTotal = this.reloadT = aw.mag === 0 ? aw.def.reloadEmpty : aw.def.reload;
+      this.reloadEmpty = aw.mag === 0;
       this.aim = false;
       g.audio.mech('reload');
     }
@@ -349,13 +351,28 @@ export class Player {
     q.premultiply(rq);
     // бег / перезарядка / смена
     const sprint = this.sprintT;
-    let low = 0;
-    if (this.reloadT > 0) low = Math.sin(Math.PI * (1 - this.reloadT / this.reloadTotal));
+    let low = 0, tilt = 0;
+    const ssf = (a, b2, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b2 - a))); return t * t * (3 - 2 * t); };
+    if (this.reloadT > 0) {
+      const pr = 1 - this.reloadT / this.reloadTotal;
+      // магазинное оружие — наклон к левой руке, гранатомёт — опускается
+      if (def && def.mag > 1 && kind !== 'gp25') tilt = ssf(0, 0.1, pr) * (1 - ssf(0.86, 1, pr));
+      else low = Math.sin(Math.PI * pr);
+    }
     if (this.switchT > 0) low = Math.max(low, Math.min(1, this.switchT / 0.3));
     if (this.medT > 0) low = 1;
+    this.reloadP = this.reloadT > 0 ? 1 - this.reloadT / this.reloadTotal : -1;
     if (sprint > 0.01 || low > 0.01) {
       pos.x += 0.06 * sprint + 0.02 * low; pos.y -= 0.06 * sprint + 0.12 * low; pos.z += 0.03 * sprint;
       q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.55 * sprint - 0.45 * low, 0.6 * sprint + 0.2 * low, 0.35 * sprint + 0.5 * low)));
+    }
+    if (tilt > 0.001) {
+      // поворот вокруг пистолетной рукоятки: магазином к левой руке, дульной частью чуть вверх
+      const grip = new THREE.Vector3(...(info.gripR || [0, -0.17, 0.17]));
+      const before = grip.clone().applyQuaternion(q);
+      q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.22 * tilt, 0.12 * tilt, -0.62 * tilt)));
+      pos.add(before.sub(grip.applyQuaternion(q)));
+      pos.x -= 0.08 * tilt; pos.y += 0.075 * tilt; pos.z += 0.03 * tilt;
     }
     if (kind === 'b8' || kind === 'grenade') {
       // бинокль/граната: проще
@@ -404,6 +421,7 @@ export class Player {
     g.fireProjectile({ weapon: def, pos: mp, dir: md, owner: b, team: 'negs', own: true, ammoId });
     b.lastShotTime = g.time; b.fireFlash = 0.06;
     this.flashT = 0.045;
+    this.shotAge = 0;
     // отдача
     const sf = b.stance === 'prone' ? (def.id === 'pkm' ? 0.35 : 0.55) : b.stance === 'crouch' ? 0.8 : 1;
     const mount = this.vehicle ? 0.4 : 1;

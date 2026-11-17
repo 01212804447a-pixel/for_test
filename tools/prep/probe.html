@@ -1,0 +1,23 @@
+<!doctype html><html><head>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+const out = {};
+const desc = (o) => { const r = []; o.traverse((n) => { if (n.isBone && r.length < 4 || (!n.isBone && !n.isMesh)) r.push(n.type + ' ' + n.name + ' p=' + n.position.toArray().map(v=>v.toFixed(3)) + ' q=' + n.quaternion.toArray().map(v=>v.toFixed(3)) + ' s=' + n.scale.toArray().map(v=>v.toFixed(3))); }); return r; };
+const g = await new GLTFLoader().loadAsync('/assets/src/characters/swat.glb');
+out.swat = desc(g.scene);
+const hipsW = (o, name) => { o.updateMatrixWorld(true); const h = o.getObjectByName(name); return h.getWorldPosition(new THREE.Vector3()).toArray().map(v=>v.toFixed(3)); };
+out.swatHips = hipsW(g.scene, 'mixamorigHips');
+const f = await new FBXLoader().loadAsync('/assets/src/characters/anims/Rifle_Walk.fbx');
+out.anim = desc(f).slice(0, 8);
+out.animHips = hipsW(f, 'mixamorigHips');
+out.clip = f.animations.map(a => [a.name, a.duration, a.tracks.length, a.tracks.slice(0,4).map(t=>t.name + ':' + t.times.length)]);
+const ht = f.animations[0].tracks.find(t => t.name === 'mixamorigHips.position');
+out.hipsTrack = [ht.values.slice(0,3), ht.values.slice(-3)];
+const e = await new FBXLoader().loadAsync('/assets/src/characters/enemy-terror1.fbx');
+out.enemy = desc(e).slice(0, 8);
+out.enemyHips = hipsW(e, 'mixamorigHips');
+window.out = out; window.done = true;
+</script></body></html>

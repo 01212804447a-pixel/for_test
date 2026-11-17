@@ -85,7 +85,7 @@ export class Mission {
       this.scene.environment = this.envMap;
       this.scene.environmentIntensity = hd ? (e.time === 'night' ? 0.6 : e.time === 'dusk' ? 0.7 : 0.5) : (e.time === 'night' ? 0.35 : 0.55);
       this.vmScene.environment = this.envMap;
-      this.vmScene.environmentIntensity = e.time === 'night' ? 0.5 : 0.8;
+      this.vmScene.environmentIntensity = e.time === 'night' ? 0.6 : 1.15;
       this.lights.hemi.intensity *= 0.6;
     }
     // освещение оружия от первого лица
@@ -93,6 +93,10 @@ export class Mission {
     this.vmScene.add(this.vmSun, new THREE.HemisphereLight(this.lights.hemi.color, this.lights.hemi.groundColor, this.lights.hemi.intensity));
     this.vmFlash = new THREE.PointLight(0xffb060, 0, 3, 2);
     this.vmScene.add(this.vmFlash);
+    // мягкий заполняющий свет для оружия и рук (чтобы детали читались против солнца)
+    const fill = new THREE.DirectionalLight(e.time === 'night' ? 0x8090b0 : 0xe8eef6, e.time === 'night' ? 0.35 : 0.9);
+    fill.position.set(-0.6, 0.8, 0.5);
+    this.vmScene.add(fill);
     this.world = new World(this.scene, this.terrain);
     this.mats = ST.makeMats();
     this.fx = new Effects(this.scene);
@@ -576,6 +580,7 @@ export class Mission {
 
   // ===================== кадр =====================
   update(dt) {
+    this.frameDt = dt;
     this.frame++;
     this.time += dt;
     this.stats.time += dt;
@@ -716,7 +721,7 @@ export class Mission {
       this.viewmodel.setKind(p.vmKind());
       const aw = p.activeWeapon;
       const th = aw ? p.theta(aw) : 0;
-      this.viewmodel.update(p.sightPos, p.sightQuat, th, true, p.flashT > 0);
+      this.viewmodel.update(p.sightPos, p.sightQuat, th, true, p.flashT > 0, { dt: this.frameDt || 1 / 60, shotAge: p.shotAge ?? 9, reload: p.reloadP ?? -1, empty: !!p.reloadEmpty, sprint: p.sprintT || 0 });
       this.vmCamera.fov = cam.fov; this.vmCamera.aspect = W / H; this.vmCamera.updateProjectionMatrix();
       // солнце в системе камеры
       const sd = this.lights.sunDir.clone().applyQuaternion(look.quaternion.clone().invert());

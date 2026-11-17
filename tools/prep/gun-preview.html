@@ -1,0 +1,48 @@
+<!doctype html><html><head><style>body{margin:0}</style>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/examples/jsm/":"/node_modules/three/examples/jsm/","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+try {
+const q = new URLSearchParams(location.search);
+const { buildGun, thirdPersonGun } = await import('/src/weapons/guns.js');
+const W = +(q.get('w') || 1400), H = +(q.get('h') || 700);
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setSize(W, H); r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = +(q.get('exp') || 1);
+document.body.appendChild(r.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(q.get('bg') ? +q.get('bg') : 0x8d969e);
+const pm = new THREE.PMREMGenerator(r);
+scene.environment = pm.fromEquirectangular(await new RGBELoader().loadAsync('/assets/hdr/' + (q.get('hdr') || 'snowy_field') + '.hdr')).texture;
+const sun = new THREE.DirectionalLight(0xfff4e8, 2.0); sun.position.set(2, 4, 3); scene.add(sun);
+const kinds = (q.get('k') || 'ak74').split(',');
+const view = q.get('view') || 'side';
+const gap = +(q.get('gap') || 0.28);
+const fp = q.get('fp');
+if (fp) {
+  const { GUN_INFO } = await import('/src/weapons/guns.js');
+  const k = kinds[0], I = GUN_INFO[k];
+  const g = buildGun(k).root;
+  const pos = fp === 'ads' ? I.ads : I.hip;
+  g.position.set(...pos);
+  if (fp === 'hip') g.rotation.set(0.03, 0.05, 0.02);
+  scene.add(g);
+  const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 60), W / H, 0.01, 50);
+  cam.position.set(0, 0, 0); cam.lookAt(0, 0, -1);
+  r.render(scene, cam);
+  window.out = 'ok'; window.done = true;
+  throw 'fp';
+}
+kinds.forEach((k, i) => {
+  const g = q.get('tp') ? thirdPersonGun(k).object : buildGun(k).root;
+  g.position.y = -(i - (kinds.length - 1) / 2) * gap;
+  scene.add(g);
+});
+const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 30), W / H, 0.01, 50);
+const t = (q.get('t') || '0,0,-0.1').split(',').map(Number);
+const p = (q.get('p') || (view === 'side' ? '2.2,0.1,-0.1' : '1.2,0.5,0.9')).split(',').map(Number);
+cam.position.set(...p); cam.lookAt(...t);
+r.render(scene, cam);
+window.out = 'ok';
+} catch (e) { if (e !== 'fp') window.out = String(e.stack || e); }
+window.done = true;
+</script></body></html>

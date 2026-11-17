@@ -1,0 +1,72 @@
+<!doctype html><html><head><style>body{margin:0}</style>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/examples/jsm/":"/node_modules/three/examples/jsm/","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+// Просмотр анимаций: ?cases=JSON [{kind, st:{...}, t}] &cam=side|front|top
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { registerModel } from '/src/core/assets.js';
+try {
+const q = new URLSearchParams(location.search);
+const gl = new GLTFLoader();
+for (const n of ['anims', 'char_negs', 'char_denter1', 'char_denter2', 'char_denter3', 'char_denter4']) registerModel(n, await gl.loadAsync('/assets/models/' + n + '.glb'));
+const { CharAnimator } = await import('/src/entities/charRig.js');
+const W = +(q.get('w') || 1200), H = +(q.get('h') || 600);
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setSize(W, H); r.toneMapping = THREE.ACESFilmicToneMapping; r.shadowMap.enabled = true;
+document.body.appendChild(r.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xaab4bd);
+const pm = new THREE.PMREMGenerator(r);
+scene.environment = pm.fromEquirectangular(await new RGBELoader().loadAsync('/assets/hdr/snowy_field.hdr')).texture;
+scene.environmentIntensity = 0.7;
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(4, 8, 3); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8 }); scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: 0xe8ecef, roughness: 0.9 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+// условный автомат: начало — ось канала у казённика, −Z вперёд
+function testGun() {
+  const g = new THREE.Group();
+  const m = new THREE.MeshStandardMaterial({ color: 0x222326, roughness: 0.4, metalness: 0.7 });
+  const add = (w, h, d, x, y, z, rx = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.x = rx; b.castShadow = true; g.add(b); };
+  add(0.045, 0.07, 0.26, 0, -0.005, 0.09); add(0.016, 0.016, 0.5, 0, 0, -0.25); add(0.04, 0.05, 0.22, 0, -0.01, -0.16);
+  add(0.03, 0.12, 0.04, 0, -0.09, 0.16, -0.35); add(0.026, 0.18, 0.07, 0, -0.12, 0.0, 0.3); add(0.035, 0.07, 0.25, 0, -0.04, 0.34, 0.08);
+  add(0.01, 0.03, 0.01, 0, 0.05, -0.38); add(0.02, 0.02, 0.06, 0, 0.04, 0.0);
+  return { key: 'test', object: g, gripR: new THREE.Vector3(0, -0.095, 0.155), gripL: new THREE.Vector3(0, -0.035, -0.17), muzzle: new THREE.Vector3(0, 0, -0.5), butt: new THREE.Vector3(0, -0.06, 0.46) };
+}
+const cases = JSON.parse(q.get('cases') || '[{"kind":"negs","st":{"stance":"stand","aiming":true},"t":1}]');
+const chars = [];
+const gap = +(q.get('gap') || 1.4);
+cases.forEach((c, i) => {
+  const a = new CharAnimator(c.kind || 'negs', testGun());
+  a.root.position.set((i - (cases.length - 1) / 2) * gap, 0, 0);
+  a.root.rotation.y = c.yaw || 0;
+  scene.add(a.root);
+  a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  chars.push([a, c]);
+});
+// прогон времени
+const dt = 1 / 30;
+for (const [a, c] of chars) {
+  const st = Object.assign({ speed: 0, mx: 0, mz: -1, stance: 'stand', aimYaw: c.yaw || 0, aimPitch: 0, aiming: false, dead: false, reload: -1 }, c.st);
+  const T = c.t ?? 1;
+  if (c.raw) { const rg = a.rig; const cl = rg.lib.clips.get(c.raw); rg.resetAcc(); rg.lib.sample(cl, (c.rt ?? 0) * cl.dur, 1, rg.accQ, rg.accP, null); rg.applyPose(); a.gun.object.visible = false; a.root.updateMatrixWorld(true); continue; }
+  for (let t = 0; t < T; t += dt) {
+    if (c.fireEvery && Math.abs((t % c.fireEvery)) < dt * 0.99) a.shot();
+    if (c.st && c.st.reloadDur) st.reload = Math.min(1, t / c.st.reloadDur);
+    a.update(dt, st);
+  }
+}
+const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 30), W / H, 0.05, 100);
+const view = q.get('cam') || 'side';
+const span = cases.length * gap;
+const dist = Math.max(4, span * 1.6);
+const ty = +(q.get('ty') || 0.9);
+if (view === 'side') cam.position.set(0, ty + 0.3, dist), cam.lookAt(0, ty, 0);
+else if (view === 'right') { cam.position.set(dist * 0.9, ty + 0.4, dist * 0.4); cam.lookAt(0, ty, 0); }
+else if (view === 'front') cam.position.set(0, ty + 0.4, -dist), cam.lookAt(0, ty, 0);
+else if (view === 'close') { const p = q.get('p').split(',').map(Number); cam.position.set(p[0], p[1], p[2]); cam.lookAt(p[3], p[4], p[5]); }
+r.render(scene, cam);
+window.out = 'ok';
+} catch (e) { window.out = String(e.stack || e); }
+window.done = true;
+</script></body></html>

@@ -1,6 +1,7 @@
 // Боец (общий класс для своих, противника и тела игрока)
 import * as THREE from 'three';
 import { SoldierModel } from './soldierModel.js';
+import { CharacterModel, characterAvailable } from './character.js';
 import { blobShadow } from '../world/flora.js';
 import { WEAPONS, AMMO } from '../data/weapons.js';
 import { BallisticSolver } from '../physics/ballistics.js';
@@ -62,7 +63,9 @@ export class Soldier {
     if (opts.secondary) { this.secondary = { id: opts.secondary, def: WEAPONS[opts.secondary], mag: 1, mags: WEAPONS[opts.secondary].mags }; }
     this.faction = opts.faction || (this.team === 'negs' ? 'negs' : 'denter');
     if (!this.isPlayer) {
-      this.model = new SoldierModel(this.faction, VM_KIND[this.weaponId] || 'ak', { scale: opts.scale || 1 });
+      this.model = characterAvailable()
+        ? new CharacterModel(this.faction, this.weaponId, { scale: opts.scale || 1, seed: this.id * 7 + (opts.x | 0) })
+        : new SoldierModel(this.faction, VM_KIND[this.weaponId] || 'ak', { scale: opts.scale || 1 });
       game.scene.add(this.model.root);
       this.blob = blobShadow(0.9, 0.9, 0.45); game.scene.add(this.blob);
     }
@@ -120,6 +123,7 @@ export class Soldier {
     }
     this.health -= d;
     this.lastHitTime = this.game.time;
+    if (this.model && this.model.hit) this.model.hit(dir);
     this.suppression = Math.min(1, this.suppression + 0.6);
     this.morale -= 0.08;
     if (this.brain) this.brain.onHit(source, dir);
@@ -182,7 +186,8 @@ export class Soldier {
         if (!this.alive && m.deadT > 1.2) this._skinFrozen = true;
         m.update(dt, {
           speed: sp, mx: sp > 0.05 ? lx / sp : 0, mz: sp > 0.05 ? lz / sp : 0,
-          stance: this.stance, aimPitch: this.aimPitch, aiming: this.brain ? this.brain.aiming : false, dead: !this.alive,
+          stance: this.stance, aimPitch: this.aimPitch, aimYaw: this.aimYaw, aiming: this.brain ? this.brain.aiming : false, dead: !this.alive,
+          reload: this.reloadT > 0 ? 1 - this.reloadT / (this.reloadTotal || 2.5) : -1, groundY: this.pos.y,
         });
         m.root.updateMatrixWorld(true);
         if (this.game.camPos) m.setDetail(this.pos.distanceToSquared(this.game.camPos) < 3600);
@@ -226,6 +231,7 @@ export class Soldier {
   startReload() {
     if (this.reloadT > 0 || this.mags <= 0 || this.mag === this.weapon.mag) return false;
     this.reloadT = this.mag === 0 ? this.weapon.reloadEmpty : this.weapon.reload;
+    this.reloadTotal = this.reloadT;
     return true;
   }
 

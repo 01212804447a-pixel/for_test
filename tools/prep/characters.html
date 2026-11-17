@@ -1,0 +1,228 @@
+<!doctype html><html><head>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+// Подготовка персонажей и анимаций (запуск: node tools/prep/run.cjs tools/prep/characters.html)
+// Источники в assets/src/characters (не входят в репозиторий):
+//   swat.glb — боец спецподразделения (Mixamo Ch15) с отдельными руками для вида от первого лица;
+//   enemy-terror1..4.fbx — боевики (Mixamo-риг);
+//   anims/*.fbx — анимации Mixamo без меша (риг «Kyle»).
+// Результат: assets/models/char_*.glb, assets/models/anims.glb
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MeshoptSimplifier } from '/node_modules/meshoptimizer/meshopt_simplifier.module.js';
+
+const SRC = '/assets/src/characters/';
+const log = (...a) => console.log(...a);
+const save = async (name, buf) => { await fetch('/?name=' + encodeURIComponent(name), { method: 'POST', body: buf }); };
+const params = new URLSearchParams(location.search);
+const only = params.get('only') || 'all';
+
+function resizeTex(tex, size, mime = 'image/jpeg', filter) {
+  if (!tex || !tex.image) return null;
+  const img = tex.image;
+  const k = Math.min(1, size / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  if (filter) filter(ctx, c.width, c.height);
+  const t = new THREE.CanvasTexture(c);
+  t.flipY = tex.flipY; t.colorSpace = tex.colorSpace; t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
+  t.userData = { mimeType: mime };
+  return t;
+}
+
+async function exportGLB(obj, animations = []) {
+  const buf = await new GLTFExporter().parseAsync(obj, { binary: true, animations, maxTextureSize: 4096 });
+  return new Uint8Array(buf);
+}
+
+// Упрощение скин-меша (позиции → индексы), атрибуты скиннинга сохраняются
+function simplifySkinned(geom, ratio, err = 0.01) {
+  geom = mergeVertices(geom.index ? geom : geom, 1e-5);
+  const idx = Uint32Array.from(geom.index.array);
+  const target = Math.floor(idx.length * ratio / 3) * 3;
+  const pos = geom.attributes.position.array;
+  const [out] = MeshoptSimplifier.simplify(idx, pos instanceof Float32Array ? pos : Float32Array.from(pos), 3, target, err, ['LockBorder']);
+  const used = [], remap = new Map();
+  for (const i of out) if (!remap.has(i)) { remap.set(i, used.length); used.push(i); }
+  const g = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(geom.attributes)) {
+    const arr = new a.array.constructor(used.length * a.itemSize);
+    used.forEach((v, j) => { for (let k = 0; k < a.itemSize; k++) arr[j * a.itemSize + k] = a.array[v * a.itemSize + k]; });
+    g.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize, a.normalized));
+  }
+  g.setIndex(Array.from(out, (i) => remap.get(i)));
+  g.computeBoundingBox(); g.computeBoundingSphere();
+  return g;
+}
+
+// Нормировка: рост height, ступни на нуле, лицом к +Z
+function normalize(root, height) {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  root.traverse((m) => { if (m.isSkinnedMesh) { m.geometry.computeBoundingBox(); const b = m.geometry.boundingBox.clone(); m.updateMatrixWorld(true); box.union(new THREE.Box3().setFromObject(m)); } });
+  const k = height / (box.max.y - box.min.y);
+  root.scale.multiplyScalar(k);
+  root.position.y -= box.min.y * k;
+  root.updateMatrixWorld(true);
+  return k;
+}
+
+const fbx = new FBXLoader();
+const gltf = new GLTFLoader();
+await MeshoptSimplifier.ready;
+
+// ---------- боец N.E.G.S ----------
+const swat = await gltf.loadAsync(SRC + 'swat.glb');
+const S = swat.scene;
+S.updateMatrixWorld(true);
+const body = S.getObjectByName('SWAT_Body'), arms = S.getObjectByName('SWAT_ViewArms');
+if (only === 'all' || only === 'chars') {
+  const matMap = new Map();
+  const conv = (m) => {
+    if (matMap.has(m.name)) return matMap.get(m.name);
+    const n = new THREE.MeshStandardMaterial({
+      name: m.name,
+      map: resizeTex(m.map, 2048, 'image/jpeg'),
+      normalMap: resizeTex(m.normalMap, 1024, 'image/jpeg'),
+      roughness: 0.82, metalness: 0.05,
+    });
+    matMap.set(m.name, n);
+    return n;
+  };
+  S.traverse((o) => { if (o.isSkinnedMesh) { o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material); } });
+  let tris = 0; S.traverse((o) => { if (o.isSkinnedMesh) tris += o.geometry.index.count / 3; });
+  log('swat tris', tris, [...matMap.keys()]);
+  await save('assets/models/char_negs.glb', await exportGLB(S));
+
+  // ---------- боевики ----------
+  for (let i = 1; i <= 4; i++) {
+    const o = await fbx.loadAsync(SRC + `enemy-terror${i}.fbx`);
+    await new Promise((r) => setTimeout(r, 1500)); // текстуры
+    o.animations = [];
+    o.name = 'Denter' + i;
+    normalize(o, 1.8);
+    o.traverse((m) => {
+      if (!m.isSkinnedMesh) return;
+      const before = m.geometry.attributes.position.count;
+      m.geometry.deleteAttribute('color');
+      m.geometry = simplifySkinned(m.geometry, 0.28, 0.008);
+      m.geometry.computeVertexNormals();
+      const src = Array.isArray(m.material) ? m.material[0] : m.material;
+      m.material = new THREE.MeshStandardMaterial({ name: 'denter' + i, map: resizeTex(src.map, 1024, 'image/jpeg'), roughness: 0.86, metalness: 0.02 });
+      log('enemy', i, before, '->', m.geometry.attributes.position.count, 'verts', m.geometry.index.count / 3, 'tris');
+    });
+    await save(`assets/models/char_denter${i}.glb`, await exportGLB(o));
+  }
+}
+
+// ---------- анимации: перенос на скелет бойца ----------
+if (only === 'all' || only === 'anims') {
+  // эталонный скелет: кости SWAT_Body
+  const skel = body.children.find((c) => c.isBone) || body.getObjectByName('mixamorigHips');
+  const tgtRoot = new THREE.Group(); tgtRoot.name = 'Rig';
+  const holder = new THREE.Object3D(); holder.name = 'Armature';
+  holder.position.copy(body.position); holder.quaternion.copy(body.quaternion); holder.scale.copy(body.scale);
+  const tgtHips = skel.clone(true); // клон иерархии костей
+  holder.add(tgtHips); tgtRoot.add(holder);
+  tgtRoot.updateMatrixWorld(true);
+  const tBones = []; tgtHips.traverse((b) => { if (b.isBone) tBones.push(b); });
+  const tRestW = new Map(), tRestPos = new Map();
+  for (const b of tBones) { tRestW.set(b.name, b.getWorldQuaternion(new THREE.Quaternion())); }
+  const tHipsRestWorld = tgtHips.getWorldPosition(new THREE.Vector3());
+  const hipsParentW = new THREE.Matrix4().copy(holder.matrixWorld);
+  const files = (params.get('files') || '').split(',').filter(Boolean);
+  const list = files.length ? files : ['Rifle_Idle', 'Rifle_Aiming_Idle', 'Rifle_Walk', 'Rifle_Run', 'Walking_While_Aiming_Rifle', 'Rifle_Crouch_Walk', 'Firing_Rifle', 'Firing_Rifle_Crouch_Walking', 'Reloading_Rifle', 'Reloading_Walking', 'Rifle_Death', 'Crawling', 'Crouch_Idle', 'Crouched_Walking', 'Idle_Crouching', 'Death', 'Falling_Back_Death', 'Hit_Reaction', 'Sitting_Idle', 'Standing_Idle', 'Talking', 'Typing', 'Looking_Around', 'Taking_Cover_Idle', 'Sprint_Forward', 'Running', 'Walking', 'Pointing_Forward', 'Male_Crouch_Pose', 'Driving', 'Standing_Sprint_Forward', 'Knocked_Out', 'Sneaking_Forward', 'Turning', 'Waving', 'Head_Nod_Yes'];
+  const LOOP_MOVE = new Set(['Rifle_Walk', 'Rifle_Run', 'Walking_While_Aiming_Rifle', 'Rifle_Crouch_Walk', 'Firing_Rifle_Crouch_Walking', 'Reloading_Walking', 'Crawling', 'Crouched_Walking', 'Sprint_Forward', 'Running', 'Walking', 'Standing_Sprint_Forward', 'Sneaking_Forward']);
+  const clips = [];
+  const meta = {};
+  for (const name of list) {
+    const src = await fbx.loadAsync(SRC + 'anims/' + name + '.fbx');
+    const clip = src.animations[0];
+    src.updateMatrixWorld(true);
+    const sBones = new Map(); src.traverse((b) => { if (b.isBone) sBones.set(b.name, b); });
+    const sRestW = new Map(); for (const [n, b] of sBones) sRestW.set(n, b.getWorldQuaternion(new THREE.Quaternion()));
+    const sHips = sBones.get('mixamorigHips');
+    const sHipsRest = sHips.getWorldPosition(new THREE.Vector3());
+    const ratio = tHipsRestWorld.y / sHipsRest.y;
+    const mixer = new THREE.AnimationMixer(src);
+    const act = mixer.clipAction(clip); act.setLoop(THREE.LoopOnce); act.clampWhenFinished = true; act.play();
+    const fps = 30, N = Math.max(2, Math.round(clip.duration * fps) + 1);
+    const times = new Float32Array(N);
+    const qv = new Map(); for (const b of tBones) qv.set(b.name, new Float32Array(N * 4));
+    const pv = new Float32Array(N * 3);
+    const hipsW = [];
+    const _q = new THREE.Quaternion(), _d = new THREE.Quaternion(), _w = new Map();
+    for (let f = 0; f < N; f++) {
+      const t = Math.min(clip.duration, f / fps);
+      times[f] = t;
+      mixer.setTime(t);
+      src.updateMatrixWorld(true);
+      // мировые повороты цели: Wt = (Ws * Ws0^-1) * Wt0
+      for (const b of tBones) {
+        const sb = sBones.get(b.name);
+        let wt;
+        if (sb) {
+          const ws = sb.getWorldQuaternion(new THREE.Quaternion());
+          _d.copy(ws).multiply(_q.copy(sRestW.get(b.name)).invert());
+          wt = _d.clone().multiply(tRestW.get(b.name));
+        } else {
+          // кость без соответствия: сохраняем позу привязки относительно родителя
+          const pw = _w.get(b.parent.name) || holder.getWorldQuaternion(new THREE.Quaternion());
+          wt = pw.clone().multiply(b.quaternion);
+        }
+        _w.set(b.name, wt);
+        const pw = b.parent.isBone ? _w.get(b.parent.name) : holder.getWorldQuaternion(new THREE.Quaternion());
+        const local = pw.clone().invert().multiply(wt);
+        const arr = qv.get(b.name);
+        local.toArray(arr, f * 4);
+        // непрерывность знака
+        if (f > 0) {
+          const dot = arr[f * 4] * arr[f * 4 - 4] + arr[f * 4 + 1] * arr[f * 4 - 3] + arr[f * 4 + 2] * arr[f * 4 - 2] + arr[f * 4 + 3] * arr[f * 4 - 1];
+          if (dot < 0) for (let k = 0; k < 4; k++) arr[f * 4 + k] *= -1;
+        }
+      }
+      const hp = sHips.getWorldPosition(new THREE.Vector3());
+      hipsW.push(hp.sub(sHipsRest).multiplyScalar(ratio));
+    }
+    // корневое смещение: для циклов движения убираем линейный дрейф по XZ
+    const d0 = hipsW[0].clone(), d1 = hipsW[N - 1].clone();
+    let speed = 0;
+    if (LOOP_MOVE.has(name)) {
+      speed = Math.hypot(d1.x - d0.x, d1.z - d0.z) / clip.duration;
+      for (let f = 0; f < N; f++) {
+        const k = f / (N - 1);
+        hipsW[f].x -= d0.x + (d1.x - d0.x) * k;
+        hipsW[f].z -= d0.z + (d1.z - d0.z) * k;
+      }
+    }
+    const inv = new THREE.Matrix4().copy(hipsParentW).invert();
+    for (let f = 0; f < N; f++) {
+      const wp = tHipsRestWorld.clone().add(hipsW[f]).applyMatrix4(inv);
+      wp.toArray(pv, f * 3);
+    }
+    const tracks = [];
+    for (const b of tBones) {
+      if (/_End$|Top_End|4$/.test(b.name)) continue;
+      const arr = qv.get(b.name);
+      // постоянная дорожка → один ключ
+      let maxd = 0;
+      for (let f = 1; f < N; f++) for (let k = 0; k < 4; k++) maxd = Math.max(maxd, Math.abs(arr[f * 4 + k] - arr[k]));
+      if (maxd < 1e-4) tracks.push(new THREE.QuaternionKeyframeTrack(b.name + '.quaternion', [0], Array.from(arr.slice(0, 4))));
+      else tracks.push(new THREE.QuaternionKeyframeTrack(b.name + '.quaternion', times, arr));
+    }
+    tracks.push(new THREE.VectorKeyframeTrack('mixamorigHips.position', times, pv));
+    const c = new THREE.AnimationClip(name, clip.duration, tracks);
+    clips.push(c);
+    meta[name] = { duration: +clip.duration.toFixed(3), speed: +speed.toFixed(3), drift: [+(d1.x - d0.x).toFixed(3), +(d1.y - d0.y).toFixed(3), +(d1.z - d0.z).toFixed(3)] };
+    log('clip', name, meta[name].duration, 'speed', meta[name].speed, 'drift', meta[name].drift.join(','));
+  }
+  tgtRoot.userData.meta = meta;
+  await save('assets/models/anims.glb', await exportGLB(tgtRoot, clips));
+}
+window.done = true;
+</script></body></html>

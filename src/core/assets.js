@@ -75,5 +75,6 @@ export function pbr(name, { repeat = 1, color = 0xffffff, normalScale = 1, rough
   });
 }
 
+export function registerModel(name, g) { gltfs.set('models/' + name + '.glb', g); }
 export function model(name) { return gltfs.get('models/' + name + '.glb') || null; }
 export function hdr(name) { return hdrs.get('hdr/' + name + '.hdr') || null; }

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { woodTexture, concreteTexture, metalTexture, rockTexture, textTexture, targetTexture, logTexture } from './textures.js';
 import { boxGeo, SNOW_MAT } from './world.js';
 import { mulberry32 } from '../core/math.js';
-import { spruceGeometry, birchGeometry } from './flora.js';
+import { spruceGeometry, birchGeometry, spruceMaterial } from './flora.js';
 import { pbr, hasAssets } from '../core/assets.js';
 
 export function makeMats() {
@@ -48,7 +48,7 @@ function makeMatsProc(std) {
     white: std({ map: metalTexture('#d8dcdf', 0.1, 'w'), metalness: 0.2, roughness: 0.6 }),
     sandbag: std({ map: concreteTexture(), color: 0xc9bd98, roughness: 1 }),
     rock: std({ map: rockTexture(), vertexColors: true, roughness: 0.95 }),
-    spruce: std({ vertexColors: true, roughness: 0.95, flatShading: true, side: THREE.DoubleSide }),
+    spruce: spruceMaterial(),
     log: std({ map: logTexture() }),
     roofTin: std({ map: metalTexture('#5d6266', 0.45, 'tin'), metalness: 0.45, roughness: 0.6 }),
     hide: std({ color: 0x6b5a48, roughness: 1, side: THREE.DoubleSide }),

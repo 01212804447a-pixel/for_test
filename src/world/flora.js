@@ -53,46 +53,175 @@ function crossedPlanes(w, h, n = 3) {
   return mergeGeometries(gs);
 }
 
-// Улучшенная ель: ярусы «лап», снег сверху лап, ствол
+// Атлас для деревьев: слева — кора (u 0…0.2), справа — еловая лапа с хвоей на прозрачном фоне (u 0.25…1)
+let treeAtlas = null;
+export function spruceAtlas() {
+  if (treeAtlas) return treeAtlas;
+  const W = 1024, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const r = mulberry32(17);
+  // кора
+  const bw = W * 0.2;
+  g.fillStyle = '#3d2f25'; g.fillRect(0, 0, bw, H);
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(${20 + r() * 40},${14 + r() * 30},${10 + r() * 20},${0.3 + r() * 0.5})`; g.fillRect(r() * bw, r() * H, 1 + r() * 3, 6 + r() * 30); }
+  for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(${90 + r() * 40},${80 + r() * 30},${70 + r() * 20},0.35)`; g.fillRect(r() * bw, r() * H, 2 + r() * 8, 2 + r() * 6); }
+  // береста
+  g.fillStyle = '#e8e6df'; g.fillRect(bw, 0, W * 0.05, H);
+  for (let i = 0; i < 140; i++) { g.fillStyle = `rgba(30,28,26,${0.4 + r() * 0.5})`; g.fillRect(bw + r() * W * 0.05, r() * H, 3 + r() * 14, 1 + r() * 3); }
+  // лапа: две полосы — без снега (v 0…0.5) и со снегом (v 0.5…1)
+  const drawBranch = (y0, rowH, snow) => {
+    const x0 = W * 0.255, x1 = W * 0.995, cy = y0 + rowH * 0.5;
+    const L = x1 - x0 - 20;
+    const pts = [];
+    const needle = (x, y, a, len, light) => {
+      const k = light ? 1.25 : 1;
+      const l = (14 + r() * 13) * k, sat = 22 + r() * 18, hue = 130 + r() * 25;
+      g.strokeStyle = `hsl(${hue},${sat}%,${l}%)`;
+      g.lineWidth = 1.5 + r() * 0.6; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len); g.stroke();
+    };
+    // веточка: густая «ёршиком» хвоя
+    const twig = (sx, sy, ang, len, depth) => {
+      const steps = Math.max(4, Math.floor(len / 5));
+      let x = sx, y = sy;
+      for (let i = 0; i < steps; i++) {
+        const t = i / steps;
+        const nx = x + Math.cos(ang) * (len / steps), ny = y + Math.sin(ang) * (len / steps) + (r() - 0.5) * 1.0;
+        g.strokeStyle = `rgb(${60 + r() * 20},${46 + r() * 14},${34 + r() * 10})`;
+        g.lineWidth = Math.max(1, (depth ? 1.8 : 4) * (1 - t * 0.7));
+        g.beginPath(); g.moveTo(x, y); g.lineTo(nx, ny); g.stroke();
+        const nl = (depth ? 9 : 11) * (1 - t * 0.3);
+        for (let k = 0; k < 3; k++) {
+          const px = x + (nx - x) * (k / 3), py = y + (ny - y) * (k / 3);
+          const light = t > 0.75 && depth === 0;
+          needle(px, py, ang - 0.8 - r() * 0.7, nl * (0.6 + r() * 0.5), light);
+          needle(px, py, ang + 0.8 + r() * 0.7, nl * (0.6 + r() * 0.5), light);
+        }
+        pts.push([nx, ny, t, depth]);
+        x = nx; y = ny;
+      }
+      return [x, y];
+    };
+    // основная ветвь и боковые веточки с огибающей «пёрышком» (шире к середине)
+    const n = 22;
+    let x = x0, y = cy;
+    for (let i = 0; i < n; i++) {
+      const t = i / n;
+      const [nx, ny] = twig(x, y, -0.01, L / n, 0);
+      const env = Math.sin(Math.min(1, t * 1.25 + 0.08) * Math.PI) * (1 - t * 0.35);
+      const sl = rowH * 0.5 * env * (0.8 + r() * 0.25);
+      if (sl > 6) {
+        for (const sgn of [-1, 1]) {
+          const a = sgn * (0.75 + r() * 0.3) - 0.01;
+          const [ex, ey] = twig(nx, ny, a, sl, 1);
+          if (sl > 30 && r() < 0.6) twig(nx + (ex - nx) * 0.5, ny + (ey - ny) * 0.5, a - sgn * 0.6, sl * 0.35, 2);
+        }
+      }
+      x = nx; y = ny;
+    }
+    if (snow) {
+      // снежные «подушки» на веточках
+      for (let i = 0; i < 95; i++) {
+        const p = pts[(r() * pts.length) | 0];
+        const rad = 9 + r() * 18 * (1 - p[2] * 0.3);
+        const cx = p[0], cy2 = p[1] - rad * 0.2;
+        const gr = g.createRadialGradient(cx, cy2, 0, cx, cy2, rad);
+        gr.addColorStop(0, 'rgba(252,253,255,1)'); gr.addColorStop(0.7, 'rgba(236,241,248,0.95)'); gr.addColorStop(1, 'rgba(220,230,242,0)');
+        g.fillStyle = gr; g.beginPath(); g.ellipse(cx, cy2, rad * 1.5, rad * 0.9, (r() - 0.5) * 0.4, 0, Math.PI * 2); g.fill();
+      }
+    }
+  };
+  drawBranch(0, H / 2, false);
+  drawBranch(H / 2, H / 2, true);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+  treeAtlas = t;
+  return t;
+}
+
+// Материал хвойных: альфа-отсечение, снег на верхней стороне лап (по нормали), мягкое «объёмное» освещение
+export function spruceMaterial() {
+  const m = new THREE.MeshStandardMaterial({ map: spruceAtlas(), alphaTest: 0.38, side: THREE.DoubleSide, vertexColors: true, roughness: 0.92 });
+  m.onBeforeCompile = (sh) => {
+    // мягкое просвечивание: обратная сторона лап не чернеет
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+      reflectedLight.indirectDiffuse += diffuseColor.rgb * 0.12;`);
+  };
+  m.customProgramCacheKey = () => 'spruce3';
+  return m;
+}
+
+// Ель: ствол + ярусы лап-карточек (по две плоскости крест-накрест), свисающих вниз
 export function spruceGeometry(h, seed) {
   const rnd = mulberry32(seed);
-  const parts = [];
-  const color = (g, c) => {
-    const n = g.attributes.position.count, col = new Float32Array(n * 3);
-    const nr = g.attributes.normal;
-    for (let i = 0; i < n; i++) {
-      let cc = c;
-      if (c === 'needle') {
-        const up = nr.getY(i);
-        const snow = up > 0.55 && rnd() > 0.15;
-        cc = snow ? [0.88, 0.91, 0.96] : [0.06 + rnd() * 0.03, 0.15 + rnd() * 0.05, 0.1 + rnd() * 0.03];
-      }
-      col[i * 3] = cc[0]; col[i * 3 + 1] = cc[1]; col[i * 3 + 2] = cc[2];
+  const pos = [], nor = [], uv = [], col = [], idx = [];
+  const center = new THREE.Vector3(0, h * 0.45, 0);
+  // цвет вершин — множитель яркости (вариации оттенка)
+  const quad = (A, B, C, D, uvs, n4, c) => {
+    const base = pos.length / 3;
+    for (const [P, U, N] of [[A, uvs[0], n4[0]], [B, uvs[1], n4[1]], [C, uvs[2], n4[2]], [D, uvs[3], n4[3]]]) {
+      pos.push(P.x, P.y, P.z); uv.push(U[0], U[1]); nor.push(N.x, N.y, N.z); col.push(c[0], c[1], c[2]);
     }
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    return g;
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   };
-  const trunk = new THREE.CylinderGeometry(0.06, 0.18, h * 0.9, 7).toNonIndexed();
-  trunk.translate(0, h * 0.45, 0);
-  parts.push(color(trunk, [0.25, 0.18, 0.13]));
-  const layers = 6 + Math.floor(h / 2.5);
-  for (let i = 0; i < layers; i++) {
-    const t = i / layers;
-    const r = (1 - t) * h * 0.3 + 0.25;
-    const ch = h * 0.22;
-    const cone = new THREE.ConeGeometry(r, ch, 9, 1, true);
-    // «провисающие» края лап
-    const p = cone.attributes.position;
-    for (let k = 0; k < p.count; k++) {
-      const y = p.getY(k);
-      if (y < 0) { p.setY(k, y - (0.1 + rnd() * 0.25) * r * 0.5); p.setX(k, p.getX(k) * (0.85 + rnd() * 0.3)); p.setZ(k, p.getZ(k) * (0.85 + rnd() * 0.3)); }
-    }
-    cone.rotateY(rnd() * 3);
-    cone.translate((rnd() - 0.5) * 0.1, h * 0.12 + t * h * 0.82 + ch / 2, (rnd() - 0.5) * 0.1);
-    const ng = cone.toNonIndexed(); ng.computeVertexNormals();
-    parts.push(color(ng, 'needle'));
+  // ствол: 7-гранник, UV — полоса коры
+  const segs = 7, trunkH = h * 0.92, r0 = 0.05 + h * 0.022, r1 = 0.03;
+  for (let i = 0; i < segs; i++) {
+    const a0 = (i / segs) * Math.PI * 2, a1 = ((i + 1) / segs) * Math.PI * 2;
+    const p = (a, y, r) => new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r);
+    const n = (a) => new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    quad(p(a0, -0.2, r0), p(a1, -0.2, r0), p(a1, trunkH, r1), p(a0, trunkH, r1), [[(i / segs) * 0.2, 0], [((i + 1) / segs) * 0.2, 0], [((i + 1) / segs) * 0.2, trunkH / 3], [(i / segs) * 0.2, trunkH / 3]], [n(a0), n(a1), n(a1), n(a0)], [0.9, 0.9, 0.9]);
   }
-  return mergeGeometries(parts.map((g) => { const n = new THREE.BufferGeometry(); n.setAttribute('position', g.attributes.position); n.setAttribute('normal', g.attributes.normal); n.setAttribute('color', g.attributes.color); return n; }));
+  // ярусы лап
+  const levels = Math.max(8, Math.round(h * 2.4));
+  const yb = Math.min(1.2, h * 0.14);
+  for (let l = 0; l < levels; l++) {
+    const t = l / (levels - 1);
+    const y = yb + t * (h - yb) * 0.97;
+    const R = (1 - t) * h * 0.27 + 0.16;
+    const count = Math.max(6, Math.round(7 + (1 - t) * 6));
+    const a0 = rnd() * 6.28;
+    for (let k = 0; k < count; k++) {
+      const a = a0 + (k / count) * Math.PI * 2 + (rnd() - 0.5) * 0.4;
+      const len = R * (0.75 + rnd() * 0.45);
+      const droop = 0.18 + (1 - t) * 0.25 + rnd() * 0.15;
+      const dir = new THREE.Vector3(Math.cos(a), -droop, Math.sin(a)).normalize();
+      const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
+      const wid = len * (0.55 + rnd() * 0.15);
+      const root = new THREE.Vector3(Math.cos(a) * 0.04, y + (rnd() - 0.5) * 0.15, Math.sin(a) * 0.04);
+      const tip = root.clone().addScaledVector(dir, len);
+      // нормали: от оси дерева вверх-наружу (объёмное освещение кроны)
+      const nOf = (P) => P.clone().sub(center).setY((P.y - center.y) * 0.4 + 0.8).normalize();
+      const shade = 0.8 + rnd() * 0.3;
+      // снег — на верхних и внешних лапах чаще
+      const sn = rnd() < 0.22 + t * 0.35;
+      const v0 = sn ? 0.5 : 0.0, v1 = sn ? 1.0 : 0.5;
+      // горизонтальная карточка
+      const A = root.clone().addScaledVector(side, -wid * 0.3), B = tip.clone().addScaledVector(side, -wid * 0.5), C = tip.clone().addScaledVector(side, wid * 0.5), D = root.clone().addScaledVector(side, wid * 0.3);
+      quad(A, B, C, D, [[0.25, v0], [1.0, v0], [1.0, v1], [0.25, v1]], [nOf(A), nOf(B), nOf(C), nOf(D)], [shade, shade, shade]);
+      // вертикальная (крест-накрест), чуть меньше, без снега
+      const up = new THREE.Vector3().crossVectors(side, dir).normalize();
+      const A2 = root.clone().addScaledVector(up, -wid * 0.18), B2 = tip.clone().addScaledVector(up, -wid * 0.32), C2 = tip.clone().addScaledVector(up, wid * 0.32), D2 = root.clone().addScaledVector(up, wid * 0.18);
+      quad(A2, B2, C2, D2, [[0.25, 0], [1.0, 0], [1.0, 0.5], [0.25, 0.5]], [nOf(A2), nOf(B2), nOf(C2), nOf(D2)], [shade * 0.92, shade * 0.92, shade * 0.92]);
+    }
+  }
+  // макушка
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * Math.PI;
+    const s = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    const A = new THREE.Vector3(0, h * 0.86, 0).addScaledVector(s, -0.12), B = new THREE.Vector3(0, h * 0.86, 0).addScaledVector(s, 0.12);
+    const C = new THREE.Vector3(0, h * 1.02, 0).addScaledVector(s, 0.02), D = new THREE.Vector3(0, h * 1.02, 0).addScaledVector(s, -0.02);
+    const n = new THREE.Vector3(0, 1, 0);
+    quad(A, B, C, D, [[0.25, 0.5], [0.25, 1], [1, 1], [1, 0.5]], [n, n, n, n], [0.85, 0.85, 0.85]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g.toNonIndexed();
 }
 
 // Карликовая берёза: белый кривой ствол + голые ветви
@@ -108,6 +237,9 @@ export function birchGeometry(h, seed) {
     const n = g.attributes.position.count, c = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { const dark = rnd() < 0.15; c[i * 3] = dark ? 0.15 : col[0]; c[i * 3 + 1] = dark ? 0.14 : col[1]; c[i * 3 + 2] = dark ? 0.13 : col[2]; }
     g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    // UV — полоса бересты в атласе (u 0.205…0.245)
+    const uvA = g.attributes.uv;
+    for (let i = 0; i < uvA.count; i++) uvA.setXY(i, 0.205 + uvA.getX(i) * 0.04, uvA.getY(i) * L * 0.5);
     parts.push(g);
   };
   const grow = (a, dir, len, r, depth) => {
@@ -121,7 +253,7 @@ export function birchGeometry(h, seed) {
     }
   };
   grow(new THREE.Vector3(), new THREE.Vector3((rnd() - 0.5) * 0.4, 1, (rnd() - 0.5) * 0.4).normalize(), h * 0.45, 0.07, 0);
-  return mergeGeometries(parts.map((g) => { const n = new THREE.BufferGeometry(); n.setAttribute('position', g.attributes.position); n.setAttribute('normal', g.attributes.normal); n.setAttribute('color', g.attributes.color); return n; }));
+  return mergeGeometries(parts.map((g) => { const n = new THREE.BufferGeometry(); n.setAttribute('position', g.attributes.position); n.setAttribute('normal', g.attributes.normal); n.setAttribute('uv', g.attributes.uv); n.setAttribute('color', g.attributes.color); return n; }));
 }
 
 // Разброс мелочи по всей карте (инстансы)

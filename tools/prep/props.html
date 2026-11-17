@@ -1,0 +1,67 @@
+<!doctype html><html><head>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+// Подготовка моделей Poly Haven: assets/src/models/<name>/<name>.gltf → assets/models/<name>.glb
+// (текстуры уменьшаются, слишком детальные сетки упрощаются). ?list=name:tex:maxTris,...
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MeshoptSimplifier } from '/node_modules/meshoptimizer/meshopt_simplifier.module.js';
+await MeshoptSimplifier.ready;
+const save = async (name, buf) => { await fetch('/?name=' + encodeURIComponent(name), { method: 'POST', body: buf }); };
+const q = new URLSearchParams(location.search);
+const texCache = new Map();
+function resize(tex, size) {
+  if (!tex || !tex.image) return tex;
+  if (texCache.has(tex)) return texCache.get(tex);
+  const img = tex.image;
+  const k = Math.min(1, size / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(4, Math.round(img.width * k)); c.height = Math.max(4, Math.round(img.height * k));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const t = new THREE.CanvasTexture(c);
+  t.flipY = tex.flipY; t.colorSpace = tex.colorSpace; t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
+  t.offset.copy(tex.offset); t.repeat.copy(tex.repeat); t.rotation = tex.rotation; t.channel = tex.channel;
+  t.userData = { mimeType: 'image/jpeg' };
+  texCache.set(tex, t);
+  return t;
+}
+function simplify(geom, maxTris) {
+  const tris = (geom.index ? geom.index.count : geom.attributes.position.count) / 3;
+  if (tris <= maxTris) return geom;
+  let g = geom.index ? geom : mergeVertices(geom, 1e-6);
+  const idx = Uint32Array.from(g.index.array);
+  const target = Math.floor((maxTris / tris) * idx.length / 3) * 3;
+  const [out] = MeshoptSimplifier.simplify(idx, Float32Array.from(g.attributes.position.array), 3, target, 0.02, ['LockBorder']);
+  const ng = g.clone(); ng.setIndex(Array.from(out));
+  return ng;
+}
+const list = (q.get('list') || '').split(',').filter(Boolean);
+const loader = new GLTFLoader();
+const report = [];
+for (const item of list) {
+  const [name, texS = '512', maxT = '20000', outName] = item.split(':');
+  try {
+    const g = await loader.loadAsync(`/assets/src/models/${name}/${name}.gltf`);
+    let tris0 = 0, tris1 = 0;
+    const meshes = [];
+    g.scene.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    const total = meshes.reduce((s, o) => s + (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3, 0);
+    for (const o of meshes) {
+      const t = (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+      tris0 += t;
+      o.geometry = simplify(o.geometry, Math.max(200, Math.floor(+maxT * t / total)));
+      tris1 += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.attributes.position.count / 3;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap']) if (m[k]) m[k] = resize(m[k], +texS);
+    }
+    const buf = await new GLTFExporter().parseAsync(g.scene, { binary: true });
+    await save(`assets/models/${outName || name}.glb`, new Uint8Array(buf));
+    const box = new THREE.Box3().setFromObject(g.scene), s = box.getSize(new THREE.Vector3());
+    report.push(`${name}: ${tris0}→${tris1} tris, ${(buf.byteLength / 1024) | 0} KB, size ${s.toArray().map((x) => x.toFixed(2)).join('×')}`);
+  } catch (e) { report.push(`${name}: FAIL ${e}`); }
+}
+window.out = report;
+window.done = true;
+</script></body></html>

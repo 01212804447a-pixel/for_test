@@ -148,6 +148,7 @@ export class Mission {
     this.terrain.terrainUniforms.uSparkle.value = e.time === 'night' ? 0.25 : e.time === 'dusk' ? 0.6 : 1;
     this.app.post.preset(e.time);
     this.app.post.bloom.enabled = this.settings.quality !== 'low';
+    this.app.post.setAO(this.settings.quality === 'high', 0.7);
     this.mapImage = this.terrain.makeMapImage(512, 1100);
     const mg = this.mapImage.getContext('2d');
     mg.fillStyle = 'rgba(40,40,45,0.85)';
@@ -307,13 +308,13 @@ export class Mission {
       const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
       if (!ok(px, pz)) continue;
       // ели и карликовые берёзы растут группами
-      const n = forest ? 3 + Math.floor(rnd() * 6) : 1 + Math.floor(rnd() * 4);
-      const spread = forest ? 22 : 12;
+      const n = forest ? 4 + Math.floor(rnd() * 7) : 1 + Math.floor(rnd() * 4);
+      const spread = forest ? 24 : 12;
       for (let k = 0; k < n; k++) {
         const qx = px + (rnd() - 0.5) * spread, qz = pz + (rnd() - 0.5) * spread;
         if (!ok(qx, qz)) continue;
         if (rnd() < 0.3) ST.birch(this.world, this.mats, { x: qx, z: qz, h: 2.5 + rnd() * 3, seed: i * 7 + k + seed });
-        else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: 3 + rnd() * 8, seed: i * 7 + k + seed });
+        else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: forest ? 4.5 + rnd() * 9 : 3 + rnd() * 7, seed: i * 7 + k + seed });
       }
     }
   }

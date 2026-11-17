@@ -729,3 +729,23 @@ export class CharAnimator {
     return out;
   }
 }
+
+// ---------- персонаж, проигрывающий один клип (штаб, массовка) ----------
+export class ClipActor {
+  constructor(kind, clipName, { t0 = Math.random() * 10, speed = 1 } = {}) {
+    this.rig = new CharRig(kind);
+    this.root = new THREE.Group();
+    this.root.add(this.rig.holder);
+    this.clip = this.rig.lib.clips.get(clipName) || this.rig.lib.clips.get('Standing_Idle');
+    this.t = t0; this.speed = speed;
+    this.update(0);
+  }
+  play(name) { const c = this.rig.lib.clips.get(name); if (c) { this.clip = c; this.t = 0; } }
+  update(dt) {
+    const rig = this.rig;
+    this.t += dt * this.speed;
+    rig.resetAcc();
+    rig.lib.sample(this.clip, this.clip.loop ? this.t : this.t % this.clip.dur, 1, rig.accQ, rig.accP, null);
+    rig.applyPose();
+  }
+}

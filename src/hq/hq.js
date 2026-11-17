@@ -6,6 +6,9 @@ import { drawChart, drawTable } from '../ui/charts.js';
 import { woodTexture, textTexture } from '../world/textures.js';
 import { SoldierModel, buildThirdPersonWeapon } from '../entities/soldierModel.js';
 import { MISSIONS } from '../data/missions.js';
+import { WEAPONS } from '../data/weapons.js';
+import { ViewModel } from '../weapons/viewmodel.js';
+import { model } from '../core/assets.js';
 import { ROSTER } from '../data/squad.js';
 import { clamp } from '../core/math.js';
 
@@ -173,17 +176,61 @@ export class HQ {
     eg.strokeStyle = '#7fd0ff'; eg.lineWidth = 3; for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; eg.beginPath(); eg.moveTo(128, 200); eg.lineTo(128 + Math.cos(a) * 22, 200 + Math.sin(a) * 22); eg.stroke(); }
     const emm = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.3), new THREE.MeshStandardMaterial({ map: canvasTex(em), transparent: true }));
     emm.position.set(W / 2 - 0.04, 1.9, 2.6); emm.rotation.y = -Math.PI / 2; S.add(emm);
-    // оружейная пирамида (западная стена)
+    // КХО — комната хранения оружия (западная часть штаба): стеллажи с оружием, стол снаряжения
     const rackMat = new THREE.MeshStandardMaterial({ map: woodTexture(0) });
-    this.box(0.5, 1.4, 3.2, rackMat, -W / 2 + 0.4, 0.7, -1, true);
-    const mm = { gun: new THREE.MeshStandardMaterial({ color: 0x1d1e20, roughness: 0.5, metalness: 0.6 }), gunWood: new THREE.MeshStandardMaterial({ color: 0x5a3018, roughness: 0.6 }), tube: new THREE.MeshStandardMaterial({ color: 0x3d4a2f }) };
-    ['ak', 'akm', 'svd', 'pkm', 'ak', 'rpg'].forEach((k, i) => {
-      const g = buildThirdPersonWeapon(k, mm);
-      g.position.set(-W / 2 + 0.5, 0.25, -2.3 + i * 0.52);
-      g.rotation.x = -Math.PI / 2 + 0.15; g.rotation.y = Math.PI / 2;
+    const wallM = new THREE.MeshStandardMaterial({ map: wallMat.map.clone(), roughness: 0.9 });
+    wallM.map.repeat.set(2.4, 1); wallM.map.needsUpdate = true;
+    const KX = -4.6, KZ = 2.2;
+    // перегородки с дверным проёмом z∈[-1.6,-0.2]
+    this.box(0.18, H, 6 - 1.6, wallM, KX, H / 2, (-6 + -1.6) / 2);
+    this.box(0.18, H, KZ + 0.2, wallM, KX, H / 2, (-0.2 + KZ) / 2);
+    this.box(0.18, H - 2.2, 1.4, wallM, KX, 2.2 + (H - 2.2) / 2, -0.9, false);
+    this.box(W / 2 + KX, H, 0.18, wallM, (-W / 2 + KX) / 2, H / 2, KZ);
+    // решётчатая дверь (открыта)
+    const bars = new THREE.Group();
+    const barM = new THREE.MeshStandardMaterial({ color: 0x3a3d40, metalness: 0.7, roughness: 0.4 });
+    for (let i = 0; i < 8; i++) { const bb = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2.1, 6), barM); bb.position.set(0, 1.05, -0.65 + i * 0.18); bars.add(bb); }
+    for (const y of [0.15, 1.05, 2.0]) { const bb = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 1.4), barM); bb.position.set(0, y, -0.0); bars.add(bb); }
+    bars.position.set(KX + 0.7, 0, -1.6); bars.rotation.y = 1.2; S.add(bars);
+    const khoSign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.35), new THREE.MeshBasicMaterial({ map: textTexture(['КХО', 'комната хранения оружия'], { w: 512, h: 150, bg: '#7a1c14', fg: '#f3efe2', font: 'bold 38px Arial' }) }));
+    khoSign.position.set(KX + 0.1, 2.5, -0.9); khoSign.rotation.y = Math.PI / 2; S.add(khoSign);
+    const lampK = new THREE.PointLight(0xfff0d8, 6, 9, 1.6); lampK.position.set(-6.8, H - 0.3, -2); S.add(lampK);
+    this.box(1.2, 0.05, 0.22, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff6e0, emissiveIntensity: 2 }), -6.8, H - 0.05, -2, false);
+    // стеллажи: оружие горизонтально на кронштейнах
+    const vm = new ViewModel(new THREE.Scene());
+    const KINDS = [['ak74m', 'ak74'], ['ak74m_gp', 'ak74gp'], ['ak74m_1p78', 'ak74scope'], ['akm', 'akm'], ['svd', 'svd'], ['pkm', 'pkm']];
+    this.box(0.35, 2.1, 5.6, rackMat, -W / 2 + 0.2, 1.05, -2.8, true);
+    this.khoLabels = [];
+    KINDS.forEach(([id, kind], i) => {
+      const z = i % 2 ? -2.0 : -4.3, y = [2.05, 1.5, 0.95][Math.floor(i / 2)];
+      const g = vm._build(kind, true).root;
+      g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      g.scale.setScalar(1.15);
+      g.position.set(-W / 2 + 0.47, y, z - 0.1);
       S.add(g);
+      for (const dz of [-0.3, 0.25]) this.box(0.14, 0.035, 0.035, new THREE.MeshStandardMaterial({ color: 0x222222 }), -W / 2 + 0.43, y - 0.1, z + dz, false);
+      const lbl = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.14), new THREE.MeshBasicMaterial({ map: textTexture([WEAPONS[id].name], { w: 384, h: 90, bg: '#efe9d8', fg: '#111', font: 'bold 40px Arial' }) }));
+      lbl.position.set(-W / 2 + 0.39, y - 0.2, z); lbl.rotation.y = Math.PI / 2; S.add(lbl);
+      const mark = new THREE.Mesh(new THREE.CircleGeometry(0.04, 12), new THREE.MeshBasicMaterial({ color: 0x40ff60 }));
+      mark.position.set(-W / 2 + 0.39, y - 0.2, z + 0.4); mark.rotation.y = Math.PI / 2; S.add(mark);
+      this.khoLabels.push({ id, mark });
+      this.interact.push({ pos: new THREE.Vector3(-W / 2 + 0.6, y, z), r: 1.6, label: `Взять ${WEAPONS[id].name} (${WEAPONS[id].cls})`, act: () => { this.app.save.primary = id; this.app.persist(); this.updateKho(); this.app.ui.toast(`Основное оружие: ${WEAPONS[id].name}`); } });
     });
-    this.interact.push({ pos: new THREE.Vector3(-W / 2 + 1, 1, -1), r: 2.8, label: 'Оружейная — выбрать оружие сержанта Кея', act: () => this.app.ui.armory() });
+    // РПГ-7В на северной стене
+    const rpg = vm._build('rpg7', true).root;
+    rpg.position.set(-7.6, 1.45, -D / 2 + 0.35); rpg.rotation.y = Math.PI; rpg.scale.setScalar(1.2); S.add(rpg);
+    this.box(1.6, 0.06, 0.25, rackMat, -7.6, 1.25, -D / 2 + 0.25, false);
+    this.rpgMark = new THREE.Mesh(new THREE.CircleGeometry(0.05, 12), new THREE.MeshBasicMaterial({ color: 0x40ff60 }));
+    this.rpgMark.position.set(-6.7, 1.25, -D / 2 + 0.2); S.add(this.rpgMark);
+    this.interact.push({ pos: new THREE.Vector3(-7.6, 1.45, -D / 2 + 0.5), r: 1.8, label: 'Взять / сдать РПГ-7В (3 выстрела ПГ-7ВМ)', act: () => { this.app.save.launcher = !this.app.save.launcher; this.app.persist(); this.updateKho(); this.app.ui.toast(this.app.save.launcher ? 'РПГ-7В взят' : 'РПГ-7В сдан'); } });
+    // стол снаряжения магазинов: ящики с патронами
+    this.box(1.6, 0.06, 0.8, rackMat, -6.4, 0.8, -1.6);
+    for (const [x, z] of [[-7.1, -1.9], [-5.7, -1.9], [-7.1, -1.3], [-5.7, -1.3]]) this.box(0.06, 0.8, 0.06, new THREE.MeshStandardMaterial({ color: 0x3b2a1c }), x, 0.4, z, false);
+    const amb = model('ammo_box');
+    if (amb) for (const [x, z, ry] of [[-6.9, -1.7, 0.3], [-6.3, -1.45, -0.2]]) { const o = amb.scene.clone(true); o.position.set(x, 0.83, z); o.rotation.y = ry; S.add(o); }
+    for (let i = 0; i < 4; i++) { const mg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.07), new THREE.MeshStandardMaterial({ color: 0x6e3518, roughness: 0.5 })); mg.position.set(-5.95 + i * 0.05, 0.93, -1.75); mg.rotation.z = 0.2; S.add(mg); }
+    this.interact.push({ pos: new THREE.Vector3(-6.4, 0.9, -1.6), r: 1.8, label: 'Снаряжение магазинов и ленты (трассеры, бронебойные…)', act: () => this.app.ui.magLoader() });
+    this.updateKho();
     // дверь в автопарк
     const doorC = textTexture(['АВТОПАРК', '«Тигр» · «Нива» · МТ-ЛБ'], { w: 512, h: 160, bg: '#1b2a40', fg: '#e8eef4', font: 'bold 40px Arial' });
     this.box(1.6, 2.3, 0.08, new THREE.MeshStandardMaterial({ color: 0x4a5a4a, roughness: 0.7 }), 4.5, 1.15, D / 2 - 0.05, false);
@@ -213,6 +260,12 @@ export class HQ {
     });
   }
 
+  updateKho() {
+    const s = this.app.save;
+    for (const l of this.khoLabels || []) l.mark.visible = l.id === s.primary;
+    if (this.rpgMark) this.rpgMark.visible = !!s.launcher;
+  }
+
   enter() {
     this.pos.set(0, 0, 4.2); this.yaw = 0; this.pitch = -0.05;
   }
@@ -224,9 +277,9 @@ export class HQ {
     const sens = s.sens * 0.001;
     this.yaw -= inp.dx * sens; this.pitch = clamp(this.pitch - inp.dy * sens * (s.invertY ? -1 : 1), -1.3, 1.3);
     let ix = 0, iz = 0;
-    if (inp.down('KeyW')) iz -= 1; if (inp.down('KeyS')) iz += 1; if (inp.down('KeyA')) ix -= 1; if (inp.down('KeyD')) ix += 1;
+    if (inp.bd('moveF')) iz -= 1; if (inp.bd('moveB')) iz += 1; if (inp.bd('moveL')) ix -= 1; if (inp.bd('moveR')) ix += 1;
     const l = Math.hypot(ix, iz) || 1;
-    const sp = (inp.down('ShiftLeft') ? 3.6 : 2.2) * dt;
+    const sp = (inp.bd('sprint') ? 3.6 : 2.2) * dt;
     const c = Math.cos(this.yaw), sn = Math.sin(this.yaw);
     const nx = this.pos.x + ((c * ix + sn * iz) / l) * sp, nz = this.pos.z + ((-sn * ix + c * iz) / l) * sp;
     const blocked = (x, z) => this.colliders.some((b) => x > b.x0 && x < b.x1 && z > b.z0 && z < b.z1);
@@ -246,7 +299,7 @@ export class HQ {
     }
     this.current = best;
     this.app.ui.hqPrompt(best ? best.label : null);
-    if (best && inp.hit('KeyE')) best.act();
+    if (best && inp.bh('use')) best.act();
     this.commander.head.rotation.y = Math.sin(this.t * 0.4) * 0.3;
   }
 

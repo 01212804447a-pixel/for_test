@@ -222,7 +222,7 @@ export class ViewModel {
 
   info(kind) { return MODEL_INFO[kind]; }
 
-  _build(kind) {
+  _build(kind, display = false) {
     const mm = this.mm;
     const info = MODEL_INFO[kind];
     const root = new THREE.Group();
@@ -267,6 +267,7 @@ export class ViewModel {
       g.scale.set(1, 1.25, 1); bore.add(g);
       box(bore, 0.008, 0.06, 0.012, mm.metalWorn, 0.025, 0.02, 0);
     }
+    if (!display) {
     // руки
     if (kind !== 'b8' && kind !== 'grenade') {
       const rgrip = kind === 'svd' ? [0, -info.h - 0.12, 0.2] : kind === 'pkm' ? [0, -info.h - 0.12, 0.27] : kind.startsWith('rpg') ? [info.muzzle[0], info.muzzle[1] - 0.09, 0.06] : kind === 'gp25' ? [0.055, -0.21, 0.32] : [0, -0.18, 0.175];
@@ -281,6 +282,7 @@ export class ViewModel {
       hand(bore, [kind === 'b8' ? -0.05 : 0.0, -0.04, 0.02], mm.glove);
       limb(bore, [0.0, -0.06, 0.04], [0.1, -0.25, 0.3], 0.045, mm.sleeve);
       if (kind === 'b8') { hand(bore, [0.05, -0.04, 0.02], mm.glove); limb(bore, [-0.04, -0.06, 0.04], [-0.12, -0.25, 0.3], 0.045, mm.sleeve); }
+    }
     }
     // вспышка
     const flash = new THREE.Group();

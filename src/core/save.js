@@ -10,6 +10,7 @@ const DEFAULT = {
   primary: 'ak74m_gp',
   launcher: false,
   vehicles: ['tigr'],
+  loads: {},
   settings: { sens: 2.2, fov: 72, volume: 0.8, quality: 'medium', invertY: false },
 };
 

@@ -3,20 +3,45 @@ import { prepareAmmo } from '../physics/ballistics.js';
 
 export const AMMO = {
   '545_7n10': {
-    id: '545_7n10', name: '5,45×39 7Н10', kind: 'bullet', model: 'G7', bc: 0.168,
+    id: '545_7n10', name: '5,45×39 7Н10 (повышенной пробиваемости)', short: '7Н10', cls: 'std', kind: 'bullet', model: 'G7', bc: 0.168,
     mass: 0.0036, caliber: 0.00545, v0: 900, spin: { sg: 1.6, dir: 1 }, pen: 7, dmgK: 1.0,
   },
   '762x39_ps': {
-    id: '762x39_ps', name: '7,62×39 57-Н-231', kind: 'bullet', model: 'G7', bc: 0.143,
+    id: '762x39_ps', name: '7,62×39 ПС 57-Н-231', short: 'ПС', cls: 'std', kind: 'bullet', model: 'G7', bc: 0.143,
     mass: 0.0079, caliber: 0.00762, v0: 715, spin: { sg: 1.5, dir: 1 }, pen: 6, dmgK: 1.1,
   },
   '762x54_7n1': {
-    id: '762x54_7n1', name: '7,62×54R 7Н1 (снайп.)', kind: 'bullet', model: 'G7', bc: 0.205,
+    id: '762x54_7n1', name: '7,62×54R 7Н1 (снайперский)', short: '7Н1', cls: 'sniper', kind: 'bullet', model: 'G7', bc: 0.205,
     mass: 0.0098, caliber: 0.00762, v0: 830, spin: { sg: 1.7, dir: 1 }, pen: 10, dmgK: 1.15,
   },
   '762x54_lps': {
-    id: '762x54_lps', name: '7,62×54R ЛПС', kind: 'bullet', model: 'G7', bc: 0.187,
+    id: '762x54_lps', name: '7,62×54R ЛПС', short: 'ЛПС', cls: 'std', kind: 'bullet', model: 'G7', bc: 0.187,
     mass: 0.0096, caliber: 0.00762, v0: 825, spin: { sg: 1.6, dir: 1 }, pen: 11, dmgK: 1.15, tracerEvery: 4,
+  },
+  // Специальные патроны для снаряжения магазинов
+  '545_7t3': {
+    id: '545_7t3', name: '5,45×39 7Т3М (трассирующий)', short: '7Т3М', cls: 'tracer', kind: 'bullet', model: 'G7', bc: 0.15,
+    mass: 0.00323, caliber: 0.00545, v0: 880, spin: { sg: 1.5, dir: 1 }, pen: 4, dmgK: 0.95, tracer: true, tracerColor: [1, 0.25, 0.12],
+  },
+  '545_7n24': {
+    id: '545_7n24', name: '5,45×39 7Н24 (бронебойный)', short: '7Н24', cls: 'ap', kind: 'bullet', model: 'G7', bc: 0.18,
+    mass: 0.0041, caliber: 0.00545, v0: 840, spin: { sg: 1.7, dir: 1 }, pen: 14, dmgK: 0.95,
+  },
+  '762x39_t45': {
+    id: '762x39_t45', name: '7,62×39 Т-45М (трассирующий)', short: 'Т-45', cls: 'tracer', kind: 'bullet', model: 'G7', bc: 0.13,
+    mass: 0.0075, caliber: 0.00762, v0: 715, spin: { sg: 1.4, dir: 1 }, pen: 4, dmgK: 1.05, tracer: true, tracerColor: [1, 0.3, 0.1],
+  },
+  '762x39_bp': {
+    id: '762x39_bp', name: '7,62×39 БП 7Н23 (бронебойный)', short: 'БП', cls: 'ap', kind: 'bullet', model: 'G7', bc: 0.15,
+    mass: 0.0079, caliber: 0.00762, v0: 740, spin: { sg: 1.6, dir: 1 }, pen: 13, dmgK: 1.05,
+  },
+  '762x54_t46': {
+    id: '762x54_t46', name: '7,62×54R Т-46 (трассирующий)', short: 'Т-46', cls: 'tracer', kind: 'bullet', model: 'G7', bc: 0.18,
+    mass: 0.0096, caliber: 0.00762, v0: 800, spin: { sg: 1.6, dir: 1 }, pen: 7, dmgK: 1.1, tracer: true, tracerColor: [1, 0.22, 0.1],
+  },
+  '762x54_b32': {
+    id: '762x54_b32', name: '7,62×54R Б-32 (бронебойно-зажигательный)', short: 'Б-32', cls: 'ap', kind: 'bullet', model: 'G7', bc: 0.2,
+    mass: 0.01, caliber: 0.00762, v0: 810, spin: { sg: 1.7, dir: 1 }, pen: 16, dmgK: 1.15,
   },
   'pg7vm': {
     id: 'pg7vm', name: 'ПГ-7ВМ (кумулятивная)', kind: 'rocket', model: 'const', cd: 0.24,
@@ -162,3 +187,19 @@ export const SOUNDS = {
   rpg: { crack: 0.3, body: 1.3, freq: 500, decay: 0.6, thump: 45 },
   gl: { crack: 0.1, body: 0.5, freq: 400, decay: 0.15, thump: 80 },
 };
+
+// Совместимые патроны (по калибру) для снаряжения
+export const AMMO_FAMILY = {
+  '545_7n10': ['545_7n10', '545_7t3', '545_7n24'],
+  '762x39_ps': ['762x39_ps', '762x39_t45', '762x39_bp'],
+  '762x54_7n1': ['762x54_7n1', '762x54_lps', '762x54_t46', '762x54_b32'],
+  '762x54_lps': ['762x54_lps', '762x54_t46', '762x54_b32', '762x54_7n1'],
+};
+export function ammoChoices(weaponId) { const w = WEAPONS[weaponId]; return AMMO_FAMILY[w.ammo] || [w.ammo]; }
+export function defaultPattern(weaponId) {
+  const w = WEAPONS[weaponId];
+  const fam = ammoChoices(weaponId);
+  if (w.id === 'pkm' || w.id === 'pkp_mount') return Array.from({ length: w.mag }, (_, i) => (i % 4 === 3 ? fam.find((a) => AMMO[a].tracer) : w.ammo));
+  return Array(w.mag).fill(w.ammo);
+}
+export const LOADABLE = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];

@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --minify --format=iife --target=es2020 --outfile=dist/game.js",
+    "build": "node tools/pack-assets.mjs && esbuild src/main.js --bundle --minify --format=iife --target=es2020 --outfile=dist/game.js",
     "dev": "esbuild src/main.js --bundle --format=iife --target=es2020 --sourcemap --outfile=dist/game.js --servedir=. --watch",
     "serve": "python3 -m http.server 8080",
     "single": "npm run build && node tools/single.mjs"

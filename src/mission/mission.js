@@ -8,6 +8,8 @@ import * as ST from '../world/structures.js';
 import { Effects } from '../fx/effects.js';
 import * as POI from '../world/poi.js';
 import { scatterGround, GroundCover } from '../world/flora.js';
+import { Props } from '../world/props.js';
+import { hdr as hdrAsset, texture as texAsset, hasAssets } from '../core/assets.js';
 import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
@@ -76,10 +78,12 @@ export class Mission {
       g2.fillStyle = gr; g2.fillRect(0, 0, 256, 128);
       const et = new THREE.CanvasTexture(c); et.mapping = THREE.EquirectangularReflectionMapping; et.colorSpace = THREE.SRGBColorSpace;
       const pm = new THREE.PMREMGenerator(this.renderer);
-      this.envMap = pm.fromEquirectangular(et).texture;
+      const hd = hdrAsset(e.time === 'night' ? 'rogland_moonlit_night' : e.time === 'dusk' ? 'winter_evening' : 'snowy_field');
+      if (hd) hd.mapping = THREE.EquirectangularReflectionMapping;
+      this.envMap = pm.fromEquirectangular(hd || et).texture;
       pm.dispose(); et.dispose();
       this.scene.environment = this.envMap;
-      this.scene.environmentIntensity = e.time === 'night' ? 0.35 : 0.55;
+      this.scene.environmentIntensity = hd ? (e.time === 'night' ? 0.6 : e.time === 'dusk' ? 0.7 : 0.5) : (e.time === 'night' ? 0.35 : 0.55);
       this.vmScene.environment = this.envMap;
       this.vmScene.environmentIntensity = e.time === 'night' ? 0.5 : 0.8;
       this.lights.hemi.intensity *= 0.6;
@@ -121,7 +125,7 @@ export class Mission {
         if (!r) return;
         const off = [[-2, 3], [2, 3], [-4, 6], [4, 6], [-6, 9], [6, 9]][i];
         const c = Math.cos(st.yaw), s = Math.sin(st.yaw);
-        const s0 = new Soldier(this, { team: 'negs', name: r.name, callsign: r.callsign, role: r.role, weapon: r.weapon, secondary: r.secondary, skill: toSkill(r.stats), x: st.x + c * off[0] + s * off[1], z: st.z - s * off[0] + c * off[1], yaw: st.yaw, armor: 0.62, helmet: 0.5, grenades: 2 });
+        const s0 = new Soldier(this, { team: 'negs', name: r.name, callsign: r.callsign, role: r.role, weapon: r.weapon, secondary: r.secondary, skill: toSkill(r.stats), x: st.x + c * off[0] + s * off[1], z: st.z - s * off[0] + c * off[1], yaw: st.yaw, armor: 0.8, helmet: 0.6, grenades: 2 });
         s0.rosterId = id;
         const b = new Brain(s0, this, { mode: 'squad', slot: i });
         this.soldiers.push(s0);
@@ -133,6 +137,8 @@ export class Mission {
     const qk = this.settings.quality === 'low' ? 0.5 : this.settings.quality === 'high' ? 1.4 : 1;
     scatterGround(this.scene, this.terrain, this.world, { seed: def.terrain.seed, wind: this.wind, grass: Math.floor(9000 * qk), shrubs: Math.floor(3000 * qk), stones: Math.floor(1500 * qk), drifts: Math.floor(500 * qk), radius: 950, avoid: [{ x: def.start.x, z: def.start.z, r: 12 }, ...(def.clearZones || [])] });
     for (const sp of this.world.smokes) this.fx.addSmoke(sp, 1);
+    this.props = new Props(this);
+    for (const r of this.world.propRequests) this.props.spawn(r.type, r.x, r.z, { yaw: r.yaw, y: r.y ?? null });
     this.cover = new GroundCover(this.scene, this.terrain, this.world, { density: qk, radius: this.settings.quality === 'low' ? 100 : 150 });
     this.terrain.terrainUniforms.uSunDir.value.copy(this.lights.sunDir);
     this.terrain.terrainUniforms.uSparkle.value = e.time === 'night' ? 0.25 : e.time === 'dusk' ? 0.6 : 1;
@@ -153,6 +159,11 @@ export class Mission {
     }
     // первый этап
     this.nextStage();
+    // камера попаданий (картинка в картинке)
+    const hb = document.createElement('div'); hb.className = 'hitcam';
+    const hl = document.createElement('div'); hl.className = 'hclabel'; hb.appendChild(hl);
+    this.hud.root.appendChild(hb);
+    this.hitcam = { on: !!def.training, proj: null, hold: 0, t: 0, cam: new THREE.PerspectiveCamera(40, 3 / 2, 0.05, 3000), box: hb, label: hl };
     this.player.computePose(0.016);
     this.updateCamera(0);
     this.cover.update(this.camPos);
@@ -183,6 +194,7 @@ export class Mission {
       objKill: (text, s) => ({ text, check: () => !s.alive, marker: () => null }),
       objCustom: (text, fn, marker) => ({ text, check: fn, marker: marker || (() => null) }),
       scatter: (o) => self.scatter(o),
+      prop: (type, x, z, o = {}) => w.propRequests.push({ type, x, z, yaw: o.yaw || 0, y: o.y ?? null }),
       windFlag: (x, z) => self.addWindFlag(x, z),
       poi: Object.fromEntries(Object.entries(POI).map(([k, fn]) => [k, (o) => fn(w, m, o)])),
       forest: (o) => self.scatter({ rocks: 0, ...o, forest: true }),
@@ -248,7 +260,7 @@ export class Mission {
       this.interactables.push({ pos: new THREE.Vector3(px, y0 + 1, z + 0.4), r: 0.9, label: `Взять ${WEAPONS[id].name}`, hold: 0.3, enabled: () => true, action: () => {
         const p = this.player;
         if (id === 'rpg7') { p.slots[1] = makeState('rpg7'); p.cur = 1; }
-        else { p.slots[0] = makeState(id); p.cur = 0; p.uglMode = false; }
+        else { p.slots[0] = makeState(id, this.app.save.loads); p.cur = 0; p.uglMode = false; }
         p.switchT = 0.6;
         this.hud.message(`Взят ${WEAPONS[id].name}: ${WEAPONS[id].desc}`, 4);
       } });
@@ -391,6 +403,54 @@ export class Mission {
     }
   }
 
+  // ---------- камера попаданий ----------
+  onPlayerShot(p) {
+    if (!this.hitcam || !this.hitcam.on) return;
+    if (p.ammo.kind !== 'bullet' && p.ammo.kind !== 'rocket' && p.ammo.kind !== 'grenade') return;
+    this.hitcam.proj = p; this.hitcam.hold = 0; this.hitcam.t = 0;
+  }
+
+  updateHitcam(dt) {
+    const h = this.hitcam;
+    if (this.input.bh('hitcam')) { h.on = !h.on; this.hud.message(h.on ? 'Камера попаданий: вкл. (J)' : 'Камера попаданий: выкл.', 1.5); if (!h.on) h.proj = null; }
+    h.box.style.display = h.on && h.proj ? 'block' : 'none';
+    if (!h.on || !h.proj) return;
+    const p = h.proj, cam = h.cam;
+    h.t += dt;
+    if (p.alive) {
+      // за пулей: чуть позади и сбоку, взгляд по скорости
+      const d = p.v.clone().normalize();
+      const side = new THREE.Vector3(-d.z, 0, d.x).normalize();
+      cam.position.copy(p.p).addScaledVector(d, -1.6).addScaledVector(side, 0.35).add(new THREE.Vector3(0, 0.25, 0));
+      cam.lookAt(p.p.clone().addScaledVector(d, 6));
+      cam.fov = 40;
+      h.label.textContent = `Пуля: ${(p.dist).toFixed(0)} м · ${p.v.length().toFixed(0)} м/с · ${p.t.toFixed(2)} с`;
+    } else {
+      h.hold += dt;
+      const im = p.impact;
+      if (!im || h.hold > 2.6) { h.proj = null; return; }
+      const n = im.normal && im.normal.lengthSq() > 0.5 ? im.normal.clone() : p.v.clone().normalize().negate();
+      if (im.target) {
+        const t = im.target;
+        const f = new THREE.Vector3(Math.sin(t.facing), 0, Math.cos(t.facing));
+        cam.position.set(t.x, t.y, t.z).addScaledVector(f, Math.max(t.w, t.h) * 1.6 + 0.4);
+        cam.lookAt(t.x, t.y, t.z);
+        cam.fov = 40;
+        const rx = Math.cos(t.facing), rz = -Math.sin(t.facing);
+        const dx = (im.pos.x - t.x) * rx + (im.pos.z - t.z) * rz, dy = im.pos.y - t.y;
+        h.label.textContent = `Мишень ${Math.hypot(t.x - p.origin.x, t.z - p.origin.z).toFixed(0)} м: ${(dy * 100).toFixed(0)} см по высоте, ${(dx * 100).toFixed(0)} см по горизонтали`;
+      } else {
+        cam.position.copy(im.pos).addScaledVector(n, 2.6).add(new THREE.Vector3(0, 0.8, 0));
+        cam.lookAt(im.pos);
+        cam.fov = 35;
+        h.label.textContent = { soldier: 'Попадание в человека', vehicle: 'Попадание в технику', prop: 'Попадание в предмет', static: 'Попадание' }[im.kind] || 'Промах';
+        if (im.kind === 'static' && im.normal && im.normal.y > 0.6) h.label.textContent = 'Промах: точка падения';
+      }
+    }
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld(true);
+  }
+
   onPlayerHit(d, dir, zone) {
     this.audio.hurt();
     this.hud.hit(d, dir, this.player.yaw);
@@ -520,13 +580,14 @@ export class Mission {
     this.time += dt;
     this.stats.time += dt;
     const inp = this.input;
-    if (inp.hit('KeyM')) this.mapVisible = !this.mapVisible;
-    this.squadVisible = inp.down('Tab');
+    if (inp.bh('map')) this.mapVisible = !this.mapVisible;
+    this.squadVisible = inp.bd('squad');
     this.player.update(dt);
     for (const s of this.soldiers) s.update(dt);
     for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
     this.projectiles.update(dt);
+    if (this.props) this.props.update(dt);
     // мишени РЛС крутятся
     for (const d of this.world.destructibles) if (d.kind === 'radar' && d.spin) d.head.rotation.y += d.spin * dt;
     for (const f of this.flags) {
@@ -550,6 +611,7 @@ export class Mission {
     }
     this.noises = this.noises.filter((n) => this.time - n.time < 1.2);
     this.updateCamera(dt);
+    this.updateHitcam(dt);
     this.fx.update(dt);
     if (this.snow) this.snow.update(dt, this.camPos);
     if (this.cover) this.cover.update(this.camPos);
@@ -673,6 +735,21 @@ export class Mission {
 
   render() {
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
+    const hc = this.hitcam;
+    if (hc && hc.on && hc.proj) {
+      const r = this.renderer;
+      const W = innerWidth, H = innerHeight;
+      const w = Math.round(Math.min(420, W * 0.3)), h = Math.round(w / 1.5);
+      const x = W - w - 18, y = H - h - 200;
+      hc.box.style.cssText = `display:block;left:${x - 2}px;top:${H - y - h - 2}px;width:${w}px;height:${h}px`;
+      hc.cam.aspect = w / h; hc.cam.updateProjectionMatrix();
+      const fog = this.scene.fog; this.scene.fog = null;
+      r.setScissorTest(true); r.setScissor(x, y, w, h); r.setViewport(x, y, w, h);
+      r.autoClear = true;
+      r.render(this.scene, hc.cam);
+      r.setScissorTest(false); r.setViewport(0, 0, W, H);
+      this.scene.fog = fog;
+    }
     const sc = this.hud.scopeCanvas;
     if (this.scopeDraw) {
       const W = sc.width, H = sc.height;
@@ -687,6 +764,7 @@ export class Mission {
   }
 
   dispose() {
+    if (this.hitcam) this.hitcam.box.remove();
     this.audio.stopAllEngines();
     this.projectiles.clear();
     this.scene.traverse((o) => {

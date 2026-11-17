@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Noise2D } from '../core/noise.js';
 import { clamp, lerp, smoothstep } from '../core/math.js';
 import { snowTexture, snowNormal, rockTexture } from './textures.js';
+import { texture as texAsset } from '../core/assets.js';
 
 function distToPolyline(x, z, pts) {
   let best = 1e9, bestT = 0;
@@ -190,7 +191,7 @@ export class Terrain {
         const x = ix * c - half, z = iz * c - half;
         const h = this.h[i];
         pos[i * 3] = x; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z;
-        uv[i * 2] = x / 7; uv[i * 2 + 1] = z / 7;
+        uv[i * 2] = x / 3; uv[i * 2 + 1] = z / 3;
         const hl = this.h[iz * n + Math.max(0, ix - 1)], hr = this.h[iz * n + Math.min(n - 1, ix + 1)];
         const hd = this.h[Math.max(0, iz - 1) * n + ix], hu = this.h[Math.min(n - 1, iz + 1) * n + ix];
         v.set(hl - hr, 2 * c, hd - hu).normalize();
@@ -231,8 +232,13 @@ export class Terrain {
       roughness: 0.86, metalness: 0,
     });
     // Шейдер: снег в двух масштабах + макро-вариации, триплановый камень на склонах, искры снега
-    const rock = rockTexture();
-    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 } };
+    const rock = texAsset('aerial_rocks_02_diff.jpg') || rockTexture();
+    const snowMap = texAsset('snow_02_diff.jpg');
+    if (snowMap) {
+      mat.map = snowMap; mat.normalMap = texAsset('snow_02_nor.jpg', { srgb: false }); mat.roughnessMap = texAsset('snow_02_rough.jpg', { srgb: false });
+      mat.normalScale.set(0.7, 0.7); mat.roughness = 1;
+    }
+    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 }, uSnowAvg: { value: snowMap ? 0.5 : 0.93 } };
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.terrainUniforms);
       sh.vertexShader = sh.vertexShader
@@ -241,17 +247,17 @@ export class Terrain {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
 varying vec3 vWPos; varying vec3 vWNrm;
-uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle;
+uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle; uniform float uSnowAvg;
 float tHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
 vec3 triRock(vec3 p, vec3 n){
   vec3 w = pow(abs(n), vec3(4.0)); w /= (w.x + w.y + w.z);
   return texture2D(uRock, p.yz * 0.33).rgb * w.x + texture2D(uRock, p.xz * 0.33).rgb * w.y + texture2D(uRock, p.xy * 0.33).rgb * w.z;
 }`)
         .replace('#include <map_fragment>', `
-  vec3 sn1 = texture2D(map, vWPos.xz / 7.0).rgb;
-  vec3 sn2 = texture2D(map, vWPos.xz / 41.0 + 0.37).rgb;
+  vec3 sn1 = texture2D(map, vWPos.xz / 3.0).rgb;
+  vec3 sn2 = texture2D(map, vWPos.xz / 23.0 + 0.37).rgb;
   float macro = texture2D(map, vWPos.xz / 380.0).r * 0.5 + texture2D(map, vWPos.xz / 97.0 + 0.5).g * 0.5;
-  vec3 snowC = mix(sn1, sn2, 0.45) * (0.9 + (macro - 0.92) * 1.6);
+  vec3 snowC = mix(sn1, sn2, 0.45) / uSnowAvg * 0.93 * (0.94 + (macro / uSnowAvg - 1.0) * 0.8);
   float slope = 1.0 - normalize(vWNrm).y;
   float rockW = smoothstep(0.2, 0.42, slope + (sn2.r - 0.93) * 2.0);
   vec3 rockC = triRock(vWPos, normalize(vWNrm)) * vec3(0.95, 0.97, 1.02) * 1.15;

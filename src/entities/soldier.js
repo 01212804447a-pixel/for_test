@@ -43,6 +43,10 @@ export class Soldier {
     this.health = this.maxHealth;
     this.armor = opts.armor ?? 0.6; // защита туловища 0..1
     this.helmet = opts.helmet ?? 0.4;
+    // класс защиты (мм-эквивалент): плиты и шлем
+    this.armorClass = opts.armorClass ?? this.armor * (this.team === 'negs' ? 10 : 8);
+    this.helmetClass = opts.helmetClass ?? this.helmet * 6;
+    this.shockT = 0;
     this.alive = true;
     this.suppression = 0;
     this.morale = 1;
@@ -98,14 +102,22 @@ export class Soldier {
   get solver() { return solverFor(this.weaponId, this.game.zeroEnv); }
 
   // Получение урона: zone — head|torso|pelvis|leg|arm
-  damage(amount, zone, source, dir) {
+  damage(amount, zone, source, dir, { raw = false, penetrating = true } = {}) {
     if (!this.alive) return;
     let d = amount;
-    if (zone === 'head') d *= 3.2;
-    else if (zone === 'torso') d *= 1.0;
-    else if (zone === 'pelvis') d *= 0.9;
-    else if (zone === 'leg') { d *= 0.55; this.bleeding += 0.6; }
-    else if (zone === 'arm') { d *= 0.45; this.bleeding += 0.4; }
+    if (!raw) {
+      if (zone === 'head') d *= 3.2;
+      else if (zone === 'pelvis') d *= 0.9;
+      else if (zone === 'leg') d *= 0.55;
+      else if (zone === 'arm') d *= 0.45;
+    }
+    if (penetrating) {
+      if (zone === 'leg') this.bleeding += 1.4;
+      else if (zone === 'arm') this.bleeding += 0.8;
+      else if (zone === 'torso' || zone === 'pelvis') this.bleeding += 2.2;
+      // болевой шок: короткое выведение из строя
+      if (d > 25 && zone !== 'arm') this.shockT = Math.max(this.shockT || 0, zone === 'leg' ? 1.5 : 2.6);
+    }
     this.health -= d;
     this.lastHitTime = this.game.time;
     this.suppression = Math.min(1, this.suppression + 0.6);
@@ -134,6 +146,7 @@ export class Soldier {
   update(dt) {
     if (this.alive) {
       this.suppression = Math.max(0, this.suppression - dt * (0.18 + this.skill.nerve * 0.25));
+      if (this.shockT > 0) this.shockT -= dt;
       if (this.bleeding > 0) {
         this.health -= this.bleeding * dt * 0.6;
         this.bleeding = Math.max(0, this.bleeding - dt * 0.03);
@@ -161,6 +174,12 @@ export class Soldier {
         const vx = this.vel.x, vz = this.vel.z;
         const sp = Math.hypot(vx, vz);
         const lx = c * vx - s * vz, lz = s * vx + c * vz;
+        // скелет: вблизи каждый кадр, вдали — реже; тела после падения не трогаем
+        const camD2 = this.game.camPos ? this.pos.distanceToSquared(this.game.camPos) : 0;
+        this._skinTick = (this._skinTick || 0) + 1;
+        const done = !this.alive && m.deadT > 1.2 && this._skinFrozen;
+        m.skinUpdate = !done && (camD2 < 6400 || this._skinTick % (camD2 < 90000 ? 2 : 4) === 0);
+        if (!this.alive && m.deadT > 1.2) this._skinFrozen = true;
         m.update(dt, {
           speed: sp, mx: sp > 0.05 ? lx / sp : 0, mz: sp > 0.05 ? lz / sp : 0,
           stance: this.stance, aimPitch: this.aimPitch, aiming: this.brain ? this.brain.aiming : false, dead: !this.alive,

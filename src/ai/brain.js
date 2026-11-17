@@ -664,6 +664,8 @@ export class Brain {
     } else if (this.healTarget) s.stance = 'crouch';
     else s.stance = this.state === 'alert' ? 'crouch' : 'stand';
 
+    // болевой шок: падает и не стреляет
+    if (s.shockT > 0) { s.stance = s.static ? 'crouch' : 'prone'; this.aiming = false; return; }
     // огонь
     const canShoot = !(atCover && this.coverPhase === 'hide') || (s.static && this.coverPhase !== 'hide');
     this.aiming = false;

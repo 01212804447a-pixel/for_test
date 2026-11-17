@@ -207,7 +207,12 @@ export class Vehicle {
     vF -= roll * dt;
     if (th === 0 && Math.sign(vF) !== Math.sign(before) && Math.abs(before) < 1) vF = 0;
     if (ctl.brake && Math.abs(vF) < 0.5) vF = 0;
-    vR *= Math.exp(-T.grip * dt);
+    // боковая составляющая веса на поперечном склоне и сцепление со снегом
+    const muLat = (T.tracked ? 0.75 : 0.42) * (ctl.brake && !T.tracked ? 0.8 : 1);
+    vR += -9.81 * Math.sin(this.groundRoll || 0) * dt;
+    const fric = Math.min(Math.abs(vR), muLat * 9.81 * Math.cos(this.groundRoll || 0) * dt + Math.abs(vR) * (1 - Math.exp(-T.grip * dt)) * 0.6);
+    vR -= Math.sign(vR) * fric;
+    this.accF = aF;
     let yawRate;
     if (T.tracked) {
       yawRate = ctl.steer * T.turnRate * (vF < -0.2 ? -1 : 1) * (1 - 0.45 * Math.min(1, Math.abs(vF) / T.maxSpeed));
@@ -217,6 +222,9 @@ export class Vehicle {
       yawRate = (vF * Math.tan(this.steer)) / T.wheelbase;
     }
     this.yaw += yawRate * dt;
+    this.accLat = (this.accLat || 0) * 0.85 + vF * yawRate * 0.15;
+    // опрокидывание на слишком крутом поперечном склоне
+    if (Math.abs(this.roll) > 0.85 && this.alive && Math.abs(this.groundRoll || 0) > 0.7) { this.hp -= 40 * dt; if (this.hp <= 0) this.destroy(null); }
     const nfx = -Math.sin(this.yaw), nfz = -Math.cos(this.yaw), nrx = Math.cos(this.yaw), nrz = -Math.sin(this.yaw);
     this.vel.set(nfx * vF + nrx * vR, 0, nfz * vF + nrz * vR);
     this.speed = vF;
@@ -268,11 +276,31 @@ export class Vehicle {
     const H = (lx, lz) => w.terrain.heightAt(this.pos.x + c * lx + s * lz, this.pos.z - s * lx + c * lz);
     const fl = H(-hw, -hl), fr = H(hw, -hl), rl = H(-hw, hl), rr = H(hw, hl);
     const gy = (fl + fr + rl + rr) / 4;
-    const tp = Math.atan2((fl + fr) / 2 - (rl + rr) / 2, hl * 2);
-    const tr = Math.atan2((fr + rr) / 2 - (fl + rl) / 2, hw * 2);
-    const k = Math.min(1, dt * 8);
-    this.pitch += (tp - this.pitch) * k;
-    this.roll += (tr - this.roll) * k;
+    // плоскость опоры по четырём точкам + динамика кузова на подвеске
+    this.groundPitch = Math.atan2((fl + fr) / 2 - (rl + rr) / 2, hl * 2);
+    this.groundRoll = Math.atan2((fr + rr) / 2 - (fl + rl) / 2, hw * 2);
+    const soft = T.tracked ? 0.35 : 1;
+    const tp = this.groundPitch + clamp((this.accF || 0) * 0.006 * soft, -0.06, 0.06);
+    const tr = this.groundRoll + clamp(-(this.accLat || 0) * 0.012 * soft, -0.09, 0.09);
+    if (dt > 0.2) { this.pitch = tp; this.roll = tr; this.pVel = 0; this.rVel = 0; }
+    else {
+      const K = 90, C = 13;
+      this.pVel = (this.pVel || 0) + ((tp - this.pitch) * K - (this.pVel || 0) * C) * dt;
+      this.rVel = (this.rVel || 0) + ((tr - this.roll) * K - (this.rVel || 0) * C) * dt;
+      this.pitch += this.pVel * dt; this.roll += this.rVel * dt;
+    }
+    // ход колёс: каждое колесо прижимается к земле под собой
+    if (!T.tracked && this.model.wheels.length >= 4) {
+      for (let i = 0; i < 4; i++) {
+        const wh = this.model.wheels[i];
+        if (wh.baseY === undefined) wh.baseY = wh.steer.position.y;
+        const lx = wh.steer.position.x, lz = wh.steer.position.z;
+        const ground = H(lx, lz);
+        const plane = gy + Math.sin(this.pitch) * -lz + Math.sin(this.roll) * lx;
+        const target = clamp(wh.baseY + (ground - plane), wh.baseY - 0.14, wh.baseY + 0.14);
+        wh.steer.position.y += (target - wh.steer.position.y) * Math.min(1, dt * 18);
+      }
+    }
     // вертикаль: пружина + гравитация
     if (this.pos.y > gy + 0.05) { this.yVel -= 9.81 * dt; this.pos.y += this.yVel * dt; if (this.pos.y < gy) { this.pos.y = gy; this.yVel = 0; } }
     else { this.pos.y += (gy - this.pos.y) * Math.min(1, dt * 14); this.yVel = 0; }
@@ -280,7 +308,7 @@ export class Vehicle {
     this.mesh.position.copy(this.pos);
     this.mesh.rotation.set(0, 0, 0);
     this.mesh.rotation.order = 'YXZ';
-    this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = this.pitch; this.mesh.rotation.z = -this.roll;
+    this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = this.pitch; this.mesh.rotation.z = this.roll;
     this.mesh.updateMatrixWorld(true);
     this._updateCollider();
     if (this.blob) { this.blob.position.set(this.pos.x, gy + 0.06, this.pos.z); this.blob.rotation.z = this.yaw; }

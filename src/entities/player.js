@@ -3,15 +3,18 @@
 // Никакой точки прицеливания: пуля летит из дульного среза по оси ствола.
 import * as THREE from 'three';
 import { Soldier, solverFor } from './soldier.js';
-import { WEAPONS, SCOPES, AMMO } from '../data/weapons.js';
+import { WEAPONS, SCOPES, AMMO, defaultPattern } from '../data/weapons.js';
 import { clamp, lerp, randn, rand, MIL, wrapAngle } from '../core/math.js';
 import { MODEL_INFO } from '../weapons/viewmodel.js';
 
 const VM_KIND = { ak74m: 'ak74', ak74m_gp: 'ak74gp', ak74m_1p78: 'ak74scope', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg7', pkp_mount: 'pkm' };
 
-export function makeState(id) {
+export function makeState(id, loads = null) {
   const def = WEAPONS[id];
   const st = { def, id, mag: def.mag, spare: Array(def.mags).fill(def.mag), sightIdx: 0, mode: def.modes[0], optic: true };
+  // порядок патронов в магазине/ленте: [0] — первый выстрел
+  const pat = loads && loads[id];
+  st.pattern = pat && pat.length === def.mag ? pat.slice() : (def.ammo.startsWith('545') || def.ammo.startsWith('762') ? defaultPattern(id) : null);
   if (def.ugl) { const u = WEAPONS[def.ugl]; st.ugl = { def: u, id: def.ugl, mag: 1, spare: Array(u.mags).fill(1), sightIdx: 3 }; }
   if (def.sight.type === 'scope' && def.sight.scope === 'pso1') st.sightIdx = 2;
   if (def.sight.type === 'iron') st.sightIdx = 0;
@@ -24,13 +27,14 @@ export class Player {
   constructor(game, loadout = {}) {
     this.game = game;
     const primary = loadout.primary || 'ak74m';
-    this.body = new Soldier(game, { team: 'negs', isPlayer: true, name: 'Кей', callsign: 'Кей', weapon: primary, armor: 0.65, helmet: 0.5, x: loadout.x || 0, z: loadout.z || 0, grenades: 3, medkits: 2, health: 100 });
+    this.body = new Soldier(game, { team: 'negs', isPlayer: true, name: 'Кей', callsign: 'Кей', weapon: primary, armor: 0.8, helmet: 0.6, x: loadout.x || 0, z: loadout.z || 0, grenades: 3, medkits: 2, health: 100 });
     this.body.isPlayer = true;
     this.yaw = loadout.yaw || 0; this.pitch = 0;
     this.body.yaw = this.yaw;
     this.eyeH = 1.62;
     this.stamina = 1; this.breath = 1; this.breathLock = 0; this.holding = false;
-    this.slots = [makeState(primary)];
+    const loads = (game.app && game.app.save && game.app.save.loads) || null;
+    this.slots = [makeState(primary, loads)];
     this.slots.push(loadout.launcher ? makeState('rpg7') : null);
     this.slots.push({ id: 'grenade', grenade: true, count: 3 });
     this.slots.push({ id: 'b8', binocular: true });
@@ -66,7 +70,7 @@ export class Player {
   get pos() { return this.body.pos; }
   get state() { return this.slots[this.cur]; }
   get activeWeapon() {
-    if (this.vehicle && this.seat === 1 && this.vehicle.type.gunExposed) return this.mountState || (this.mountState = makeState('pkp_mount'));
+    if (this.vehicle && this.seat === 1 && this.vehicle.type.gunExposed) return this.mountState || (this.mountState = makeState('pkp_mount', (this.game.app && this.game.app.save.loads) || null));
     const s = this.state;
     if (!s || s.grenade || s.binocular) return null;
     if (this.uglMode && s.ugl) return s.ugl;
@@ -166,20 +170,20 @@ export class Player {
 
   handleStance(inp) {
     const b = this.body;
-    if (inp.hit('KeyC')) b.stance = b.stance === 'crouch' ? 'stand' : 'crouch';
-    if (inp.hit('KeyZ')) { b.stance = b.stance === 'prone' ? 'crouch' : 'prone'; this.switchT = Math.max(this.switchT, 0.7); }
+    if (inp.bh('crouch')) b.stance = b.stance === 'crouch' ? 'stand' : 'crouch';
+    if (inp.bh('prone')) { b.stance = b.stance === 'prone' ? 'crouch' : 'prone'; this.switchT = Math.max(this.switchT, 0.7); }
   }
 
   handleMove(dt, inp) {
     const g = this.game, b = this.body, w = g.world;
     let ix = 0, iz = 0;
-    if (inp.down('KeyW')) iz -= 1;
-    if (inp.down('KeyS')) iz += 1;
-    if (inp.down('KeyA')) ix -= 1;
-    if (inp.down('KeyD')) ix += 1;
+    if (inp.bd('moveF')) iz -= 1;
+    if (inp.bd('moveB')) iz += 1;
+    if (inp.bd('moveL')) ix -= 1;
+    if (inp.bd('moveR')) ix += 1;
     const len = Math.hypot(ix, iz);
     if (len > 0) { ix /= len; iz /= len; }
-    const wantSprint = inp.down('ShiftLeft') && iz < 0 && !this.aim && b.stance !== 'prone' && this.stamina > 0.05 && this.medT <= 0;
+    const wantSprint = inp.bd('sprint') && iz < 0 && !this.aim && b.stance !== 'prone' && this.stamina > 0.05 && this.medT <= 0;
     if (wantSprint && b.stance === 'crouch') b.stance = 'stand';
     let speed = b.stance === 'prone' ? 0.55 : b.stance === 'crouch' ? 1.5 : 2.5;
     if (wantSprint) speed = 5.3;
@@ -197,7 +201,7 @@ export class Player {
     b.vel.x += (wx - b.vel.x) * Math.min(1, acc * dt);
     b.vel.z += (wz - b.vel.z) * Math.min(1, acc * dt);
     // прыжок и гравитация
-    if (inp.hit('Space') && this.onGround && b.stance === 'stand') { this.vy = 3.8; this.onGround = false; this.stamina = Math.max(0, this.stamina - 0.06); }
+    if (inp.bh('jump') && this.onGround && b.stance === 'stand') { this.vy = 3.8; this.onGround = false; this.stamina = Math.max(0, this.stamina - 0.06); }
     this.vy -= 9.81 * dt;
     _v.set(b.pos.x + b.vel.x * dt, b.pos.y, b.pos.z + b.vel.z * dt);
     const height = b.stance === 'prone' ? 0.5 : b.stance === 'crouch' ? 1.2 : 1.75;
@@ -231,52 +235,58 @@ export class Player {
     this.fireCD -= dt; this.flashT -= dt;
     // смена оружия
     let want = -1;
-    for (let i = 0; i < 4; i++) if (inp.hit('Digit' + (i + 1))) want = i;
+    for (let i = 0; i < 4; i++) if (inp.bh('slot' + (i + 1))) want = i;
     if (!this.aim && inp.wheel !== 0 && want < 0) {
       let n = this.cur;
       for (let k = 0; k < 4; k++) { n = (n + (inp.wheel > 0 ? 1 : 3)) % 4; if (this.slots[n]) break; }
       want = n;
     }
     if (want >= 0 && want !== this.cur && this.slots[want] && this.reloadT <= 0) {
-      this.cur = want; this.switchT = 0.6; this.uglMode = false; this.game.audio.mech('switch');
+      this.cur = want; this.switchT = 0.6; this.uglMode = false; this.binocQuick = false; this.game.audio.mech('switch');
+    }
+    // бинокль одной клавишей: достать и сразу смотреть / убрать и вернуть оружие
+    if (inp.bh('binoc') && this.reloadT <= 0) {
+      if (this.cur === 3 && this.binocQuick) { this.cur = this.prevSlot ?? 0; this.binocQuick = false; this.switchT = 0.35; }
+      else { this.prevSlot = this.cur === 3 ? 0 : this.cur; this.cur = 3; this.binocQuick = true; this.switchT = 0.25; this.uglMode = false; }
+      this.game.audio.mech('switch');
     }
     if (this.switchT > 0) this.switchT -= dt;
     const ws = this.state;
     // прицеливание
-    const canAim = this.sprintT < 0.3 && this.switchT <= 0 && this.medT <= 0 && !(ws && ws.grenade);
-    this.aim = inp.mouse(2) && canAim && this.reloadT <= 0;
+    const canAim = this.sprintT < 0.3 && this.switchT <= 0 && this.medT <= 0 && !(ws && ws.grenade) && !(b.shockT > 0);
+    this.aim = (inp.bd('aim') || (this.binocQuick && this.cur === 3)) && canAim && this.reloadT <= 0;
     this.aimT = lerp(this.aimT, this.aim ? 1 : 0, 1 - Math.exp(-(this.aim ? 11 : 14) * dt));
     // задержка дыхания
-    const wantHold = this.aim && inp.down('ShiftLeft') && this.breathLock <= 0 && this.breath > 0;
+    const wantHold = this.aim && inp.bd('sprint') && this.breathLock <= 0 && this.breath > 0;
     this.holding = wantHold;
     if (wantHold) { this.breath = Math.max(0, this.breath - dt / 6); if (this.breath <= 0) this.breathLock = 3; }
     else { this.breath = Math.min(1, this.breath + dt * 0.22); this.breathLock = Math.max(0, this.breathLock - dt); }
 
     if (!ws) return;
     if (ws.grenade) { this.handleGrenade(dt, inp, ws); this.computePose(dt); return; }
-    if (ws.binocular) { this.computePose(dt); if (this.aim && inp.mouseHit(0)) g.spotterRange(); return; }
+    if (ws.binocular) { this.computePose(dt); if (this.aim && inp.bh('fire')) g.spotterRange(); if (this.binocQuick && inp.bd('moveF') && inp.bd('sprint')) { this.cur = this.prevSlot ?? 0; this.binocQuick = false; } return; }
     const aw = this.activeWeapon;
     // переключатели
-    if (inp.hit('KeyX') && ws.ugl) { this.uglMode = !this.uglMode; this.switchT = 0.45; g.audio.mech('switch'); }
-    if (inp.hit('KeyB') && aw.def.modes.length > 1) { const i = aw.def.modes.indexOf(aw.mode); aw.mode = aw.def.modes[(i + 1) % aw.def.modes.length]; g.audio.click(); g.hud.message(aw.mode === 'auto' ? 'Автоматический огонь' : 'Одиночный огонь', 1.2); }
-    if (inp.hit('KeyO') && ws.id === 'rpg7') { ws.optic = !ws.optic; this.switchT = 0.8; g.hud.message(ws.optic ? 'Оптический прицел ПГО-7' : 'Механический прицел', 1.5); }
-    if (inp.hit('BracketRight') || inp.hit('PageUp') || (this.aim && inp.wheel < 0)) this.changeSight(aw, 1);
-    if (inp.hit('BracketLeft') || inp.hit('PageDown') || (this.aim && inp.wheel > 0)) this.changeSight(aw, -1);
+    if (inp.bh('ugl') && ws.ugl) { this.uglMode = !this.uglMode; this.switchT = 0.45; g.audio.mech('switch'); }
+    if (inp.bh('firemode') && aw.def.modes.length > 1) { const i = aw.def.modes.indexOf(aw.mode); aw.mode = aw.def.modes[(i + 1) % aw.def.modes.length]; g.audio.click(); g.hud.message(aw.mode === 'auto' ? 'Автоматический огонь' : 'Одиночный огонь', 1.2); }
+    if (inp.bh('optic') && ws.id === 'rpg7') { ws.optic = !ws.optic; this.switchT = 0.8; g.hud.message(ws.optic ? 'Оптический прицел ПГО-7' : 'Механический прицел', 1.5); }
+    if (inp.bh('sightUp') || inp.hit('PageUp') || (this.aim && inp.wheel < 0)) this.changeSight(aw, 1);
+    if (inp.bh('sightDown') || inp.hit('PageDown') || (this.aim && inp.wheel > 0)) this.changeSight(aw, -1);
     // перезарядка
     if (this.reloadT > 0) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this.finishReload(aw);
-    } else if (inp.hit('KeyR') && aw.spare.length && aw.mag < aw.def.mag + (aw.def.mag > 1 ? 1 : 0)) {
+    } else if (inp.bh('reload') && aw.spare.length && aw.mag < aw.def.mag + (aw.def.mag > 1 ? 1 : 0)) {
       this.reloadTotal = this.reloadT = aw.mag === 0 ? aw.def.reloadEmpty : aw.def.reload;
       this.aim = false;
       g.audio.mech('reload');
     }
     this.computePose(dt);
     // огонь
-    const trig = aw.mode === 'auto' ? (inp.mouse(0) || inp.mouseHit(0)) : inp.mouseHit(0);
-    if (trig && this.fireCD <= 0 && this.reloadT <= 0 && this.switchT <= 0 && this.sprintT < 0.3 && this.medT <= 0) {
+    const trig = aw.mode === 'auto' ? (inp.bd('fire') || inp.bh('fire')) : inp.bh('fire');
+    if (trig && this.fireCD <= 0 && this.reloadT <= 0 && this.switchT <= 0 && this.sprintT < 0.3 && this.medT <= 0 && !(b.shockT > 0)) {
       if (aw.mag > 0) this.fire(aw);
-      else if (inp.mouseHit(0)) { g.audio.click(); }
+      else if (inp.bh('fire')) { g.audio.click(); }
     }
   }
 
@@ -358,9 +368,18 @@ export class Player {
     this.scoped = this.aimT > 0.93 && ((sight && sight.type === 'scope') || (ws && ws.binocular));
   }
 
+  // Патрон, который сейчас будет выстрелен
+  nextRound(aw) {
+    if (!aw.pattern) return aw.def.ammo;
+    const cap = aw.def.mag;
+    const i = Math.max(0, Math.min(cap - 1, cap - aw.mag));
+    return aw.pattern[i] || aw.def.ammo;
+  }
+
   fire(aw) {
     const g = this.game, b = this.body;
     const def = aw.def;
+    const ammoId = this.nextRound(aw);
     aw.mag--;
     this.fireCD = 60 / def.rpm;
     const theta = this.theta(aw);
@@ -382,7 +401,7 @@ export class Player {
     const block = g.world.raycast(eye, mp, { mask: 'bullet', vehicles: true, ignore: this.vehicle });
     if (block) mp.copy(eye).lerp(mp, Math.max(0, block.t - 0.05));
     b.shotsFired++;
-    g.fireProjectile({ weapon: def, pos: mp, dir: md, owner: b, team: 'negs', own: true });
+    g.fireProjectile({ weapon: def, pos: mp, dir: md, owner: b, team: 'negs', own: true, ammoId });
     b.lastShotTime = g.time; b.fireFlash = 0.06;
     this.flashT = 0.045;
     // отдача
@@ -402,8 +421,8 @@ export class Player {
   handleGrenade(dt, inp, ws) {
     const g = this.game, b = this.body;
     if (ws.count <= 0 || this.switchT > 0) return;
-    const long = inp.mouseUp(0), short = inp.mouseUp(2);
-    if (inp.mouse(0) || inp.mouse(2)) this.cook = (this.cook || 0) + dt; else if (!long && !short) this.cook = 0;
+    const long = inp.bu('fire'), short = inp.bu('aim');
+    if (inp.bd('fire') || inp.bd('aim')) this.cook = (this.cook || 0) + dt; else if (!long && !short) this.cook = 0;
     if (long || short) {
       const v = long ? 17 : 8;
       const pitch = this.pitch + (long ? 0.18 : 0.05);
@@ -420,26 +439,26 @@ export class Player {
   handleMisc(dt, inp) {
     const g = this.game, b = this.body;
     // аптечка
-    if (inp.hit('KeyK') && b.medkits > 0 && b.health < b.maxHealth && this.medT <= 0) { this.medT = 4; g.hud.message('Перевязка... (4 с)', 4); }
+    if (inp.bh('medkit') && b.medkits > 0 && b.health < b.maxHealth && this.medT <= 0) { this.medT = 4; g.hud.message('Перевязка... (4 с)', 4); }
     if (this.medT > 0) {
       this.medT -= dt;
       if (this.medT <= 0) { b.medkits--; b.heal(35); g.hud.message('Ранение перевязано (+35)', 2); }
     }
     // команды отделению
-    if (inp.hit('KeyF')) g.squadOrder('follow');
-    if (inp.hit('KeyH')) g.squadOrder('hold');
-    if (inp.hit('KeyT') || inp.hit('KeyV')) {
+    if (inp.bh('cmdFollow')) g.squadOrder('follow');
+    if (inp.bh('cmdHold')) g.squadOrder('hold');
+    if (inp.bh('cmdMove') || inp.bh('cmdSuppress')) {
       const cam = g.lookCam;
       const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
       const end = cam.position.clone().addScaledVector(dir, 600);
       const hit = g.world.raycast(cam.position, end, { mask: 'sight' });
       const pt = hit ? hit.point : end;
-      g.squadOrder(inp.hit('KeyT') ? 'move' : 'suppress', pt);
+      g.squadOrder(inp.bh('cmdMove') ? 'move' : 'suppress', pt);
     }
     // взаимодействие
     this.interact = g.findInteraction(this);
     if (this.interact) {
-      if (inp.down('KeyE')) {
+      if (inp.bd('use')) {
         this.holdE += dt;
         if (this.holdE >= (this.interact.hold || 0)) { const it = this.interact; this.holdE = -999; it.action(); }
       } else this.holdE = 0;
@@ -514,16 +533,16 @@ export class Player {
   updateVehicle(dt, mdx, mdy) {
     const g = this.game, inp = g.input, v = this.vehicle, b = this.body;
     if (!v.alive) { this.vehicle = null; this.seat = -1; b.vehicle = null; b.hidden = false; return; }
-    if (inp.hit('KeyE')) { this.exitVehicle(); return; }
-    if (inp.hit('Digit1')) this.switchSeat(0);
-    if (inp.hit('Digit2')) this.switchSeat(1);
-    if (inp.hit('KeyC')) this.camThird = !this.camThird;
-    if (inp.hit('KeyF')) g.squadOrder('follow');
-    if (inp.hit('KeyH')) g.squadOrder('hold');
+    if (inp.bh('use')) { this.exitVehicle(); return; }
+    if (inp.bh('slot1')) this.switchSeat(0);
+    if (inp.bh('slot2')) this.switchSeat(1);
+    if (inp.bh('crouch')) this.camThird = !this.camThird;
+    if (inp.bh('cmdFollow')) g.squadOrder('follow');
+    if (inp.bh('cmdHold')) g.squadOrder('hold');
     if (this.seat === 0) {
-      v.controls.throttle = (inp.down('KeyW') ? 1 : 0) - (inp.down('KeyS') ? 1 : 0);
-      v.controls.steer = (inp.down('KeyA') ? 1 : 0) - (inp.down('KeyD') ? 1 : 0);
-      v.controls.brake = inp.down('Space') ? 1 : 0;
+      v.controls.throttle = (inp.bd('moveF') ? 1 : 0) - (inp.bd('moveB') ? 1 : 0);
+      v.controls.steer = (inp.bd('moveL') ? 1 : 0) - (inp.bd('moveR') ? 1 : 0);
+      v.controls.brake = inp.bd('jump') ? 1 : 0;
       this.camYaw = wrapAngle(this.camYaw - mdx);
       this.camPitch = clamp(this.camPitch - mdy, -0.8, 0.5);
       if (!inp.locked && Math.abs(mdx) < 1e-4) this.camYaw *= Math.exp(-dt * 0.8);
@@ -533,31 +552,31 @@ export class Player {
       // МТ-ЛБ: башня
       v.turretYaw = wrapAngle(v.turretYaw - mdx);
       v.gunPitch = clamp(v.gunPitch - mdy, -0.09, 0.5);
-      if (inp.mouseHit(2)) this.gunnerSight = !this.gunnerSight;
+      if (inp.bh('aim')) this.gunnerSight = !this.gunnerSight;
       this.scoped = this.gunnerSight;
-      if (inp.mouse(0)) { if (v.fireGun(b)) { this.shake = Math.max(this.shake, 0.04); } }
-      if (inp.hit('KeyR') && v.gunAmmo < v.gunWeapon.mag && v.gunMags > 0) v.gunReload = v.gunWeapon.reload;
+      if (inp.bd('fire')) { if (v.fireGun(b)) { this.shake = Math.max(this.shake, 0.04); } }
+      if (inp.bh('reload') && v.gunAmmo < v.gunWeapon.mag && v.gunMags > 0) v.gunReload = v.gunWeapon.reload;
       this.yaw = v.yaw + v.turretYaw; this.pitch = v.gunPitch + v.pitch;
     } else if (this.seat === 1) {
       // «Тигр»: ПКП на турели — как ручное оружие, но с упором
       this.yaw -= mdx; this.pitch = clamp(this.pitch - mdy, -0.35, 0.8);
       v.turretYaw = wrapAngle(this.yaw - v.yaw); v.gunPitch = this.pitch;
       const ms = this.activeWeapon;
-      this.aim = inp.mouse(2);
+      this.aim = inp.bd('aim');
       this.aimT = lerp(this.aimT, this.aim ? 1 : 0, 1 - Math.exp(-11 * dt));
       this.fireCD -= dt;
-      if (inp.hit('BracketRight') || (this.aim && inp.wheel < 0)) this.changeSight(ms, 1);
-      if (inp.hit('BracketLeft') || (this.aim && inp.wheel > 0)) this.changeSight(ms, -1);
+      if (inp.bh('sightUp') || (this.aim && inp.wheel < 0)) this.changeSight(ms, 1);
+      if (inp.bh('sightDown') || (this.aim && inp.wheel > 0)) this.changeSight(ms, -1);
       if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) this.finishReload(ms); }
-      else if (inp.hit('KeyR') && ms.spare.length) { this.reloadTotal = this.reloadT = ms.def.reload; }
+      else if (inp.bh('reload') && ms.spare.length) { this.reloadTotal = this.reloadT = ms.def.reload; }
       this.computePose(dt);
-      if (inp.mouse(0) && this.fireCD <= 0 && this.reloadT <= 0 && ms.mag > 0) this.fire(ms);
+      if (inp.bd('fire') && this.fireCD <= 0 && this.reloadT <= 0 && ms.mag > 0) this.fire(ms);
       this.scoped = false;
     } else {
       this.camYaw = wrapAngle(this.camYaw - mdx);
       this.camPitch = clamp(this.camPitch - mdy, -0.8, 0.5);
       this.yaw = v.yaw + this.camYaw; this.pitch = this.camPitch;
-      if (inp.hit('KeyR')) this.resupply();
+      if (inp.bh('reload')) this.resupply();
       this.scoped = false;
     }
     b.yaw = this.yaw;

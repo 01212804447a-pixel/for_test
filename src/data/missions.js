@@ -35,6 +35,12 @@ export const MISSIONS = [
       for (const d of [100, 300, 500, 700]) ctx.windFlag(-25, -d);
       ctx.scatter({ x: 0, z: -300, r: 900, rocks: 40, trees: 60, avoid: [{ x: 0, z: -500, r: 140 }, { x: 0, z: 0, r: 60 }] });
       ctx.poi.ruin({ x: -160, z: -260, yaw: 0.2 }); ctx.poi.chum({ x: 140, z: 80, seed: 1 }); ctx.forest({ x: 200, z: -100, r: 120, trees: 22, seed: 2 }); ctx.forest({ x: -220, z: 60, r: 100, trees: 18, seed: 3 });
+      // «плинкинг»: банки на полке 25 м, канистры и ящики на 50 м, бочки на 75 м
+      S.box({ x: -12, z: -25, w: 6, d: 0.5, h: 1.0, material: 'woodLight', mat: 'wood', pen: 30 });
+      const sy = ctx.ground(-12, -25) + 1.0;
+      for (let i = 0; i < 9; i++) ctx.prop(i % 3 ? 'can' : 'cans', -14.6 + i * 0.65, -25, { y: sy + 0.08 });
+      for (let i = 0; i < 4; i++) ctx.prop(['jerrycan', 'crate', 'ammobox', 'propane'][i], -16 + i * 2.2, -50);
+      for (let i = 0; i < 3; i++) ctx.prop('barrel', -15 + i * 2.5, -75);
       ctx.weaponRack(-6, 4);
       ctx.ammoCrate(6, 4);
       ctx.stage([ctx.objCustom('Свободная стрельба. Таблицы стрельбы — в штабе. Esc → «Вернуться в штаб»', () => false)]);

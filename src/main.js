@@ -12,6 +12,7 @@ import { Terrain } from './world/terrain.js';
 import { makeLighting } from './world/sky.js';
 import { Snowfall } from './world/weather.js';
 import { PostFX } from './fx/post.js';
+import { preload, hasAssets } from './core/assets.js';
 
 class MenuScene {
   constructor(app) {
@@ -55,6 +56,7 @@ class App {
     this.save = loadSave();
     this.settings = this.save.settings;
     this.input = new Input(canvas);
+    this.input.binds = { ...this.input.binds, ...(this.settings.binds || {}) };
     this.audio = new AudioSys();
     this.audio.setVolume(this.settings.volume);
     this.post = new PostFX(this.renderer);
@@ -84,8 +86,13 @@ class App {
       else if (e.code === 'Escape' && this.mode === 'hq' && !this.ui.isOpen()) { this.input.releaseLock(); this.ui.clickToPlay('Нажмите на экран, чтобы продолжить'); }
       else if (e.code === 'Escape' && this.ui.isOpen() && this.mode !== 'menu' && this.mode !== 'loading' && !this.paused) this.ui.close();
     });
-    this.ui.mainMenu();
     window.__game = this;
+    this.ready = false;
+    if (hasAssets()) {
+      this.ui.loading('Загрузка ресурсов');
+      preload((f) => { const b = document.querySelector('.loadbar i'); if (b) { b.style.animation = 'none'; b.style.width = (f * 100).toFixed(0) + '%'; } })
+        .then(() => { this.ready = true; this.ui.mainMenu(); });
+    } else { this.ready = true; this.ui.mainMenu(); }
     requestAnimationFrame((t) => this.loop(t));
   }
 

@@ -2,7 +2,7 @@
 // отделение, техника, карта, эффекты подавления и ранений, оптика.
 import * as THREE from 'three';
 import { CARDINALS, formatMil, TAU, clamp } from '../core/math.js';
-import { WEAPONS } from '../data/weapons.js';
+import { WEAPONS, AMMO } from '../data/weapons.js';
 
 const el = (tag, cls, parent, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; if (parent) parent.appendChild(e); return e; };
 
@@ -124,6 +124,7 @@ export class HUD {
           `<div>${def.mag > 1 ? 'Магазин' : 'Ствол'}: ${magWord(aw.mag, def.mag)}${p.reloadT > 0 ? ' · <b>перезарядка</b>' : ''}</div>` +
           `<div class="mags">${def.mag > 1 ? mags : `запас: ${aw.spare.length}`}</div>` +
           `<div class="ws">${p.sightLabel(aw)}</div>` +
+          (aw.pattern && !p.uglMode ? `<div class="ws">Патрон: ${AMMO[p.nextRound(aw)].short || ''}</div>` : '') +
           (ws.ugl && !p.uglMode && aw === ws ? `<div class="ws">ГП-25: ${ws.ugl.mag + ws.ugl.spare.length} ВОГ (X)</div>` : '');
       }
     }

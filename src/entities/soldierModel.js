@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { camoTexture, snowNormal } from '../world/textures.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { SkinRig, skinAvailable } from './skinRig.js';
 import { clamp, lerp } from '../core/math.js';
 
 const FACTIONS = {
@@ -246,6 +247,16 @@ export class SoldierModel {
     this.weapon = buildThirdPersonWeapon(weaponKind, mm);
     R.add(this.weapon);
     this.detailVisible = true;
+    // скелетная модель вместо примитивов, если доступны ассеты
+    this.skin = null;
+    if (skinAvailable()) {
+      const rig = new SkinRig(faction);
+      if (rig.ok) {
+        this.skin = rig;
+        for (const c of [...R.children]) if (c !== this.weapon) R.remove(c);
+        R.add(rig.holder);
+      }
+    }
 
     // опорные точки (в системе root)
     this.P = {
@@ -264,7 +275,7 @@ export class SoldierModel {
 
   // Мелкие детали скрываются на расстоянии
   setDetail(v) {
-    if (v === this.detailVisible) return;
+    if (this.skin || v === this.detailVisible) return;
     this.detailVisible = v;
     for (const m of this.details) m.visible = v;
   }
@@ -405,6 +416,7 @@ export class SoldierModel {
     const wm = new THREE.Matrix4().lookAt(new THREE.Vector3(), P.wD, down.clone().negate());
     this.weapon.quaternion.setFromRotationMatrix(wm);
     this.weapon.visible = !st.dead || dw < 0.3;
+    if (this.skin && this.skinUpdate !== false) this.skin.apply(this, q.clone(), headQ, wP, dw);
   }
 
   muzzleWorld(out) {
@@ -414,6 +426,7 @@ export class SoldierModel {
 
   // Хитбоксы в мировых координатах: [{a, b, r, zone}]
   hitboxes(out) {
+    if (this.skin) return this.skin.hitboxes(out);
     const M = this.root.matrixWorld;
     const P = this.P;
     const w = (v, slot) => slot.copy(v).applyMatrix4(M);

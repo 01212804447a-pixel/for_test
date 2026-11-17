@@ -5,9 +5,34 @@ import { woodTexture, concreteTexture, metalTexture, rockTexture, textTexture, t
 import { boxGeo, SNOW_MAT } from './world.js';
 import { mulberry32 } from '../core/math.js';
 import { spruceGeometry, birchGeometry } from './flora.js';
+import { pbr, hasAssets } from '../core/assets.js';
 
 export function makeMats() {
   const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, ...o });
+  const P = (name, o, fb) => pbr(name, o) || fb;
+  const base = makeMatsProc(std);
+  if (!hasAssets()) return base;
+  return {
+    ...base,
+    wood: P('brown_planks_05', {}, base.wood),
+    woodDark: P('brown_planks_05', { color: 0x8a7a6c }, base.woodDark),
+    woodLight: P('wood_peeling_paint_weathered', {}, base.woodLight),
+    concrete: P('chipped_concrete', {}, base.concrete),
+    concreteDark: P('chipped_concrete', { color: 0x9a9a9a }, base.concreteDark),
+    metalGreen: P('green_metal_rust', { metalness: 0.5 }, base.metalGreen),
+    metalRust: P('rusty_metal_02', { metalness: 0.6 }, base.metalRust),
+    metalGrey: P('corrugated_iron_02', { metalness: 0.6 }, base.metalGrey),
+    contRed: P('corrugated_iron_02', { color: 0xb5503c, metalness: 0.45 }, base.contRed),
+    contBlue: P('corrugated_iron_02', { color: 0x46709c, metalness: 0.45 }, base.contBlue),
+    contGreen: P('corrugated_iron_02', { color: 0x5b7a52, metalness: 0.45 }, base.contGreen),
+    white: P('corrugated_iron_02', { color: 0xf0f2f4, metalness: 0.3 }, base.white),
+    roofTin: P('corrugated_iron_02', { color: 0xc8c8c8, metalness: 0.55 }, base.roofTin),
+    sandbag: P('gravel', { color: 0xd8cca8, normalScale: 1.5 }, base.sandbag),
+    rock: P('aerial_rocks_02', { vertexColors: true }, base.rock),
+  };
+}
+
+function makeMatsProc(std) {
   return {
     wood: std({ map: woodTexture(0) }),
     woodDark: std({ map: woodTexture(1) }),
@@ -203,6 +228,14 @@ export function berm(world, m, { x, z, yaw = 0, len = 6, h = 1.0 }) {
 
 export function crates(world, m, { x, z, yaw = 0, n = 3, seed = 1 }) {
   const rnd = mulberry32(seed + Math.floor(x * 3 + z));
+  if (hasAssets()) {
+    const kinds = ['crate', 'milcrate', 'milcrate2', 'ammobox', 'ammobox', 'jerrycan', 'propane'];
+    for (let i = 0; i < n + 1; i++) {
+      const c = l2w(x, z, yaw, (rnd() - 0.5) * 3, (rnd() - 0.5) * 2);
+      world.propRequests.push({ type: kinds[Math.floor(rnd() * kinds.length)], x: c.x, z: c.z, yaw: yaw + (rnd() - 0.5) * 0.8 });
+    }
+    return;
+  }
   for (let i = 0; i < n; i++) {
     const lx = (rnd() - 0.5) * 2.4, lz = (rnd() - 0.5) * 1.6;
     const c = l2w(x, z, yaw, lx, lz);
@@ -224,6 +257,10 @@ export function container(world, m, { x, z, yaw = 0, color = 'red', stack = 1 })
 
 export function barrels(world, m, { x, z, n = 4, seed = 2 }) {
   const rnd = mulberry32(seed + Math.floor(x + z * 5));
+  if (hasAssets()) {
+    for (let i = 0; i < n; i++) world.propRequests.push({ type: rnd() < 0.85 ? 'barrel' : 'jerrycan', x: x + (rnd() - 0.5) * 2.4, z: z + (rnd() - 0.5) * 2.4, yaw: rnd() * 6 });
+    return;
+  }
   for (let i = 0; i < n; i++) {
     const bx = x + (rnd() - 0.5) * 2.2, bz = z + (rnd() - 0.5) * 2.2;
     world.addCyl({ x: bx, z: bz, y0: world.terrain.heightAt(bx, bz), r: 0.3, h: 0.9, material: rnd() > 0.5 ? m.metalRust : m.metalGreen, mat: 'metal', pen: 2, segments: 12, snowTop: true });

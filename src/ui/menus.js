@@ -3,13 +3,14 @@
 import { STORY } from '../data/story.js';
 import { MISSIONS } from '../data/missions.js';
 import { ROSTER, STAT_NAMES } from '../data/squad.js';
-import { WEAPONS, AMMO, PRIMARY_CHOICES } from '../data/weapons.js';
+import { WEAPONS, AMMO, PRIMARY_CHOICES, ammoChoices, defaultPattern, LOADABLE } from '../data/weapons.js';
 import { VEHICLE_TYPES } from '../entities/vehicle.js';
 import { buildFiringTable, handGrenadeTable, TABLE_WEAPONS } from '../physics/firingTable.js';
 import { drawChart } from './charts.js';
 import { CARDINALS } from '../core/math.js';
+import { ACTIONS, DEFAULT_BINDS, keyName } from '../core/input.js';
 
-const CONTROLS = [
+const CONTROLS_STATIC = [
   ['W A S D', 'движение'], ['Shift', 'бег / задержка дыхания при прицеливании'], ['Space', 'прыжок'], ['C', 'присесть'], ['Z', 'лечь'],
   ['ЛКМ', 'выстрел'], ['ПКМ (удерживать)', 'прицеливание через целик и мушку / оптику'], ['Колесо / [ ] / PgUp PgDn', 'установка прицела (целик, маховичок, квадрант)'],
   ['R', 'перезарядка'], ['B', 'режим огня (АВ/ОД)'], ['X', 'подствольный ГП-25'], ['O', 'РПГ: оптика ПГО-7 / механический прицел'],
@@ -94,10 +95,14 @@ export class UI {
   }
 
   controls(back) {
-    this.show(`<h1>Управление</h1><table class="ctl">${CONTROLS.map(([k, v]) => `<tr><td><b>${k}</b></td><td>${v}</td></tr>`).join('')}</table>
+    const inp = this.app.input;
+    const rows = ACTIONS.map(([a, label]) => [keyName(inp.code(a)), label]).concat([['Колесо мыши', 'при прицеливании — установка прицела, иначе смена оружия'], ['Esc', 'пауза']]);
+    this.show(`<h1>Управление</h1><table class="ctl">${rows.map(([k, v]) => `<tr><td><b>${k}</b></td><td>${v}</td></tr>`).join('')}</table>
+      <div class="row"><button class="btn sec" id="keys">Назначить клавиши</button></div>
       <p class="note">Прицеливания «точкой» нет: совместите вершину мушки с серединой прорези целика («ровная мушка») и подведите под цель. Установите прицел по дальности. Пуля вылетает из дульного среза по оси ствола — при раскачке и неровной мушке она уйдёт туда, куда смотрит ствол.</p>
       <div class="row"><button class="btn" id="b">Назад</button></div>`);
     this.bind('#b', () => (back ? back() : this.close()));
+    this.bind('#keys', () => this.keybinds(() => this.controls(back)));
   }
 
   settings(back) {
@@ -108,6 +113,7 @@ export class UI {
       <label>Громкость <input type="range" id="vol" min="0" max="1" step="0.05" value="${st.volume}"></label>
       <label>Качество графики <select id="q"><option value="low">Низкое</option><option value="medium">Среднее</option><option value="high">Высокое</option></select></label>
       <label><input type="checkbox" id="inv" ${st.invertY ? 'checked' : ''}> Инвертировать ось Y</label>
+      <div class="row"><button class="btn sec" id="keys">Управление: назначить клавиши</button></div>
       <p class="note">Качество применяется при следующей загрузке задания.</p>
       <div class="row"><button class="btn" id="b">Готово</button></div>`);
     const p = this.panel;
@@ -118,6 +124,33 @@ export class UI {
     p.querySelector('#q').onchange = (e) => { st.quality = e.target.value; };
     p.querySelector('#inv').onchange = (e) => { st.invertY = e.target.checked; };
     this.bind('#b', () => { this.app.persist(); back ? back() : this.close(); });
+    this.bind('#keys', () => this.keybinds(() => this.settings(back)));
+  }
+
+  // Переназначение клавиш: клик по кнопке → нажать новую клавишу или кнопку мыши
+  keybinds(back) {
+    const inp = this.app.input, st = this.app.settings;
+    const render = () => {
+      this.show(`<h1>Назначение клавиш</h1><p class="note">Нажмите на действие, затем — новую клавишу или кнопку мыши. Esc — отмена.</p>
+        <table class="ctl keys">${ACTIONS.map(([a, label]) => `<tr><td>${label}</td><td><button class="btn key" data-a="${a}">${keyName(inp.code(a))}</button></td></tr>`).join('')}</table>
+        <div class="row"><button class="btn" id="b">Готово</button><button class="btn sec" id="def">Сбросить по умолчанию</button></div>`, { wide: true });
+      this.panel.querySelectorAll('.key').forEach((btn) => btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        btn.textContent = '…нажмите…';
+        const finish = (code) => {
+          removeEventListener('keydown', onKey, true); removeEventListener('mousedown', onMouse, true);
+          if (code) { inp.binds[btn.dataset.a] = code; st.binds = { ...inp.binds }; this.app.persist(); }
+          setTimeout(render, 0);
+        };
+        const onKey = (e) => { e.preventDefault(); e.stopPropagation(); finish(e.code === 'Escape' ? null : e.code); };
+        const onMouse = (e) => { if (e.target === btn) return; e.preventDefault(); e.stopPropagation(); finish('Mouse' + e.button); };
+        addEventListener('keydown', onKey, true);
+        setTimeout(() => addEventListener('mousedown', onMouse, true), 50);
+      }));
+      this.bind('#b', () => (back ? back() : this.close()));
+      this.bind('#def', () => { inp.binds = { ...DEFAULT_BINDS }; st.binds = { ...DEFAULT_BINDS }; this.app.persist(); render(); });
+    };
+    render();
   }
 
   loading(text) {
@@ -250,6 +283,63 @@ export class UI {
     render();
   }
 
+  // Снаряжение магазинов/ленты: порядок патронов, [0] — первый выстрел
+  magLoader(weaponId = null, back = null) {
+    const s = this.app.save;
+    s.loads = s.loads || {};
+    let wid = weaponId || (LOADABLE.includes(s.primary) ? s.primary : 'ak74m');
+    let sel = null;
+    const CLS = { std: '#9aa3a8', tracer: '#d8402a', ap: '#202020', sniper: '#c9c2a0' };
+    const render = () => {
+      const w = WEAPONS[wid];
+      const fam = ammoChoices(wid);
+      if (!sel || !fam.includes(sel)) sel = fam[0];
+      let pat = s.loads[wid];
+      if (!pat || pat.length !== w.mag) pat = defaultPattern(wid);
+      const per = w.mag > 30 ? 25 : w.mag;
+      const cells = pat.map((a, i) => `<i class="rnd" data-i="${i}" title="${i + 1}: ${AMMO[a].name}" style="--c:${CLS[AMMO[a].cls] || '#999'}">${AMMO[a].cls === 'tracer' ? 'Т' : AMMO[a].cls === 'ap' ? 'Б' : AMMO[a].cls === 'sniper' ? 'С' : ''}</i>`);
+      const rows = [];
+      for (let i = 0; i < cells.length; i += per) rows.push(`<div class="rrow"><span>${i + 1}</span>${cells.slice(i, i + per).join('')}</div>`);
+      const trc = fam.find((a) => AMMO[a].cls === 'tracer');
+      this.show(`<h1>Снаряжение ${w.mag > 30 ? 'ленты' : 'магазинов'}</h1>
+        <div class="tabs">${LOADABLE.map((id) => `<button class="tab ${id === wid ? 'on' : ''}" data-w="${id}">${WEAPONS[id].name}</button>`).join('')}</div>
+        <p class="note">Порядок слева направо — от первого выстрела к последнему (верхний патрон в магазине — первый). Выберите патрон и нажимайте на ячейки (можно провести с зажатой кнопкой). Схема применяется ко всем магазинам этого оружия.</p>
+        <div class="pal">${fam.map((a) => `<button class="btn pa ${a === sel ? 'on' : ''}" data-a="${a}"><i style="--c:${CLS[AMMO[a].cls]}"></i>${AMMO[a].name}<small>V₀ ${AMMO[a].v0} м/с · пробитие ${AMMO[a].pen} мм</small></button>`).join('')}</div>
+        <div class="strip">${rows.join('')}</div>
+        <div class="row">
+          <button class="btn sec" data-p="all">Все — ${AMMO[fam[0]].short}</button>
+          ${trc ? `<button class="btn sec" data-p="first3">Трассеры: первые 3</button><button class="btn sec" data-p="last3">Трассеры: последние 3 (сигнал)</button><button class="btn sec" data-p="every4">Каждый 4-й трассер</button><button class="btn sec" data-p="every3">Каждый 3-й трассер</button>` : ''}
+          <button class="btn sec" data-p="fillSel">Все — выбранным</button>
+        </div>
+        <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
+      const save = () => { s.loads[wid] = pat; this.app.persist(); };
+      this.panel.querySelectorAll('[data-w]').forEach((b) => b.addEventListener('click', () => { wid = b.dataset.w; render(); }));
+      this.panel.querySelectorAll('.pa').forEach((b) => b.addEventListener('click', () => { sel = b.dataset.a; render(); }));
+      let painting = false;
+      const paint = (el) => { const i = +el.dataset.i; pat[i] = sel; el.style.setProperty('--c', CLS[AMMO[sel].cls]); el.textContent = AMMO[sel].cls === 'tracer' ? 'Т' : AMMO[sel].cls === 'ap' ? 'Б' : AMMO[sel].cls === 'sniper' ? 'С' : ''; save(); };
+      this.panel.querySelectorAll('.rnd').forEach((el) => {
+        el.addEventListener('mousedown', (e) => { e.preventDefault(); painting = true; paint(el); });
+        el.addEventListener('mouseenter', () => { if (painting) paint(el); });
+      });
+      addEventListener('mouseup', () => { painting = false; }, { once: true });
+      this.panel.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click', () => {
+        const base = fam[0], n = w.mag;
+        const P = b.dataset.p;
+        pat = Array.from({ length: n }, (_, i) => {
+          if (P === 'fillSel') return sel;
+          if (P === 'first3' && i < 3) return trc;
+          if (P === 'last3' && i >= n - 3) return trc;
+          if (P === 'every4' && i % 4 === 3) return trc;
+          if (P === 'every3' && i % 3 === 2) return trc;
+          return base;
+        });
+        save(); render();
+      }));
+      this.bind('#b', () => (back ? back() : this.close()));
+    };
+    render();
+  }
+
   commanderTalk() {
     const s = this.app.save;
     const next = MISSIONS.find((m, i) => i > 0 && !s.completed[m.id]);
@@ -290,6 +380,13 @@ export class UI {
     this.show(`<h1>Конец операции</h1>${STORY.ending.map((p) => `<p class="story">${p}</p>`).join('')}<p class="note">Спасибо за службу, сержант. Все операции открыты для повторного прохождения.</p>
       <div class="row"><button class="btn" id="hq">В штаб</button></div>`);
     this.bind('#hq', () => { this.close(); this.app.toHQ(); });
+  }
+
+  toast(text, t = 2.2) {
+    if (!this.toastEl) { this.toastEl = document.createElement('div'); this.toastEl.className = 'toast'; document.body.appendChild(this.toastEl); }
+    this.toastEl.textContent = text; this.toastEl.style.opacity = 1;
+    clearTimeout(this._tt); this._tt = setTimeout(() => { this.toastEl.style.opacity = 0; }, t * 1000);
+    this.app.audio.mech('switch');
   }
 
   clickToPlay(text = 'Нажмите, чтобы продолжить') {

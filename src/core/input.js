@@ -1,15 +1,34 @@
 // Клавиатура и мышь с захватом указателя
 const GAME_KEYS = new Set(['Tab', 'Space', 'F1', 'F2', 'F3', 'F4', 'AltLeft', 'AltRight', 'KeyF', 'Quote', 'Slash']);
 
+// Действия и клавиши по умолчанию (Mouse0/1/2 — кнопки мыши)
+export const ACTIONS = [
+  ['moveF', 'Вперёд', 'KeyW'], ['moveB', 'Назад', 'KeyS'], ['moveL', 'Влево', 'KeyA'], ['moveR', 'Вправо', 'KeyD'],
+  ['sprint', 'Бег / задержать дыхание', 'ShiftLeft'], ['jump', 'Прыжок / тормоз техники', 'Space'], ['crouch', 'Присесть / камера техники', 'KeyC'], ['prone', 'Лечь', 'KeyZ'],
+  ['fire', 'Огонь', 'Mouse0'], ['aim', 'Прицеливание', 'Mouse2'], ['reload', 'Перезарядка', 'KeyR'], ['firemode', 'Режим огня', 'KeyN'],
+  ['ugl', 'Подствольник ГП-25', 'KeyX'], ['optic', 'РПГ: оптика / механика', 'KeyO'], ['sightUp', 'Прицел +', 'BracketRight'], ['sightDown', 'Прицел −', 'BracketLeft'],
+  ['slot1', 'Основное оружие / место водителя', 'Digit1'], ['slot2', 'Гранатомёт / место стрелка', 'Digit2'], ['slot3', 'Гранаты', 'Digit3'], ['slot4', 'Бинокль (в руки)', 'Digit4'],
+  ['binoc', 'Бинокль: достать и смотреть', 'KeyB'], ['medkit', 'Перевязка', 'KeyK'], ['use', 'Взаимодействие / техника', 'KeyE'],
+  ['cmdFollow', 'Отделению: за мной', 'KeyF'], ['cmdHold', 'Отделению: стоять', 'KeyH'], ['cmdMove', 'Отделению: в точку', 'KeyT'], ['cmdSuppress', 'Отделению: подавить точку', 'KeyV'],
+  ['squad', 'Состояние отделения', 'Tab'], ['map', 'Карта', 'KeyM'], ['hitcam', 'Камера попаданий', 'KeyJ'],
+];
+export const DEFAULT_BINDS = Object.fromEntries(ACTIONS.map(([a, , k]) => [a, k]));
+export function keyName(code) {
+  if (!code) return '—';
+  if (code.startsWith('Mouse')) return ['ЛКМ', 'СКМ', 'ПКМ', 'Мышь 4', 'Мышь 5'][+code.slice(5)] || code;
+  return code.replace(/^Key/, '').replace(/^Digit/, '').replace('ShiftLeft', 'Shift').replace('ShiftRight', 'Shift (пр.)').replace('ControlLeft', 'Ctrl').replace('AltLeft', 'Alt').replace('BracketLeft', '[').replace('BracketRight', ']').replace('Space', 'Пробел');
+}
+
 export class Input {
   constructor(el) {
     this.el = el;
     this.keys = new Set();
     this.pressed = new Set();
     this.released = new Set();
-    this.mb = [false, false, false];
-    this.mbPressed = [false, false, false];
-    this.mbReleased = [false, false, false];
+    this.mb = [false, false, false, false, false];
+    this.mbPressed = [false, false, false, false, false];
+    this.mbReleased = [false, false, false, false, false];
+    this.binds = { ...DEFAULT_BINDS };
     this.dx = 0; this.dy = 0; this.wheel = 0;
     this.locked = false;
     this.fallbackLook = false; // если Pointer Lock недоступен
@@ -82,6 +101,12 @@ export class Input {
   }
   get active() { return this.locked || (this.fallbackLook && this.wantLock); }
 
+  // По действию (с учётом переназначения клавиш)
+  code(a) { return (this.binds && this.binds[a]) || DEFAULT_BINDS[a]; }
+  bd(a) { const c = this.code(a); return c.startsWith('Mouse') ? this.mb[+c.slice(5)] : this.keys.has(c); }
+  bh(a) { const c = this.code(a); return c.startsWith('Mouse') ? this.mbPressed[+c.slice(5)] : this.pressed.has(c); }
+  bu(a) { const c = this.code(a); return c.startsWith('Mouse') ? this.mbReleased[+c.slice(5)] : this.released.has(c); }
+
   down(code) { return this.keys.has(code); }
   hit(code) { return this.pressed.has(code); }
   up(code) { return this.released.has(code); }
@@ -91,7 +116,7 @@ export class Input {
 
   endFrame() {
     this.pressed.clear(); this.released.clear();
-    this.mbPressed = [false, false, false]; this.mbReleased = [false, false, false];
+    this.mbPressed = [false, false, false, false, false]; this.mbReleased = [false, false, false, false, false];
     this.dx = 0; this.dy = 0; this.wheel = 0;
   }
 }

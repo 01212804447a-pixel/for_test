@@ -37,6 +37,7 @@ export class World {
     this.interactables = [];
     this.targets = []; // мишени полигона
     this.smokes = []; // дымы из труб
+    this.propRequests = [];
     this.signs = [];
   }
 

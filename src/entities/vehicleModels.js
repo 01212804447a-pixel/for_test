@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { camoTexture } from '../world/textures.js';
+import { texture as texAsset } from '../core/assets.js';
 
 const cache = {};
 function tex(key, w, h, draw, repeat = true) {
@@ -124,9 +125,12 @@ function cyl(parent, r0, r1, h, mat, x, y, z, axis = 'y', seg = 16) {
 
 function materials(type, camoCols) {
   const camo = new THREE.MeshStandardMaterial({ map: camoTexture(camoCols, 'veh2' + type, 2.2), roughness: 0.62, metalness: 0.28 });
+  // потёртости и вмятины: нормали и шероховатость от реального листового металла
+  const nm = texAsset('green_metal_rust_nor.jpg', { srgb: false, repeat: 1 }), rm = texAsset('green_metal_rust_rough.jpg', { srgb: false, repeat: 1 });
+  if (nm) { camo.normalMap = nm; camo.normalScale = new THREE.Vector2(0.6, 0.6); camo.roughnessMap = rm; camo.roughness = 0.9; }
   return {
     camo,
-    dark: new THREE.MeshStandardMaterial({ color: 0x1d1f21, roughness: 0.75, metalness: 0.3 }),
+    dark: new THREE.MeshStandardMaterial({ color: 0x1d1f21, roughness: 0.75, metalness: 0.3, normalMap: texAsset('rusty_metal_02_nor.jpg', { srgb: false }) || null }),
     metal: new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.4, metalness: 0.8 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.2, metalness: 0.95 }),
     glass: new THREE.MeshStandardMaterial({ color: 0x0f1a24, roughness: 0.05, metalness: 0.9, envMapIntensity: 1.6 }),

@@ -43,8 +43,8 @@ export class Projectiles {
     this.grenadeMat = new THREE.MeshStandardMaterial({ color: 0x4a5532, roughness: 0.7 });
   }
 
-  spawn({ weapon, pos, dir, owner, team }) {
-    const ammo = AMMO[weapon.ammo];
+  spawn({ weapon, pos, dir, owner, team, ammoId }) {
+    const ammo = AMMO[ammoId || weapon.ammo];
     const d = _d.copy(dir).normalize();
     // механическое рассеивание оружия
     const disp = (weapon.disp || 0.3) * 0.001;
@@ -59,7 +59,7 @@ export class Projectiles {
       ammo, owner, team, weapon,
       p: pos.clone(), v: d.clone().multiplyScalar(v0), t: 0,
       rx: -d.z / hl, rz: d.x / hl,
-      tracer: ammo.tracerEvery ? owner && owner.shotsFired % ammo.tracerEvery === 0 : false,
+      tracer: ammo.tracer || (!ammoId && ammo.tracerEvery ? owner && owner.shotsFired % ammo.tracerEvery === 0 : false),
       alive: true, dist: 0, supp: new Set(), mesh: null, origin: pos.clone(),
       thrustErr: ammo.motor ? new THREE.Vector3(randn() * 0.012, randn() * 0.012, randn() * 0.012) : null,
       ownerVehicle: owner && owner.vehicle ? owner.vehicle : null,
@@ -72,7 +72,7 @@ export class Projectiles {
       this.game.scene.add(p.mesh);
     }
     this.list.push(p);
-    if (p.byPlayer) this.game.stats.shots++;
+    if (p.byPlayer) { this.game.stats.shots++; if (this.game.onPlayerShot) this.game.onPlayerShot(p); }
     return p;
   }
 
@@ -93,7 +93,7 @@ export class Projectiles {
         if (p.alive && (p.t > 6 || sp < 60 && p.ammo.kind === 'bullet' || p.p.y < -50)) p.alive = false;
       }
       if (!p.alive) continue;
-      if (p.tracer) g.fx.pushTracer(p.p, p.v, g.camPos);
+      if (p.tracer) g.fx.pushTracer(p.p, p.v, g.camPos, p.ammo.tracerColor);
       if (p.mesh) {
         p.mesh.position.copy(p.p);
         _t.copy(p.p).add(p.v);
@@ -118,6 +118,10 @@ export class Projectiles {
     const g = this.game;
     const hit = g.world.raycast(a, b, { mask: 'bullet', vehicles: true, ignore: p.ownerVehicle });
     let best = hit ? { t: hit.t, kind: hit.vehicle ? 'vehicle' : 'static', hit } : null;
+    if (g.props) {
+      const ph = g.props.raycast(a, b);
+      if (ph && (!best || ph.t < best.t)) best = { t: ph.t, kind: 'prop', ph };
+    }
     // бойцы
     const segLen = a.distanceTo(b);
     for (const s of g.soldiers) {
@@ -143,42 +147,82 @@ export class Projectiles {
       const hb = s.hitboxes;
       for (let i = 0; i < hb.length; i++) {
         const box = hb[i];
+        if (p.hb && p.hb.has(s.id * 16 + i)) continue;
         const r = segSeg(a, b, box.a, box.b);
         if (r.d2 < box.r * box.r) {
-          if (!best || r.s < best.t) best = { t: r.s, kind: 'soldier', s, zone: box.zone };
+          if (!best || r.s < best.t) best = { t: r.s, kind: 'soldier', s, zone: box.zone, idx: i };
         }
       }
     }
     if (!best) return;
     const pt = new THREE.Vector3().lerpVectors(a, b, best.t);
-    if (best.kind === 'soldier') this._hitSoldier(p, best.s, best.zone, pt);
+    if (p.byPlayer) p.impact = { pos: pt.clone(), normal: best.hit && best.hit.normal ? best.hit.normal.clone() : (best.ph ? best.ph.normal.clone() : null), target: best.hit && best.hit.obstacle && best.hit.obstacle.owner && best.hit.obstacle.owner.kind === 'target' ? best.hit.obstacle.owner : null, kind: best.kind };
+    if (best.kind === 'prop') { this._hitProp(p, best.ph, pt); return; }
+    if (best.kind === 'soldier') this._hitSoldier(p, best.s, best.zone, pt, best.idx);
     else if (best.kind === 'vehicle') this._hitVehicle(p, best.hit.vehicle, best.hit, pt);
     else this._hitStatic(p, best.hit, pt, a);
   }
 
   energy(p) { const v = p.v.length(); return 0.5 * p.ammo.mass * v * v; }
 
-  _hitSoldier(p, s, zone, pt) {
+  // Попадание в подвижный предмет: передача импульса, пробитие тонкостенных
+  _hitProp(p, ph, pt) {
+    const g = this.game, b = ph.prop;
+    if (p.ammo.explosive) {
+      if (p.dist >= (p.ammo.armDist || 0)) this.explode(pt, p.ammo.explosive, p.owner);
+      p.alive = false; return;
+    }
+    const dir = p.v.clone().normalize();
+    const mom = p.ammo.mass * p.v.length();
+    const through = b.T.thin && p.v.length() > 250;
+    g.props.impulse(b, pt, dir.clone().multiplyScalar(mom * (through ? 0.6 : 1.0)));
+    g.fx.impact(pt, ph.normal, b.T.mat, 0.6);
+    if (pt.distanceTo(g.camPos) < 60) g.audio.impact(pt, b.T.mat);
+    if (through) { p.v.multiplyScalar(0.8); p.p.copy(pt).addScaledVector(dir, Math.min(b.half.x, b.half.z) * 2 + 0.05); }
+    else p.alive = false;
+  }
+
+  // Ранение: урон по энергии пули и зоне, бронеплиты (класс защиты против пробивной
+  // способности на текущей скорости), шлем, сквозное ранение с потерей скорости.
+  _hitSoldier(p, s, zone, pt, idx = 0) {
     const g = this.game;
     if (p.ammo.explosive) {
       if (p.dist >= (p.ammo.armDist || 0)) { this.explode(pt, p.ammo.explosive, p.owner); }
       else s.damage(35, zone, p.owner, p.v.clone().normalize());
       p.alive = false; return;
     }
-    const E = this.energy(p);
-    let dmg = 52 * Math.sqrt(E / 1400) * (p.ammo.dmgK || 1);
-    if (zone === 'torso' && s.armor > 0) {
-      const stop = 1900 * s.armor;
-      if (E < stop) { dmg *= 0.16; if (s.isPlayer) g.hud && g.hud.message('Пуля остановлена бронежилетом', 1.5); }
-      else dmg *= 1 - s.armor * 0.25;
-    } else if (zone === 'head' && s.helmet > 0 && Math.random() < 0.55) {
-      if (E < 1100 * s.helmet) dmg *= 0.1; // рикошет от шлема
-    }
+    if (!p.hb) p.hb = new Set();
+    p.hb.add(s.id * 16 + idx);
+    const sp = p.v.length();
+    const E = 0.5 * p.ammo.mass * sp * sp;
+    const penNow = p.ammo.pen * (sp / p.ammo.v0) * (sp / p.ammo.v0);
+    let dmg = 60 * Math.pow(E / 1000, 0.6) * (p.ammo.dmgK || 1);
+    const zm = { head: 4, torso: 1.5, pelvis: 1.2, leg: 0.6, arm: 0.45 }[zone] || 1;
+    dmg *= zm;
+    let stopped = false;
     const dir = p.v.clone().normalize();
-    s.damage(dmg, zone, p.owner, dir);
-    g.fx.impact(pt, dir.clone().negate(), 'blood');
-    if (p.byPlayer) { g.stats.hits++; if (!s.alive && s.team !== 'negs') g.stats.kills++; }
-    p.alive = false;
+    if (zone === 'torso' && s.armorClass > 0 && Math.random() < 0.72) {
+      // попадание в плиту
+      if (penNow <= s.armorClass) {
+        stopped = true;
+        dmg = 6 + E * 0.004; // запреградная травма
+        s.suppression = Math.min(1, s.suppression + 0.5);
+        if (s.isPlayer && g.hud) g.hud.message('Пуля остановлена бронеплитой', 1.5);
+        g.fx.impact(pt, dir.clone().negate(), 'metal', 0.4);
+      } else dmg *= 1 - 0.2 * s.armorClass / penNow;
+    } else if (zone === 'head' && s.helmetClass > 0 && Math.random() < 0.5 && penNow <= s.helmetClass) {
+      stopped = true; dmg = 12;
+    }
+    s.damage(dmg, zone, p.owner, dir, { raw: true, penetrating: !stopped });
+    if (!stopped) g.fx.impact(pt, dir.clone().negate(), 'blood');
+    if (p.byPlayer) { g.stats.hits++; if (!s.alive && s.team !== 'negs' && !s._countedKill) { s._countedKill = true; g.stats.kills++; } }
+    // сквозное ранение: пуля летит дальше с потерей скорости
+    const keep = stopped ? 0 : zone === 'arm' ? 0.78 : zone === 'leg' ? 0.6 : zone === 'head' ? 0.5 : 0.35;
+    if (keep > 0 && E * keep * keep > 150) {
+      p.v.multiplyScalar(keep);
+      p.v.x += randn() * 6; p.v.y += randn() * 6; p.v.z += randn() * 6;
+      p.p.copy(pt).addScaledVector(dir, 0.05);
+    } else p.alive = false;
   }
 
   _hitVehicle(p, v, hit, pt) {
@@ -314,6 +358,7 @@ export class Projectiles {
       if (dmg > 0 && s.alive) s.damage(dmg, 'torso', owner, null);
       if (owner && owner.isPlayer && !s.alive && s.team !== 'negs' && !s._countedKill) { s._countedKill = true; g.stats.kills++; }
     }
+    if (g.props) g.props.explosion(pos, ex.dmg * 2.2, ex.frag * 1.4);
     for (const v of g.vehicles) {
       if (!v.alive || v === directVehicle) continue;
       const d = v.pos.distanceTo(pos);

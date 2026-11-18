@@ -7,9 +7,9 @@ import { Snowfall } from '../world/weather.js';
 import * as ST from '../world/structures.js';
 import { Effects } from '../fx/effects.js';
 import * as POI from '../world/poi.js';
-import { scatterGround, GroundCover } from '../world/flora.js';
+import { scatterGround, GroundCover, snowify } from '../world/flora.js';
 import { Props } from '../world/props.js';
-import { hdr as hdrAsset, texture as texAsset, hasAssets } from '../core/assets.js';
+import { hdr as hdrAsset, texture as texAsset, hasAssets, model as modelAsset } from '../core/assets.js';
 import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
@@ -284,6 +284,19 @@ export class Mission {
     this.flags.push({ mesh: flag, base: geo.attributes.position.array.slice() });
   }
 
+  // Статичная модель (камни, стволы) на рельефе со снегом и препятствием
+  staticModel(name, x, z, { ry = 0, scale = 1, sink = 0.15, collide = 0, snow = 1, mat = 'rock' } = {}) {
+    const g = modelAsset(name);
+    if (!g) return null;
+    const o = g.scene.clone(true);
+    const y0 = this.terrain.heightAt(x, z);
+    o.position.set(x, y0 - sink * scale, z); o.rotation.y = ry; o.scale.setScalar(scale);
+    o.traverse((m) => { if (m.isMesh) { m.material = snowify(m.material, snow); m.castShadow = true; m.receiveShadow = true; } });
+    this.scene.add(o);
+    if (collide) this.world.addCylCollider({ x, z, y0: y0 - 0.5, r: collide * scale, h: 1.2 * scale + 0.5, mat });
+    return o;
+  }
+
   scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false }) {
     const rnd = mulberry32(seed + Math.floor(x * 3 + z * 7 + r));
     const ok = (px, pz) => {
@@ -301,6 +314,7 @@ export class Mission {
       const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
       if (!ok(px, pz)) continue;
       const s = rnd() < 0.15 ? 1.6 + rnd() * 1.6 : 0.5 + rnd() * 1.1;
+      if (rnd() < 0.12 && this.staticModel(rnd() < 0.5 ? 'rock_moss_set_01' : 'rock_moss_set_02', px, pz, { ry: rnd() * 6.28, scale: 0.45 + rnd() * 0.35, sink: 0.25, collide: 2.2, snow: 0.85 })) continue;
       ST.rock(this.world, this.mats, { x: px, z: pz, s, seed: i * 13 + seed });
     }
     for (let i = 0; i < trees; i++) {
@@ -313,7 +327,10 @@ export class Mission {
       for (let k = 0; k < n; k++) {
         const qx = px + (rnd() - 0.5) * spread, qz = pz + (rnd() - 0.5) * spread;
         if (!ok(qx, qz)) continue;
-        if (rnd() < 0.3) ST.birch(this.world, this.mats, { x: qx, z: qz, h: 2.5 + rnd() * 3, seed: i * 7 + k + seed });
+        const pick = rnd();
+        if (forest && pick < 0.07) this.staticModel('dead_tree_trunk', qx, qz, { ry: rnd() * 6.28, scale: 0.9 + rnd() * 0.5, sink: 0.05, snow: 0.8, mat: 'wood' });
+        else if (forest && pick < 0.13) this.staticModel('tree_stump_02', qx, qz, { ry: rnd() * 6.28, scale: 0.6 + rnd() * 0.4, sink: 0.1, collide: 0.4, snow: 0.9, mat: 'wood' });
+        else if (rnd() < 0.3) ST.birch(this.world, this.mats, { x: qx, z: qz, h: 2.5 + rnd() * 3, seed: i * 7 + k + seed });
         else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: forest ? 4.5 + rnd() * 9 : 3 + rnd() * 7, seed: i * 7 + k + seed });
       }
     }

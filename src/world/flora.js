@@ -409,3 +409,27 @@ export function blobShadow(w, d, opacity = 0.55) {
   m.renderOrder = 1;
   return m;
 }
+
+// Снежная шапка на моделях (камни, стволы): по мировой нормали, с пятнами
+const snowyCache = new Map();
+export function snowify(mat, amount = 1) {
+  const key = mat.uuid + amount;
+  if (snowyCache.has(key)) return snowyCache.get(key);
+  const m = mat.clone();
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.snAmt = { value: amount };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vSnN;\nvarying vec3 vSnP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSnN = normalize(mat3(modelMatrix) * normal);\nvSnP = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vSnN; varying vec3 vSnP; uniform float snAmt;
+float sn_h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float sn_n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(sn_h(i), sn_h(i+vec2(1,0)), f.x), mix(sn_h(i+vec2(0,1)), sn_h(i+vec2(1,1)), f.x), f.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float snK = smoothstep(0.35, 0.75, vSnN.y + (sn_n(vSnP.xz * 2.3) - 0.5) * 0.5) * snAmt;
+        diffuseColor.rgb = mix(diffuseColor.rgb * vec3(0.85, 0.88, 0.9), vec3(0.92, 0.94, 0.97), snK);`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n        roughnessFactor = mix(roughnessFactor, 0.85, snK);');
+  };
+  m.customProgramCacheKey = () => 'snowy' + amount;
+  snowyCache.set(key, m);
+  return m;
+}

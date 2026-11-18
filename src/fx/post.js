@@ -46,10 +46,15 @@ export class PostFX {
     this.out = new OutputPass();
     // фоновое затенение (контактные тени в углах, под предметами)
     this.ao = new GTAOPass(new THREE.Scene(), new THREE.PerspectiveCamera(), size.x, size.y);
-    this.ao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12 });
-    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
+    this.ao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 8 });
+    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 1, samples: 8 });
     this.ao.blendIntensity = 0.9;
     this.ao.enabled = false;
+    // затенение считаем в половинном разрешении
+    const aoSet = this.ao.setSize.bind(this.ao);
+    this.ao.setSize = (w, h) => aoSet(Math.max(1, Math.floor(w / 2)), Math.max(1, Math.floor(h / 2)));
+    this.ao.setSize(size.x, size.y);
+    this.quality = 'medium';
     this.composer.addPass(this.main);
     this.composer.addPass(this.ao);
     this.composer.addPass(this.vm);
@@ -74,7 +79,19 @@ export class PostFX {
     else { u.uLift.value.set(0.0, 0.0, 0.004); u.uGain.value.set(1.04, 1.01, 0.96); u.uSat.value = 1.0; u.uContrast.value = 1.12; this.bloom.strength = 0.28; this.bloom.threshold = 0.9; }
   }
 
-  setAO(on, intensity = 0.9) { this.ao.enabled = !!on; this.ao.blendIntensity = intensity; }
+  // Фоновое затенение — только на высоком качестве
+  setAO(on, intensity = 0.9) { this.ao.enabled = !!on && this.quality === 'high'; this.ao.blendIntensity = intensity; }
+
+  setQuality(q) {
+    this.quality = q;
+    const samples = q === 'high' ? 4 : q === 'medium' ? 2 : 0;
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); }
+    }
+    this.bloom.enabled = q !== 'low';
+    if (q !== 'high') this.ao.enabled = false;
+    this.resize();
+  }
 
   render(scene, camera, vmScene, vmCamera, dt = 0.016) {
     this.t += dt;

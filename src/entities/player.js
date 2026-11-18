@@ -183,7 +183,10 @@ export class Player {
     if (inp.bd('moveR')) ix += 1;
     const len = Math.hypot(ix, iz);
     if (len > 0) { ix /= len; iz /= len; }
-    const wantSprint = inp.bd('sprint') && iz < 0 && !this.aim && b.stance !== 'prone' && this.stamina > 0.05 && this.medT <= 0;
+    // выдохся: бег недоступен, пока не восстановится хотя бы треть выносливости и не отпущен Shift
+    if (this.stamina <= 0.03 && !this.winded) { this.winded = true; this.game.hud.message('Выдохся — бег недоступен, нужно отдышаться', 2); }
+    if (this.winded && this.stamina > 0.35) this.winded = false;
+    const wantSprint = inp.bd('sprint') && iz < 0 && !this.aim && b.stance !== 'prone' && !this.winded && this.medT <= 0;
     if (wantSprint && b.stance === 'crouch') b.stance = 'stand';
     let speed = b.stance === 'prone' ? 0.55 : b.stance === 'crouch' ? 1.5 : 2.5;
     if (wantSprint) speed = 5.3;

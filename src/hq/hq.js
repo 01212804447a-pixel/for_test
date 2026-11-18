@@ -7,7 +7,6 @@ import { woodTexture, textTexture } from '../world/textures.js';
 import { SoldierModel } from '../entities/soldierModel.js';
 import { ClipActor, CharAnimator, charAvailable } from '../entities/charRig.js';
 import { thirdPersonGun, buildGun } from '../weapons/guns.js';
-import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { MISSIONS } from '../data/missions.js';
 import { WEAPONS } from '../data/weapons.js';
 import { model, pbr, hdr as hdrAsset } from '../core/assets.js';
@@ -234,7 +233,7 @@ export class HQ {
     this.colliders.push({ x0: -99, x1: 99, z0: -99, z1: -D / 2 + 0.35 }, { x0: -99, x1: 99, z0: D / 2 - 0.35, z1: 99 }, { x0: -99, x1: -W / 2 + 0.35, z0: -99, z1: 99 }, { x0: W / 2 - 0.35, x1: 99, z0: -99, z1: 99 });
     // окна: рамы, переплёт, подоконник, стекло
     const frameM = std({ color: 0xe8e4da, roughness: 0.5 });
-    const glassM = new THREE.MeshPhysicalMaterial({ color: 0xdfe8ee, roughness: 0.02, transmission: 0.95, thickness: 0.01, transparent: true, opacity: 0.25, metalness: 0 });
+    const glassM = new THREE.MeshStandardMaterial({ color: 0xdfe8ee, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.16, depthWrite: false });
     const addWindow = (x, z, w, rot) => {
       const g = new THREE.Group();
       const h = winH.y1 - winH.y0;
@@ -255,8 +254,7 @@ export class HQ {
     const outside = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), std({ color: 0xf2f5f7, roughness: 0.95 }));
     outside.rotation.x = -Math.PI / 2; outside.position.y = -0.3; S.add(outside);
     // ---------- освещение ----------
-    RectAreaLightUniformsLib.init();
-    S.add(new THREE.HemisphereLight(0xe6eef6, 0x5a4a3a, 0.35));
+    S.add(new THREE.HemisphereLight(0xe6eef6, 0x6a5a48, 0.75));
     const hdri = hdrAsset('snowy_field');
     if (hdri) {
       hdri.mapping = THREE.EquirectangularReflectionMapping;
@@ -269,24 +267,20 @@ export class HQ {
     // низкое полярное солнце через южные окна
     const sun = new THREE.DirectionalLight(0xffe2bf, 3.2);
     sun.position.set(-7, 6.5, 16); sun.target.position.set(1, 0, 0);
-    sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = true; sun.shadow.mapSize.set(this.app.settings.quality === 'high' ? 2048 : 1024, this.app.settings.quality === 'high' ? 2048 : 1024);
     Object.assign(sun.shadow.camera, { left: -13, right: 13, top: 10, bottom: -10, near: 1, far: 50 });
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
     S.add(sun, sun.target);
-    // люминесцентные светильники
+    // люминесцентные светильники: светятся сами (свечение — через bloom), зал освещают 3 точечных источника
     const tubeM = std({ color: 0xffffff, emissive: 0xf4f8ff, emissiveIntensity: 3 });
     for (const [x, z] of [[-1.5, -3.2], [-1.5, 0.8], [1.5, -3.2], [1.5, 0.8], [6, -3], [6, 2], [-1.5, 4.2], [1.5, 4.2]]) {
       const f = this.prop('mounted_fluorescent_lights', x, H - 0.06, z, Math.PI / 2, { shadow: false });
       if (f) f.traverse((m) => { if (m.isMesh && /tube|light|bulb|glass/i.test(m.material.name || m.name)) m.material = tubeM; });
       else this.box(1.2, 0.05, 0.22, tubeM, x, H - 0.05, z, false);
-      const ra = new THREE.RectAreaLight(0xf2f6ff, 3.2, 0.6, 0.9);
-      ra.position.set(x, H - 0.1, z); ra.lookAt(x, 0, z); S.add(ra);
     }
-    // тёплый свет над картой (с тенями)
-    const spot = new THREE.SpotLight(0xffe6c4, 7, 9, 0.85, 0.7, 1.4);
-    spot.position.set(0, H - 0.25, 0.2); spot.target.position.set(0, 0, 0.2);
-    spot.castShadow = true; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -0.0005;
-    S.add(spot, spot.target);
+    for (const [x, z, i] of [[0, -2.0, 9], [0, 2.6, 7], [6, -0.5, 7]]) {
+      const l = new THREE.PointLight(0xf2f2ec, i, 11, 1.3); l.position.set(x, H - 0.45, z); S.add(l);
+    }
     this.hangLamp(0, 0.2, H);
     // ---------- стенд таблиц стрельбы ----------
     const board = buildBoardCanvas();
@@ -296,7 +290,6 @@ export class HQ {
     this.box(8.3, 3.25, 0.05, trimM, 0, 1.75, -D / 2 + 0.02, false);
     this.prop('industrial_wall_lamp', -4.4, 2.6, -D / 2 + 0.05, 0);
     this.prop('industrial_wall_lamp', 4.4, 2.6, -D / 2 + 0.05, 0);
-    for (const x of [-4.4, 4.4]) { const l = new THREE.PointLight(0xffe2b8, 0.9, 4, 1.8); l.position.set(x, 2.45, -D / 2 + 0.35); S.add(l); }
     this.interact.push({ pos: new THREE.Vector3(0, 1.6, -D / 2 + 1.2), r: 3.2, label: 'Изучить таблицы стрельбы и графики траекторий', act: () => this.app.ui.firingTables() });
     // ---------- стол с картой операций ----------
     this.box(4.1, 0.07, 2.7, tableTop, 0, 0.8, 0.2, true, 0, 1.5);
@@ -332,7 +325,6 @@ export class HQ {
     this.prop('desk_lamp_arm_01', 7.0, 0.79, -4.5, -0.8);
     this.prop('office_notepads', 6.3, 0.795, -4.55, 0.1, { scale: 0.45 });
     this.prop('SchoolChair_01', 6.2, 0, -3.95, 0);
-    const dl = new THREE.PointLight(0xffdcae, 1.6, 3, 2); dl.position.set(6.9, 1.35, -4.6); S.add(dl);
     this.prop('wall_clock', 6.2, 2.55, -D / 2 + 0.03, 0, { scale: 1.2 });
     this.prop('power_box_01', 8.6, 1.4, -5.2, -Math.PI / 2, { scale: 0.8 });
     // дверь в коридор (закрыта)
@@ -544,8 +536,12 @@ export class HQ {
     r.toneMappingExposure = 1.12;
     if (this.camera.aspect !== innerWidth / innerHeight) { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); }
     this.app.post.preset('day');
-    this.app.post.bloom.enabled = true;
+    this.app.post.bloom.enabled = this.app.settings.quality !== 'low';
     this.app.post.setAO(true);
+    // помещение неподвижно: тени пересчитываем не каждый кадр
+    r.shadowMap.autoUpdate = false;
+    this._shadowTick = (this._shadowTick || 0) + 1;
+    if (this._shadowTick % 4 === 1) r.shadowMap.needsUpdate = true;
     this.app.post.render(this.scene, this.camera, null, null);
   }
 }

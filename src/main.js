@@ -38,6 +38,7 @@ class MenuScene {
   render(r) {
     r.autoClear = true;
     r.toneMappingExposure = 1.6;
+    r.shadowMap.autoUpdate = true;
     if (this.camera.aspect !== innerWidth / innerHeight) { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); }
     r.render(this.scene, this.camera);
   }
@@ -60,6 +61,7 @@ class App {
     this.audio = new AudioSys();
     this.audio.setVolume(this.settings.volume);
     this.post = new PostFX(this.renderer);
+    this.applyQuality();
     this.hud = new HUD(document.getElementById('hud'));
     this.hud.hide();
     this.ui = new UI(this, document.getElementById('ui'));
@@ -96,7 +98,20 @@ class App {
     requestAnimationFrame((t) => this.loop(t));
   }
 
-  persist() { writeSave(this.save); }
+  persist() { writeSave(this.save); this.applyQuality(); }
+
+  // Качество графики: разрешение рендера, сглаживание, мягкость теней, фоновое затенение
+  applyQuality() {
+    const q = this.settings.quality || 'medium';
+    if (q === this._q) return;
+    this._q = q;
+    const pr = q === 'low' ? Math.min(devicePixelRatio, 0.85) : q === 'medium' ? Math.min(devicePixelRatio, 1) : Math.min(devicePixelRatio, 1.5);
+    this.renderer.setPixelRatio(pr);
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.shadowMap.type = q === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.renderer.shadowMap.needsUpdate = true;
+    if (this.post) this.post.setQuality(q);
+  }
 
   newCampaign() {
     const st = this.settings;

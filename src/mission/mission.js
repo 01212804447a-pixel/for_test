@@ -757,6 +757,7 @@ export class Mission {
   }
 
   render() {
+    this.renderer.shadowMap.autoUpdate = true;
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
     const hc = this.hitcam;
     if (hc && hc.on && hc.proj) {

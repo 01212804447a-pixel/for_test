@@ -112,8 +112,8 @@ export class GunUI {
   // ---------- карта огня ----------
   fireMap() {
     const m = this.m, h = this.h, ui = m.app.ui;
-    const range = Math.min(m.terrain.half - 100, 7600);
-    if (!this.mapImg) this.mapImg = m.terrain.makeMapImage(640, range);
+    const range = m.mapWide ? m.mapWideRange : Math.min(m.terrain.half - 100, 7600);
+    if (!this.mapImg) this.mapImg = m.mapWide || m.terrain.makeMapImage(640, range);
     const targets = [...(m.artTargets || []), ...(m.teamMarks ? m.teamMarks() : [])];
     const tg = (t) => { const q = toGrid(t.pos.x, t.pos.z); return `X ${q.X.toLocaleString('ru')} · Y ${q.Y.toLocaleString('ru')} · h ${Math.round(m.terrain.heightAt(t.pos.x, t.pos.z))} м`; };
     const gp = toGrid(h.pos.x, h.pos.z);
@@ -143,6 +143,9 @@ export class GunUI {
         const x = Y - GRID.Y0; const [px] = toPx(x, 0);
         g.beginPath(); g.moveTo(px, 0); g.lineTo(px, S); g.stroke(); g.fillText(String(Y / 1000), px + 2, S - 3);
       }
+      // ориентиры
+      g.font = 'italic 11px Arial'; g.fillStyle = 'rgba(30,30,30,0.85)';
+      for (const l of m.landmarks || []) { const [px, py] = toPx(l.x, l.z); g.fillRect(px - 2, py - 2, 4, 4); g.fillText(l.name, px + 5, py - 3); }
       // цели
       for (const t of targets) {
         const [px, py] = toPx(t.pos.x, t.pos.z);

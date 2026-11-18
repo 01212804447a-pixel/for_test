@@ -153,7 +153,8 @@ export function spruceMaterial() {
 }
 
 // Ель: ствол + ярусы лап-карточек (по две плоскости крест-накрест), свисающих вниз
-export function spruceGeometry(h, seed) {
+export function spruceGeometry(h, seed, lite = false) {
+  // lite — облегчённая ель для дальних лесов: меньше ярусов и лап, лапы шире
   const rnd = mulberry32(seed);
   const pos = [], nor = [], uv = [], col = [], idx = [];
   const center = new THREE.Vector3(0, h * 0.45, 0);
@@ -174,13 +175,13 @@ export function spruceGeometry(h, seed) {
     quad(p(a0, -0.2, r0), p(a1, -0.2, r0), p(a1, trunkH, r1), p(a0, trunkH, r1), [[(i / segs) * 0.2, 0], [((i + 1) / segs) * 0.2, 0], [((i + 1) / segs) * 0.2, trunkH / 3], [(i / segs) * 0.2, trunkH / 3]], [n(a0), n(a1), n(a1), n(a0)], [0.9, 0.9, 0.9]);
   }
   // ярусы лап
-  const levels = Math.max(8, Math.round(h * 2.4));
+  const levels = lite ? Math.max(6, Math.round(h * 1.3)) : Math.max(8, Math.round(h * 2.4));
   const yb = Math.min(1.2, h * 0.14);
   for (let l = 0; l < levels; l++) {
     const t = l / (levels - 1);
     const y = yb + t * (h - yb) * 0.97;
     const R = (1 - t) * h * 0.27 + 0.16;
-    const count = Math.max(6, Math.round(7 + (1 - t) * 6));
+    const count = lite ? Math.max(5, Math.round(5 + (1 - t) * 4)) : Math.max(6, Math.round(7 + (1 - t) * 6));
     const a0 = rnd() * 6.28;
     for (let k = 0; k < count; k++) {
       const a = a0 + (k / count) * Math.PI * 2 + (rnd() - 0.5) * 0.4;
@@ -188,7 +189,7 @@ export function spruceGeometry(h, seed) {
       const droop = 0.18 + (1 - t) * 0.25 + rnd() * 0.15;
       const dir = new THREE.Vector3(Math.cos(a), -droop, Math.sin(a)).normalize();
       const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
-      const wid = len * (0.55 + rnd() * 0.15);
+      const wid = len * (0.55 + rnd() * 0.15) * (lite ? 1.35 : 1);
       const root = new THREE.Vector3(Math.cos(a) * 0.04, y + (rnd() - 0.5) * 0.15, Math.sin(a) * 0.04);
       const tip = root.clone().addScaledVector(dir, len);
       // нормали: от оси дерева вверх-наружу (объёмное освещение кроны)

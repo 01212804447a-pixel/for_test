@@ -151,6 +151,8 @@ export class HUD {
       const prog = it.hold ? clamp(p.holdE / it.hold, 0, 1) : 0;
       this.prompt.innerHTML = `<b>E</b> — ${it.label}${it.hold ? `<div class="bar thin"><i style="width:${(prog * 100).toFixed(0)}%"></i></div>` : ''}`;
       this.prompt.style.display = 'block';
+    } else if (p.vehicle && p.towHint) {
+      this.prompt.innerHTML = p.towHint; this.prompt.style.display = 'block';
     } else this.prompt.style.display = 'none';
     // погода (сводка, как в боевом распоряжении)
     const e = m.def.env;
@@ -227,14 +229,30 @@ export class HUD {
   drawMap(m) {
     const c = this.mapCanvas, g = c.getContext('2d');
     const S = c.width;
-    g.drawImage(m.mapImage, 0, 0, S, S);
-    const toPx = (x, z) => [((x + 1100) / 2200) * S, ((z + 1100) / 2200) * S];
-    // сетка 100 м
-    g.strokeStyle = 'rgba(40,60,80,0.25)'; g.lineWidth = 1;
+    const wide = !!(m.mapZoom && m.mapWide), R = wide ? m.mapWideRange : 1100;
+    g.drawImage(wide ? m.mapWide : m.mapImage, 0, 0, S, S);
+    const toPx = (x, z) => [((x + R) / (2 * R)) * S, ((z + R) / (2 * R)) * S];
+    // сетка 100 м (вся карта — 1 км)
+    const step = wide ? 1000 : 100;
+    g.strokeStyle = wide ? 'rgba(40,60,80,0.35)' : 'rgba(40,60,80,0.25)'; g.lineWidth = 1;
     g.font = '10px Arial'; g.fillStyle = 'rgba(30,40,50,0.7)';
-    for (let k = -1100; k <= 1100; k += 100) {
+    for (let k = Math.ceil(-R / step) * step; k <= R; k += step) {
       const [a] = toPx(k, 0); g.beginPath(); g.moveTo(a, 0); g.lineTo(a, S); g.stroke();
       const [, b] = toPx(0, k); g.beginPath(); g.moveTo(0, b); g.lineTo(S, b); g.stroke();
+    }
+    if (wide) {
+      // граница района задачи
+      const [a0, b0] = toPx(-1100, -1100), [a1, b1] = toPx(1100, 1100);
+      g.strokeStyle = 'rgba(160,110,0,0.6)'; g.setLineDash([6, 5]); g.strokeRect(a0, b0, a1 - a0, b1 - b0); g.setLineDash([]);
+    }
+    // ориентиры окраин
+    if (m.landmarks) {
+      g.font = 'italic 11px Arial'; g.fillStyle = 'rgba(30,30,30,0.85)';
+      for (const l of m.landmarks) {
+        if (Math.abs(l.x) > R || Math.abs(l.z) > R) continue;
+        const [x, y] = toPx(l.x, l.z);
+        g.fillRect(x - 2, y - 2, 4, 4); g.fillText(l.name, x + 5, y - 3);
+      }
     }
     // задачи
     const st = m.stages[m.stageIdx];
@@ -251,6 +269,11 @@ export class HUD {
       if (!known) continue;
       const [x, y] = toPx(v.pos.x, v.pos.z);
       g.fillStyle = '#2a5ab0'; g.fillRect(x - 4, y - 4, 8, 8);
+    }
+    // орудия Д-30
+    for (const h of m.guns || []) {
+      const [x, y] = toPx(h.pos.x, h.pos.z);
+      g.fillStyle = '#0a4a10'; g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 6, y + 5); g.lineTo(x - 6, y + 5); g.closePath(); g.fill();
     }
     // противник, замеченный отделением за последние 8 с
     const seen = new Set();
@@ -286,6 +309,6 @@ export class HUD {
     g.restore();
     g.fillStyle = 'rgba(0,0,0,0.75)'; g.font = 'bold 13px Arial';
     g.fillText('С ↑', S - 40, 22);
-    g.fillText('сетка 100 м', 12, S - 12);
+    g.fillText(`сетка ${step === 1000 ? '1 км' : '100 м'}${m.mapWide ? ` · колесо мыши / +− — ${wide ? 'район задачи' : 'вся карта'}` : ''}`, 12, S - 12);
   }
 }

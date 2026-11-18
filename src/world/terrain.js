@@ -21,8 +21,11 @@ function distToPolyline(x, z, pts) {
 }
 
 export class Terrain {
-  constructor({ size = 2400, seg = 384, seed = 1, amp = 30, features = [], boundary = 1050, mountain = 150 } = {}) {
+  // core — сторона плотного ядра (м): внутри шаг сетки постоянный, снаружи ячейки плавно растут
+  // к краю карты (большие карты без потери детальности в районе миссии)
+  constructor({ size = 2400, seg = 384, seed = 1, amp = 30, features = [], boundary = 1050, mountain = 150, core = 0 } = {}) {
     this.size = size; this.seg = seg; this.half = size / 2; this.cell = size / seg;
+    this._initMap(core);
     this.amp = amp; this.features = features; this.boundary = boundary; this.mountain = mountain;
     this.noise = new Noise2D(seed);
     this.n = seg + 1;
@@ -32,6 +35,41 @@ export class Terrain {
     // на приморских картах суша гарантированно выше уровня моря
     this.landOffset = this.hasSea ? amp * 0.6 + 6 : 0;
     this._generate();
+  }
+
+  _initMap(core) {
+    const H = this.half;
+    this.nonUni = false;
+    if (core > 0 && core < this.size * 0.9) {
+      // ядро занимает долю a индексов; снаружи шаг растёт экспоненциально (без скачка на границе)
+      const C = core / 2, a = 0.6, k = C / a, need = (H - C) / k;
+      if (need > 1 - a) {
+        let lo = 1e-4, hi = 60;
+        for (let i = 0; i < 80; i++) { const b = (lo + hi) / 2; if ((Math.exp(b * (1 - a)) - 1) / b < need) lo = b; else hi = b; }
+        this.nonUni = true; this.mA = a; this.mC = C; this.mK = k; this.mB = (lo + hi) / 2;
+      }
+    }
+    this.cell = this.nonUni ? this.mK * (2 / this.seg) : this.size / this.seg;
+  }
+  // индекс узла → координата
+  cx(i) {
+    if (!this.nonUni) return i * (this.size / this.seg) - this.half;
+    const u = (i / this.seg) * 2 - 1, t = Math.abs(u);
+    const f = t <= this.mA ? t * this.mK : this.mC + (this.mK * (Math.exp(this.mB * (t - this.mA)) - 1)) / this.mB;
+    return Math.sign(u) * Math.min(f, this.half);
+  }
+  // координата → дробный индекс
+  fi(x) {
+    if (!this.nonUni) return (x + this.half) / (this.size / this.seg);
+    const ax = Math.min(Math.abs(x), this.half);
+    const t = ax <= this.mC ? ax / this.mK : this.mA + Math.log(1 + (this.mB * (ax - this.mC)) / this.mK) / this.mB;
+    return ((Math.sign(x) * t + 1) / 2) * this.seg;
+  }
+  // местный шаг сетки, м
+  spacing(x, z) {
+    if (!this.nonUni) return this.cell;
+    const f = (v) => { const i = clamp(Math.floor(this.fi(v)), 0, this.seg - 1); return this.cx(i + 1) - this.cx(i); };
+    return Math.max(f(x), f(z));
   }
 
   largeScale(x, z) {
@@ -114,11 +152,14 @@ export class Terrain {
   }
 
   _generate() {
-    const n = this.n, c = this.cell, half = this.half;
+    const n = this.n;
     const mo = { m: 0 };
+    const X = new Float32Array(n);
+    for (let i = 0; i < n; i++) X[i] = this.cx(i);
+    this.X = X;
     for (let iz = 0; iz < n; iz++) {
       for (let ix = 0; ix < n; ix++) {
-        const x = ix * c - half, z = iz * c - half;
+        const x = X[ix], z = X[iz];
         this.h[iz * n + ix] = this.heightFn(x, z, mo);
         this.mask[iz * n + ix] = mo.m;
       }
@@ -127,8 +168,8 @@ export class Terrain {
 
   // Точная высота поверхности по треугольникам сетки
   heightAt(x, z) {
-    const c = this.cell, n = this.n;
-    let fx = (x + this.half) / c, fz = (z + this.half) / c;
+    const n = this.n;
+    let fx = this.fi(x), fz = this.fi(z);
     fx = clamp(fx, 0, this.seg - 1e-4); fz = clamp(fz, 0, this.seg - 1e-4);
     const ix = Math.floor(fx), iz = Math.floor(fz);
     const u = fx - ix, v = fz - iz;
@@ -139,7 +180,7 @@ export class Terrain {
   }
 
   normalAt(x, z, out = new THREE.Vector3()) {
-    const e = this.cell * 0.5;
+    const e = this.spacing(x, z) * 0.5;
     const hl = this.heightAt(x - e, z), hr = this.heightAt(x + e, z);
     const hd = this.heightAt(x, z - e), hu = this.heightAt(x, z + e);
     out.set(hl - hr, 2 * e, hd - hu).normalize();
@@ -147,8 +188,8 @@ export class Terrain {
   }
 
   maskAt(x, z) {
-    const c = this.cell, n = this.n;
-    const ix = clamp(Math.round((x + this.half) / c), 0, this.seg), iz = clamp(Math.round((z + this.half) / c), 0, this.seg);
+    const n = this.n;
+    const ix = clamp(Math.round(this.fi(x)), 0, this.seg), iz = clamp(Math.round(this.fi(z)), 0, this.seg);
     return this.mask[iz * n + ix];
   }
 
@@ -178,7 +219,7 @@ export class Terrain {
   }
 
   buildMesh() {
-    const n = this.n, c = this.cell, half = this.half;
+    const n = this.n, X = this.X;
     const pos = new Float32Array(n * n * 3);
     const col = new Float32Array(n * n * 3);
     const uv = new Float32Array(n * n * 2);
@@ -188,13 +229,14 @@ export class Terrain {
     for (let iz = 0; iz < n; iz++) {
       for (let ix = 0; ix < n; ix++) {
         const i = iz * n + ix;
-        const x = ix * c - half, z = iz * c - half;
+        const x = X[ix], z = X[iz];
         const h = this.h[i];
         pos[i * 3] = x; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z;
         uv[i * 2] = x / 3; uv[i * 2 + 1] = z / 3;
-        const hl = this.h[iz * n + Math.max(0, ix - 1)], hr = this.h[iz * n + Math.min(n - 1, ix + 1)];
-        const hd = this.h[Math.max(0, iz - 1) * n + ix], hu = this.h[Math.min(n - 1, iz + 1) * n + ix];
-        v.set(hl - hr, 2 * c, hd - hu).normalize();
+        const il = Math.max(0, ix - 1), ir = Math.min(n - 1, ix + 1), id = Math.max(0, iz - 1), iu = Math.min(n - 1, iz + 1);
+        const hl = this.h[iz * n + il], hr = this.h[iz * n + ir];
+        const hd = this.h[id * n + ix], hu = this.h[iu * n + ix];
+        v.set(-(hr - hl) / (X[ir] - X[il]), 1, -(hu - hd) / (X[iu] - X[id])).normalize();
         nor[i * 3] = v.x; nor[i * 3 + 1] = v.y; nor[i * 3 + 2] = v.z;
         const slope = 1 - v.y;
         const patch = noise.noise(x / 25, z / 25) * 0.5 + noise.noise(x / 7, z / 7) * 0.25;

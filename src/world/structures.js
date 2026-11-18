@@ -320,9 +320,9 @@ export function rock(world, m, { x, z, s = 1.5, seed = 1, collide = true }) {
 }
 
 // Ель со снегом (ярусы лап) и карликовая берёза
-export function spruce(world, m, { x, z, h = 7, seed = 1 }) {
+export function spruce(world, m, { x, z, h = 7, seed = 1, lite = false }) {
   const y0 = world.terrain.heightAt(x, z);
-  const g = spruceGeometry(h, seed);
+  const g = spruceGeometry(h, seed, lite);
   g.rotateY(seed * 1.7);
   g.translate(x, y0 - 0.1, z);
   world.addStaticGeometry(m.spruce, g, true);

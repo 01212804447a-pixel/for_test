@@ -25,7 +25,78 @@ import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/ma
 import { Howitzer } from '../artillery/howitzer.js';
 import { pvpMap } from '../data/pvp.js';
 
-const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5 }, medium: { seg: 384, shadow: 2048, snow: 1 }, high: { seg: 480, shadow: 4096, snow: 1.4 } };
+const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5, wseg: 416 }, medium: { seg: 384, shadow: 2048, snow: 1, wseg: 576 }, high: { seg: 480, shadow: 4096, snow: 1.4, wseg: 704 } };
+// Расширенная карта для миссий без собственного размера местности: район задачи (±1,2 км)
+// с подробной сеткой, вокруг — 3,3 км холмистой тундры до горного кольца (место для артиллерии)
+const WIDE = { size: 8000, core: 2400, boundary: 3300, mountain: 260 };
+const OUTSKIRT_NAMES = ['д. Каменка (нежил.)', 'пос. Лесной (нежил.)', 'д. Ручьи (нежил.)', 'д. Озерки (нежил.)', 'пос. Кварцевый (нежил.)'];
+
+function distPoly(x, z, pts) {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
+    const t = clamp(((x - ax) * dx + (z - az) * dz) / L2, 0, 1);
+    best = Math.min(best, Math.hypot(x - ax - dx * t, z - az - dz * t));
+  }
+  return best;
+}
+
+// Дороги и долины, упиравшиеся в край старой карты, продолжаются до гор
+function extendRoads(feats, R) {
+  for (const f of feats) {
+    if ((f.type !== 'road' && f.type !== 'valley') || !f.pts || f.pts.length < 2) continue;
+    const ext = (a, b) => {
+      if (Math.hypot(a[0], a[1]) < 850) return [];
+      let dx = a[0] - b[0], dz = a[1] - b[1];
+      const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+      const out = []; let x = a[0], z = a[1];
+      for (let k = 0; k < 14 && Math.hypot(x, z) < R; k++) {
+        // плавный изгиб и лёгкое стремление наружу
+        const r = Math.hypot(x, z) || 1, t = Math.sin((k + 1) * 1.7 + a[0] * 0.013 + a[1] * 0.007) * 0.22;
+        let nx = dx * Math.cos(t) - dz * Math.sin(t) + (x / r) * 0.35, nz = dx * Math.sin(t) + dz * Math.cos(t) + (z / r) * 0.35;
+        const n = Math.hypot(nx, nz); dx = nx / n; dz = nz / n;
+        x += dx * 280; z += dz * 280;
+        out.push([Math.round(x), Math.round(z)]);
+      }
+      return out;
+    };
+    const P = f.pts, head = ext(P[0], P[1]).reverse(), tail = ext(P[P.length - 1], P[P.length - 2]);
+    f.pts = [...head, ...P, ...tail];
+  }
+}
+
+// План окраин (до генерации рельефа): холмы и замёрзшие озёра для разнообразия местности,
+// площадки под посёлок, развалины и стойбище — их выравниваем
+function planOutskirts(seed, feats, boundary) {
+  const rnd = mulberry32(seed * 977 + 13);
+  const roads = feats.filter((f) => f.pts);
+  const coasts = feats.filter((f) => f.type === 'coast');
+  const onLand = (x, z, m) => !coasts.some((c) => x * c.nx + z * c.nz - c.d > -m);
+  const nearRoad = (x, z, m) => roads.some((f) => distPoly(x, z, f.pts) < m);
+  const ring = (r0, r1) => { const a = rnd() * Math.PI * 2, d = r0 + rnd() * (r1 - r0); return [Math.cos(a) * d, Math.sin(a) * d]; };
+  const sites = [], hills = [], lakes = [];
+  for (let tries = 0; tries < 400 && sites.length < 4; tries++) {
+    const [x, z] = ring(1700, boundary - 500);
+    if (!onLand(x, z, 220) || nearRoad(x, z, 110)) continue;
+    if (sites.some((s) => Math.hypot(s.x - x, s.z - z) < 900)) continue;
+    sites.push({ x: Math.round(x), z: Math.round(z), yaw: rnd() * Math.PI * 2 });
+  }
+  for (let tries = 0; tries < 300 && hills.length < 9; tries++) {
+    const r = 220 + rnd() * 280, [x, z] = ring(1250 + r * 1.6, boundary - 150);
+    if (!onLand(x, z, 100)) continue;
+    if (hills.some((h) => Math.hypot(h.x - x, h.z - z) < (h.r + r) * 0.9)) continue;
+    hills.push({ type: 'hill', x: Math.round(x), z: Math.round(z), r: Math.round(r), h: Math.round(18 + rnd() * 40) });
+  }
+  for (let tries = 0; tries < 300 && lakes.length < 4; tries++) {
+    const r = 60 + rnd() * 110, [x, z] = ring(1500 + r, boundary - 400);
+    if (!onLand(x, z, 250) || nearRoad(x, z, r + 90)) continue;
+    if (sites.some((s) => Math.hypot(s.x - x, s.z - z) < r + 200)) continue;
+    if (lakes.some((l) => Math.hypot(l.x - x, l.z - z) < l.r + r + 300)) continue;
+    lakes.push({ type: 'lake', x: Math.round(x), z: Math.round(z), r: Math.round(r), fall: 30 });
+  }
+  return { sites, hills, lakes };
+}
 
 export class Mission {
   constructor(app, def, setup) {
@@ -77,7 +148,24 @@ export class Mission {
     this.isNight = e.time === 'night';
     // ландшафт
     const tdef = def.terrain;
-    this.terrain = new Terrain({ seed: tdef.seed, amp: tdef.amp, features: tdef.features.map((f) => ({ ...f })), seg: tdef.seg || q.seg, size: tdef.size || 2400, boundary: tdef.boundary || 1050, mountain: tdef.mountain || 150 });
+    const wide = this.wideMap = !tdef.size && !tdef.compact;
+    const feats = tdef.features.map((f) => (f.pts ? { ...f, pts: f.pts.map((p) => [...p]) } : { ...f }));
+    this.outskirts = [];
+    if (wide) {
+      extendRoads(feats, WIDE.boundary + 300);
+      const plan = planOutskirts(tdef.seed || 1, feats, WIDE.boundary);
+      this.outskirts = plan.sites;
+      // холмы и озёра — до остальных особенностей (дороги и площадки миссии ложатся поверх)
+      feats.unshift(...plan.hills, ...plan.lakes);
+      this.outskirts.forEach((s, i) => feats.push({ type: 'flat', x: s.x, z: s.z, r: i === 0 ? 85 : 40, fall: 60, dh: 0 }));
+    }
+    this.terrain = new Terrain({
+      seed: tdef.seed, amp: tdef.amp, features: feats,
+      seg: tdef.seg || (wide ? q.wseg : q.seg), size: tdef.size || (wide ? WIDE.size : 2400), core: tdef.core || (wide ? WIDE.core : 0),
+      boundary: tdef.boundary || (wide ? WIDE.boundary : 1050), mountain: tdef.mountain || (wide ? WIDE.mountain : 150),
+    });
+    if (!def.far) this.camera.far = wide ? 7000 : 4200;
+    this.camera.updateProjectionMatrix();
     this.scene.add(this.terrain.buildMesh());
     const sea = this.terrain.buildSea();
     if (sea) this.scene.add(sea);
@@ -151,8 +239,10 @@ export class Mission {
       const lim = this.net.room.scoreLimit;
       this.stages = [{ objs: [{ text: `Командный бой до ${lim} побед. Tab — таблица счёта`, check: () => false, marker: () => null }] }];
     }
+    // окраины расширенной карты
+    if (this.wideMap && !def.noOutskirts) this._buildOutskirts();
     // вешки вдоль дорог, таблички
-    for (const f of def.terrain.features) if (f.type === 'road') POI.roadPoles(this.world, this.mats, { pts: f.pts });
+    for (const f of this.terrain.features) if (f.type === 'road') POI.roadPoles(this.world, this.mats, { pts: f.pts.filter((p) => Math.hypot(p[0], p[1]) < this.terrain.boundary + 60) });
     for (const sg of this.world.signs) ST.sign(this.world, this.mats, sg);
     // техника на старте
     const vlist = this.pvp ? [] : def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
@@ -202,18 +292,31 @@ export class Mission {
     this.app.post.preset(e.time);
     this.app.post.bloom.enabled = this.settings.quality !== 'low';
     this.app.post.setAO(this.settings.quality === 'high', 0.7);
+    // карта: район задачи ±1100 м и (на больших картах) вся местность — колесо мыши переключает
+    const overlay = (img, R) => {
+      const mg = img.getContext('2d'), k = img.width / (2 * R), min = R > 1500 ? 0.6 : 1;
+      // леса — зелёным, как на топокарте
+      mg.fillStyle = 'rgba(70,140,70,0.22)';
+      for (const f of this.forestAreas || []) { mg.beginPath(); mg.arc((f.x + R) * k, (f.z + R) * k, f.r * 0.85 * k, 0, 6.3); mg.fill(); }
+      mg.fillStyle = 'rgba(40,40,45,0.85)';
+      for (const o of this.world.obstacles) {
+        if (!o.blocksSight || o.y1 - o.y0 < 1.2) continue;
+        if (Math.abs(o.x) > R || Math.abs(o.z) > R) continue;
+        const s = o.kind === 1 ? o.r : Math.max(o.hx, o.hz);
+        if (s < 1.2) continue;
+        mg.save(); mg.translate((o.x + R) * k, (o.z + R) * k); mg.rotate(-(o.yaw || 0));
+        if (o.kind === 1) { mg.beginPath(); mg.arc(0, 0, Math.max(min, s * k), 0, 6.3); mg.fill(); }
+        else mg.fillRect(-o.hx * k, -o.hz * k, Math.max(min, o.hx * 2 * k), Math.max(min, o.hz * 2 * k));
+        mg.restore();
+      }
+    };
     this.mapImage = this.terrain.makeMapImage(512, 1100);
-    const mg = this.mapImage.getContext('2d');
-    mg.fillStyle = 'rgba(40,40,45,0.85)';
-    for (const o of this.world.obstacles) {
-      if (!o.blocksSight || o.y1 - o.y0 < 1.2) continue;
-      const px = ((o.x + 1100) / 2200) * 512, pz = ((o.z + 1100) / 2200) * 512;
-      const s = o.kind === 1 ? o.r : Math.max(o.hx, o.hz);
-      if (s < 1.2) continue;
-      mg.save(); mg.translate(px, pz); mg.rotate(-(o.yaw || 0));
-      if (o.kind === 1) { mg.beginPath(); mg.arc(0, 0, Math.max(1, s / 4.3), 0, 6.3); mg.fill(); }
-      else mg.fillRect(-o.hx / 4.3, -o.hz / 4.3, Math.max(1, o.hx / 2.15), Math.max(1, o.hz / 2.15));
-      mg.restore();
+    overlay(this.mapImage, 1100);
+    this.mapZoom = 0; this.mapWide = null;
+    if (this.terrain.half > 1500) {
+      const R = this.mapWideRange = Math.floor(Math.min(this.terrain.half - 100, this.terrain.boundary + 400) / 100) * 100;
+      this.mapWide = this.terrain.makeMapImage(640, R);
+      overlay(this.mapWide, R);
     }
     // первый этап
     this.nextStage();
@@ -430,8 +533,9 @@ export class Mission {
     return o;
   }
 
-  scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false }) {
+  scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false, lite = false }) {
     const rnd = mulberry32(seed + Math.floor(x * 3 + z * 7 + r));
+    if (forest && trees > 0) (this.forestAreas || (this.forestAreas = [])).push({ x, z, r });
     const ok = (px, pz) => {
       if (Math.hypot(px, pz) > this.terrain.boundary + 30) return false;
       for (const a of avoid) if (Math.hypot(px - a.x, pz - a.z) < (a.r || 60)) return false;
@@ -464,7 +568,65 @@ export class Mission {
         if (forest && pick < 0.07) this.staticModel('dead_tree_trunk', qx, qz, { ry: rnd() * 6.28, scale: 0.9 + rnd() * 0.5, sink: 0.05, snow: 0.8, mat: 'wood' });
         else if (forest && pick < 0.13) this.staticModel('tree_stump_02', qx, qz, { ry: rnd() * 6.28, scale: 0.6 + rnd() * 0.4, sink: 0.1, collide: 0.4, snow: 0.9, mat: 'wood' });
         else if (rnd() < 0.3) ST.birch(this.world, this.mats, { x: qx, z: qz, h: 2.5 + rnd() * 3, seed: i * 7 + k + seed });
-        else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: forest ? 4.5 + rnd() * 9 : 3 + rnd() * 7, seed: i * 7 + k + seed });
+        else ST.spruce(this.world, this.mats, { x: qx, z: qz, h: forest ? 4.5 + rnd() * 9 : 3 + rnd() * 7, seed: i * 7 + k + seed, lite });
+      }
+    }
+  }
+
+  // Окраины расширенной карты: леса, каменистые россыпи, заброшенный посёлок, развалины, стойбище,
+  // брошенная техника — ориентиры для наводки и укрытия для огневых позиций
+  _buildOutskirts() {
+    const T = this.terrain, W = this.world, M = this.mats, def = this.def;
+    const rnd = mulberry32((def.terrain.seed || 1) * 131 + 7);
+    const nrm = new THREE.Vector3();
+    const land = (x, z, slope) => Math.hypot(x, z) < T.boundary - 120 && !(T.hasSea && T.heightAt(x, z) < 2) && T.maskAt(x, z) === 0 && T.normalAt(x, z, nrm).y > slope;
+    const pick = (r0, r1, slope) => {
+      for (let k = 0; k < 40; k++) {
+        const a = rnd() * Math.PI * 2, d = r0 + (r1 - r0) * Math.sqrt(rnd());
+        const x = Math.cos(a) * d, z = Math.sin(a) * d;
+        if (land(x, z, slope)) return { x, z };
+      }
+      return null;
+    };
+    const sites = this.outskirts;
+    const avoid = sites.map((s, i) => ({ x: s.x, z: s.z, r: i === 0 ? 110 : 45 }));
+    for (let i = 0; i < 14; i++) {
+      const p = pick(1350, T.boundary - 250, 0.82);
+      if (p) this.scatter({ x: p.x, z: p.z, r: 130 + rnd() * 220, trees: 6 + Math.floor(rnd() * 8), rocks: 4, forest: true, lite: true, avoid, seed: 600 + i });
+    }
+    for (let i = 0; i < 9; i++) {
+      const p = pick(1300, T.boundary - 200, 0.75);
+      if (p) this.scatter({ x: p.x, z: p.z, r: 260, rocks: 18, trees: 3, lite: true, avoid, seed: 700 + i });
+    }
+    this.landmarks = [];
+    sites.forEach((s, i) => {
+      if (i === 0) {
+        const name = OUTSKIRT_NAMES[(def.terrain.seed || 0) % OUTSKIRT_NAMES.length];
+        POI.village(W, M, { x: s.x, z: s.z, yaw: s.yaw, n: 6, seed: 40, name });
+        this.landmarks.push({ x: s.x, z: s.z, name: name.replace(' (нежил.)', '') });
+      } else if (i === 1) {
+        POI.ruin(W, M, { x: s.x, z: s.z, yaw: s.yaw, seed: 41 });
+        POI.ruin(W, M, { x: s.x + 20, z: s.z + 9, yaw: s.yaw + 0.4, w: 9, d: 7, seed: 42 });
+        this.landmarks.push({ x: s.x, z: s.z, name: 'развалины' });
+      } else if (i === 2) {
+        POI.chum(W, M, { x: s.x, z: s.z, seed: 43 }); POI.chum(W, M, { x: s.x + 11, z: s.z - 7, seed: 44 });
+        this.landmarks.push({ x: s.x, z: s.z, name: 'стойбище' });
+      } else {
+        POI.truckWreck(W, M, { x: s.x, z: s.z, yaw: s.yaw });
+        POI.woodpile(W, M, { x: s.x + 8, z: s.z + 3, yaw: s.yaw });
+        this.landmarks.push({ x: s.x, z: s.z, name: 'брош. техника' });
+      }
+    });
+    // брошенные грузовики на продолжениях дорог
+    for (const f of T.features) {
+      if (f.type !== 'road') continue;
+      for (let k = 1; k < f.pts.length; k++) {
+        const [x, z] = f.pts[k], [px, pz] = f.pts[k - 1];
+        const r = Math.hypot(x, z);
+        if (r < 1500 || r > T.boundary - 200 || rnd() > 0.3) continue;
+        const L = Math.hypot(x - px, z - pz) || 1, dx = (x - px) / L, dz = (z - pz) / L, side = rnd() < 0.5 ? 1 : -1;
+        const wx = x + dz * 10 * side, wz = z - dx * 10 * side;
+        if (land(wx, wz, 0.9)) POI.truckWreck(W, M, { x: wx, z: wz, yaw: Math.atan2(dx, dz) + (rnd() - 0.5) * 0.8 });
       }
     }
   }
@@ -876,6 +1038,12 @@ export class Mission {
     const net = this.net, host = !net || net.isHost;
     if (net) net.preUpdate(dt);
     if (inp.bh('map') && !this.player.gun) this.mapVisible = !this.mapVisible;
+    if (this.mapVisible && this.mapWide) {
+      // масштаб карты: колесо мыши или +/−; колесо не листает оружие, пока открыта карта
+      if (inp.wheel > 0 || inp.hit('Minus') || inp.hit('NumpadSubtract')) this.mapZoom = 1;
+      else if (inp.wheel < 0 || inp.hit('Equal') || inp.hit('NumpadAdd')) this.mapZoom = 0;
+      inp.wheel = 0;
+    }
     this.squadVisible = inp.bd('squad') && !net;
     if (!net || inp.active) this.player.update(dt);
     for (const s of this.soldiers) s.update(dt);
@@ -1036,6 +1204,9 @@ export class Mission {
 
   render() {
     this.renderer.shadowMap.autoUpdate = true;
+    let fogD = this.scene.fog && this.scene.fog.density > 0 ? 2.0 / this.scene.fog.density : 1e9;
+    if (this.wideMap) fogD = Math.min(fogD, this.settings.quality === 'low' ? 3500 : 6000);
+    this.world.cullStatic(this.camera.position, fogD);
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
     const hc = this.hitcam;
     if (hc && hc.proj && (hc.on || (hc.shellCam && hc.proj.ammo.kind === 'shell'))) {
@@ -1055,6 +1226,7 @@ export class Mission {
       for (const [u] of fxU) { u.uScale.value = h / 2 / Math.tan((hc.cam.fov * Math.PI) / 360); u.uFogDensity.value = 0; }
       r.setScissorTest(true); r.setScissor(x, y, w, h); r.setViewport(x, y, w, h);
       r.autoClear = true;
+      this.world.cullStatic(hc.cam.position, 3000);
       r.render(this.scene, hc.cam);
       r.setScissorTest(false); r.setViewport(0, 0, W, H);
       sky.position.copy(skyPos);

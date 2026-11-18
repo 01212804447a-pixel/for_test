@@ -16,7 +16,8 @@ import { GunUI } from './gunUI.js';
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const EL_MIN = -117, EL_MAX = 1167; // −7° … +70°
 const LOAD_TIME = 5.5;
-const TRANS_TIME = 16;   // перевод из боевого в походное и обратно силами расчёта, с
+const TRANS_TIME = 16;
+const HITCH_R = 4.0;     // фаркоп у проушины ближе этого — можно прицепить   // перевод из боевого в походное и обратно силами расчёта, с
 const AXLE = 0.15;       // ось колёс от оси вращения лафета (к проушине — +Z)
 const TRAVEL_EL = -0.045; // ствол в походном положении, рад
 const wrapA = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
@@ -72,13 +73,22 @@ export class Howitzer {
       enabled: () => !m.player.gun && !this.netUser && m.player.body.alive && this.ready, action: () => this.mount(m.player),
     };
     const self = this;
+    const can = () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !this.netUser && this.tr === this.trTarget;
+    // справа у колеса: боевое ↔ походное положение
+    this.posIt = {
+      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, hold: 1.0,
+      get label() { return self.tr === 0 ? `Привести ${self.name} в походное положение (≈${TRANS_TIME} с)` : `Привести ${self.name} в боевое положение (≈${TRANS_TIME} с)`; },
+      enabled: () => can() && !this.towBy,
+      action: () => { if (this.tr === 0) this.startTravel(); else this.startDeploy(); },
+    };
+    // у буксирной проушины: прицепить / отцепить
     this.towIt = {
-      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.6, hold: 1.0,
+      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 2.2, hold: 0.8,
       get label() { return self.towLabel(); },
-      enabled: () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !this.netUser && this.tr === this.trTarget && !!this.towLabel(),
+      enabled: () => can() && this.tr === 1,
       action: () => this.towAction(),
     };
-    m.interactables.push(this.gunIt, this.towIt);
+    m.interactables.push(this.gunIt, this.posIt, this.towIt);
     this.ui = null;
     if (towBy) this.hitch(towBy, true);
     this._place();
@@ -98,11 +108,9 @@ export class Howitzer {
 
   // ---------- походное положение, прицеп ----------
   towLabel() {
-    if (this.tr !== this.trTarget) return null;
-    if (this.towBy) return Math.abs(this.towBy.speed) < 1.5 ? `Отцепить ${this.name} от «${this.towBy.type.name.replace(/^.*«|».*$/g, '')}»` : null;
-    if (this.tr === 0) return `Привести ${this.name} в походное положение (≈${TRANS_TIME} с)`;
+    if (this.towBy) return `Отцепить ${this.name} от ${this.towBy.type.name}`;
     const v = this.nearHitchVehicle();
-    return v ? `Прицепить ${this.name} к ${v.type.name}` : `Привести ${this.name} в боевое положение (≈${TRANS_TIME} с)`;
+    return v ? `Прицепить ${this.name} к ${v.type.name}` : `Буксирная проушина: подгоните тягач задом (фаркоп ближе 4 м)`;
   }
 
   // фаркоп машины (сзади по оси, на высоте проушины)
@@ -113,24 +121,30 @@ export class Howitzer {
   }
   nearHitchVehicle() {
     const L = this.lunetteWorld();
-    let best = null, bd = 2.8;
-    // только что отцепленную машину снова не предлагаем, пока она не отъедет
-    if (this._noHitch && this.hitchPoint(this._noHitch).distanceTo(L) > 4.5) this._noHitch = null;
+    let best = null, bd = HITCH_R;
     for (const v of this.m.vehicles) {
-      if (!v.alive || v.towing || Math.abs(v.speed) > 1.5 || !v.type.hitch || v === this._noHitch) continue;
+      if (!v.alive || v.towing || Math.abs(v.speed) > 1.5 || !v.type.hitch) continue;
       const d = this.hitchPoint(v).distanceTo(L);
       if (d < bd) { bd = d; best = v; }
     }
     return best;
   }
 
-  towAction(fromNet = false) {
-    const m = this.m;
-    if (this.towBy) { this.unhitch(); return; }
-    if (this.tr === 0) { this.startTravel(); return; }
+  towAction() {
+    if (this.towBy) {
+      if (Math.abs(this.towBy.speed) > 1.5) { this.m.hud.message('Сначала остановите тягач', 2); return; }
+      this.unhitch(); return;
+    }
+    if (this.tr !== 1 || this.trTarget !== 1) return;
     const v = this.nearHitchVehicle();
-    if (v) this.hitch(v); else this.startDeploy();
-    void fromNet; void m;
+    if (v) this.hitch(v);
+    else this.m.hud.message('Тягач далеко: подгоните его задом так, чтобы фаркоп был у проушины (ближе 4 м), и остановитесь', 3);
+  }
+
+  // можно ли прицепить к этой машине прямо сейчас (для водителя)
+  canHitch(v) {
+    if (this.towBy || this.tr !== 1 || this.trTarget !== 1 || v.towing || !v.alive || Math.abs(v.speed) > 1.5) return false;
+    return this.hitchPoint(v).distanceTo(this.lunetteWorld()) < HITCH_R;
   }
 
   _net(e) { const n = this.m.net; if (n) n.ev(['gm', this.m.guns.indexOf(this), ...e]); }
@@ -165,7 +179,7 @@ export class Howitzer {
   unhitch(fromNet = false, pose = null) {
     const v = this.towBy;
     if (!v) return;
-    v.towing = null; this.towBy = null; this._noHitch = v;
+    v.towing = null; this.towBy = null;
     if (pose) { this.pos.x = pose[0]; this.pos.z = pose[1]; this.rootYaw = pose[2]; this.pos.y = this.m.terrain.heightAt(this.pos.x, this.pos.z); }
     this.m.hud.message(`${this.name} отцеплена`, 2);
     this.m.audio.mech('switch');
@@ -272,14 +286,9 @@ export class Howitzer {
     // точки взаимодействия: наводчик — слева у маховиков, расчёт — справа у колеса или у проушины
     if (this.gunIt) {
       this.gunIt.pos.copy(this.seatWorld()); this.gunIt.pos.y += 1.0;
-      if (this.tr === 0 && !this.towBy) {
-        this.towIt.pos.set(0.95, 0.7, 0.15).applyMatrix4(g.body.matrixWorld);
-        this.towIt.r = 1.6;
-      } else {
-        this.lunetteWorld(this.towIt.pos);
-        this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
-        this.towIt.r = 2.0;
-      }
+      this.posIt.pos.set(0.95, 0.7, 0.15).applyMatrix4(g.body.matrixWorld);
+      this.lunetteWorld(this.towIt.pos);
+      this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
     }
   }
 

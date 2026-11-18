@@ -34,6 +34,7 @@ export class World {
     this.nav = null;
     this._stamp = 1;
     this._static = new Map(); // material -> {geos:[], cast:boolean}
+    this.staticTiles = []; // плитки статической геометрии 400×400 м — для отсечения по дальности
     this.interactables = [];
     this.targets = []; // мишени полигона
     this.smokes = []; // дымы из труб
@@ -159,11 +160,18 @@ export class World {
       const m = new THREE.Mesh(merged, mat);
       m.castShadow = e.cast; m.receiveShadow = true;
       this.scene.add(m);
+      merged.computeBoundingSphere();
+      this.staticTiles.push({ mesh: m, c: merged.boundingSphere.center, r: merged.boundingSphere.radius });
     }
     this._static.clear();
     this.nav = new NavGrid(navCenter.x, navCenter.z, navSize, 1);
     this.nav.rasterize(this);
     this._buildCover();
+  }
+
+  // Плитки дальше d от точки p скрываются (за туманом их всё равно не видно)
+  cullStatic(p, d) {
+    for (const t of this.staticTiles) t.mesh.visible = t.c.distanceTo(p) - t.r < d;
   }
 
   // ---------- геометрические запросы ----------

@@ -205,7 +205,15 @@ export class Player {
     b.vel.x += (wx - b.vel.x) * Math.min(1, acc * dt);
     b.vel.z += (wz - b.vel.z) * Math.min(1, acc * dt);
     // прыжок и гравитация
-    if (inp.bh('jump') && this.onGround && b.stance === 'stand') { this.vy = 3.8; this.onGround = false; this.stamina = Math.max(0, this.stamina - 0.06); }
+    if (inp.bh('jump') && this.onGround && b.stance !== 'prone' && this.stamina > 0.08) {
+      // присевший сначала встаёт и отталкивается слабее; с полной выкладкой прыжок ~0,6 м
+      const crouched = b.stance === 'crouch';
+      if (crouched) b.stance = 'stand';
+      this.vy = crouched ? 3.0 : 3.6; this.onGround = false; this.jumpT = 0.25;
+      this.stamina = Math.max(0, this.stamina - 0.07);
+      this.game.audio.footstep(null, true, 0.12);
+    }
+    if (this.jumpT > 0) this.jumpT -= dt;
     this.vy -= 9.81 * dt;
     _v.set(b.pos.x + b.vel.x * dt, b.pos.y, b.pos.z + b.vel.z * dt);
     const height = b.stance === 'prone' ? 0.5 : b.stance === 'crouch' ? 1.2 : 1.75;
@@ -222,7 +230,7 @@ export class Player {
       if (!this.onGround && this.fallStart !== null && this.fallStart - gy > 4) b.damage((this.fallStart - gy - 4) * 12, 'leg', null, null);
       b.pos.y = gy; this.vy = 0; this.onGround = true; this.fallStart = null;
     } else if (b.pos.y > gy + 0.25) { if (this.onGround) this.fallStart = b.pos.y; this.onGround = false; }
-    else { b.pos.y = gy; this.vy = Math.min(this.vy, 0); this.onGround = true; }
+    else if (this.vy <= 0 && !(this.jumpT > 0)) { b.pos.y = gy; this.vy = 0; this.onGround = true; } // прижим к склону — только не в прыжке
     const sp = Math.hypot(b.vel.x, b.vel.z);
     b.speed = sp;
     this.walkPhase += dt * sp * 2.2;
@@ -538,6 +546,7 @@ export class Player {
     if (Math.abs(v.speed) > 4) { this.game.hud.message('Слишком высокая скорость для высадки'); return; }
     v.unboard(this.body);
     this.vehicle = null; this.seat = -1;
+    this.holdE = -999; // E ещё нажата — не садиться обратно, пока клавишу не отпустят
     this.yaw = v.yaw + this.camYaw; this.pitch = 0;
     v.controls.throttle = 0; v.controls.steer = 0; v.controls.brake = 1;
   }
@@ -556,7 +565,10 @@ export class Player {
   updateVehicle(dt, mdx, mdy) {
     const g = this.game, inp = g.input, v = this.vehicle, b = this.body;
     if (!v.alive) { this.vehicle = null; this.seat = -1; b.vehicle = null; b.hidden = false; return; }
-    if (inp.bh('use')) { this.exitVehicle(); return; }
+    // водитель сдал задом к орудию в походном положении: E — прицепить
+    const towGun = this.seat === 0 && g.guns && g.guns.find((h) => h.canHitch(v));
+    this.towHint = towGun ? `<b>E</b> — прицепить ${towGun.name} (не выходя из машины)` : null;
+    if (inp.bh('use')) { if (towGun) towGun.hitch(v); else this.exitVehicle(); return; }
     if (inp.bh('slot1')) this.switchSeat(0);
     if (inp.bh('slot2')) this.switchSeat(1);
     if (inp.bh('crouch')) this.camThird = !this.camThird;

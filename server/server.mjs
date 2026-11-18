@@ -11,7 +11,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WSServer } from './ws-lite.mjs';
 
-const VER = 1;
+const VER = 2;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -75,11 +75,28 @@ const clean = (s, n = 24) => String(s || '').replace(/[<>&"'`\u0000-\u001f]/g, '
 const now = () => Date.now();
 
 function send(c, msg) { if (c.ws.readyState === 1) c.ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); }
+// Снаряжение игрока (выбирает сам в комнате): проверяем и обрезаем
+const KIT_WEAPONS = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];
+const KIT_HEAVY = ['rpg7', 'ptrd'];
+const KIT_ROLES = ['rifleman', 'rifleman_akm', 'mg', 'sniper', 'at', 'gp', 'medic'];
+const KIT_TOW = ['tigr', 'niva', 'mtlb'];
+function cleanKit(k) {
+  if (!k || typeof k !== 'object') return null;
+  return {
+    weapon: KIT_WEAPONS.includes(k.weapon) ? k.weapon : 'ak74m',
+    heavy: KIT_HEAVY.includes(k.heavy) ? k.heavy : null,
+    grenades: Math.max(0, Math.min(4, Math.round(+k.grenades || 0))),
+    squad: Array.isArray(k.squad) ? k.squad.filter((x) => KIT_ROLES.includes(x)).slice(0, 6) : [],
+    howitzer: !!k.howitzer,
+    tow: KIT_TOW.includes(k.tow) ? k.tow : 'tigr',
+  };
+}
+
 function roomPublic(r) {
   return {
     id: r.id, name: r.name, mode: r.mode, mission: r.mission, max: r.max, state: r.state, owner: r.owner, host: r.host,
     scoreLimit: r.scoreLimit, timeLimit: r.timeLimit, endsAt: r.endsAt, howitzer: r.howitzer, squad: r.squad,
-    players: [...r.players].map((id) => { const c = clients.get(id); return c ? { id, name: c.name, team: c.team, weapon: c.weapon, ready: c.ready, ping: c.ping, kills: c.kills, deaths: c.deaths } : null; }).filter(Boolean),
+    players: [...r.players].map((id) => { const c = clients.get(id); return c ? { id, name: c.name, team: c.team, weapon: c.weapon, kit: c.kit || null, ready: c.ready, ping: c.ping, kills: c.kills, deaths: c.deaths } : null; }).filter(Boolean),
     score: r.score,
   };
 }
@@ -220,6 +237,7 @@ function onMessage(c, raw) {
       if (!r) break;
       if (m.team && r.mode === 'pvp' && (m.team === 'negs' || m.team === 'denter') && r.state === 'lobby') c.team = m.team;
       if (m.weapon) c.weapon = clean(m.weapon, 16);
+      if (m.kit && r.state === 'lobby') { c.kit = cleanKit(m.kit); if (c.kit) c.weapon = c.kit.weapon; }
       if (m.ready !== undefined) c.ready = !!m.ready;
       if (r.owner === c.id && r.state === 'lobby') {
         if (m.mission) r.mission = clean(m.mission, 24);

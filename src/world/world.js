@@ -69,6 +69,20 @@ export class World {
     return o;
   }
 
+  // Убрать препятствие из сетки (подвижные укрытия: щит орудия при повороте, ящик со снарядами)
+  removeObstacle(o) {
+    if (!o || o.removed) return;
+    o.removed = true; o.blocksMove = o.blocksBullet = o.blocksSight = false; o.coverOk = false;
+    const i0 = Math.floor(o.minX / CELL), i1 = Math.floor(o.maxX / CELL);
+    const j0 = Math.floor(o.minZ / CELL), j1 = Math.floor(o.maxZ / CELL);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const arr = this.grid.get(i * 4096 + j);
+      if (!arr) continue;
+      const k = arr.indexOf(o);
+      if (k >= 0) arr.splice(k, 1);
+    }
+  }
+
   addBoxCollider({ x, z, y0, w, d, h, yaw = 0, ...opts }) {
     const c = Math.cos(yaw), s = Math.sin(yaw);
     const hx = w / 2, hz = d / 2;

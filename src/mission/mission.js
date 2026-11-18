@@ -23,9 +23,10 @@ import { WEAPONS, SCOPES, PRIMARY_CHOICES } from '../data/weapons.js';
 import { ROSTER, toSkill } from '../data/squad.js';
 import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/math.js';
 import { Howitzer } from '../artillery/howitzer.js';
-import { pvpMap } from '../data/pvp.js';
+import { pvpMap, NET_ROLES, kitOf } from '../data/pvp.js';
 import { grenadeModel } from '../weapons/guns.js';
 import { Drone, DRONE_RESPAWN } from '../entities/drone.js';
+import { crewItems } from '../artillery/crew.js';
 
 const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5, wseg: 416 }, medium: { seg: 384, shadow: 2048, snow: 1, wseg: 576 }, high: { seg: 480, shadow: 4096, snow: 1.4, wseg: 704 } };
 // Расширенная карта для миссий без собственного размера местности: район задачи (±1,2 км)
@@ -287,7 +288,7 @@ export class Mission {
     // игрок
     const st = def.start;
     const sp = this.net ? this.net.spawnPoint(def) : st;
-    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: !!this.setup.launcher, x: sp.x, z: sp.z, yaw: sp.yaw });
+    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: this.setup.launcher === true ? 'rpg7' : this.setup.launcher || null, grenades: this.setup.grenades, x: sp.x, z: sp.z, yaw: sp.yaw });
     if (this.pvp) this.player.setTeam(this.net.team);
     this.soldiers.push(this.player.body);
     // скрипт миссии
@@ -317,21 +318,29 @@ export class Mission {
     const vlist = this.pvp ? [] : def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
     const startV = vlist.map((v) => this.addVehicle(v.type, { x: v.x, z: v.z, yaw: v.yaw, team: 'negs' }));
     // гаубица Д-30 на прицепе (автопарк штаба / настройка комнаты)
-    const towGun = (v, name) => {
+    const towGun = (v, name, team = 'negs') => {
       const T = v.type, hx = v.pos.x + Math.sin(v.yaw) * (T.hitch + 4.2), hz = v.pos.z + Math.cos(v.yaw) * (T.hitch + 4.2);
-      const h = new Howitzer(this, { x: hx, z: hz, name, mode: 'travel', heading: v.yaw + Math.PI, towBy: v });
+      const h = new Howitzer(this, { x: hx, z: hz, name, mode: 'travel', heading: v.yaw + Math.PI, towBy: v, team });
       this.guns.push(h);
       return h;
     };
-    if (this.setup.howitzer && !this.pvp && def.id !== 'artillery' && startV.length) towGun(startV[0], 'Д-30 № 1');
-    if (this.pvp && this.setup.howitzer) {
-      for (const team of ['negs', 'denter']) {
-        const sp = pvpMap(def.id).spawns[team];
+    if (!this.net && this.setup.howitzer && def.id !== 'artillery' && startV.length) towGun(startV[0], 'Д-30 № 1');
+    if (this.net && def.id !== 'artillery') {
+      // сетевая игра: Д-30 с расчётом и выбранный тягач — у каждого, кто их взял
+      const room = this.net.room;
+      const perTeam = { negs: 0, denter: 0 };
+      room.players.forEach((pl) => {
+        const k = kitOf(pl, room);
+        if (!k.howitzer) return;
+        const team = this.pvp ? pl.team : 'negs';
+        const sp = this.pvp ? pvpMap(def.id).spawns[team] : { x: st.x, z: st.z, yaw: st.yaw };
+        const n = perTeam[team]++;
         const c = Math.cos(sp.yaw), s = Math.sin(sp.yaw);
-        const x = sp.x + c * 14, z = sp.z - s * 14;
-        const v = this.addVehicle(team === 'negs' ? 'tigr' : 'mtlb', { x, z, yaw: sp.yaw, team: 'negs' });
-        towGun(v, team === 'negs' ? 'Д-30 N.E.G.S' : 'Д-30 «Дентера»');
-      }
+        const ox = 14 + n * 7, oz = -6 - n * 3;
+        const x = sp.x + c * ox + s * oz, z = sp.z - s * ox + c * oz;
+        const v = this.addVehicle(VEHICLE_TYPES[k.tow] ? k.tow : 'tigr', { x, z, yaw: sp.yaw, team: 'negs' });
+        towGun(v, `Д-30 (${pl.name})`, team);
+      });
     }
     // отделение
     if (!def.noSquad) {
@@ -464,25 +473,17 @@ export class Mission {
 
   // Сетевая игра: отделение ИИ у каждого игрока (одинаковый порядок у всех; считает хост)
   buildNetSquads(def) {
-    const net = this.net, room = net.room, n = Math.max(0, Math.min(6, room.squad ?? 3));
+    const net = this.net, room = net.room;
     this.netSquads = new Map();
-    if (!n) return;
-    const ROLES = [
-      { role: 'sniper', weapon: 'svd', name: 'разведчик' },
-      { role: 'mg', weapon: 'pkm', name: 'пулемётчик' },
-      { role: 'rifleman', weapon: 'ak74m', name: 'стрелок' },
-      { role: 'at', weapon: 'ak74m', secondary: 'rpg7', name: 'гранатомётчик' },
-      { role: 'medic', weapon: 'ak74m', name: 'медик' },
-      { role: 'rifleman', weapon: 'akm', name: 'стрелок' },
-    ];
     room.players.forEach((pl, pi) => {
       const team = this.pvp ? pl.team : 'negs';
       const sp = this.pvp ? pvpMap(def.id).spawns[team] : def.start;
       const grp = this.addGroup(new Group(this, team, 'squad-' + pl.id));
       grp.leaderId = pl.id;
       this.netSquads.set(pl.id, grp);
-      for (let i = 0; i < n; i++) {
-        const R = ROLES[i];
+      const roles = kitOf(pl, room).squad.map((k) => NET_ROLES[k]).filter(Boolean);
+      for (let i = 0; i < roles.length; i++) {
+        const R = roles[i];
         const c = Math.cos(sp.yaw), sn = Math.sin(sp.yaw);
         const ox = ((i % 3) - 1) * 3 + (pi % 4) * 1.2, oz = 4 + Math.floor(i / 3) * 3 + Math.floor(pi / 4) * 2;
         const x = sp.x + c * ox + sn * oz, z = sp.z - sn * ox + c * oz;
@@ -799,6 +800,10 @@ export class Mission {
       this.hud.message('Вы погибли', 3, true); this.after(2.5, () => this.fail('Сержант Кей погиб')); return;
     }
     if (s.isRemote) return;
+    if (s.isCrew) {
+      if (s.team === this.myTeam) this.hud.radio(s.gunRef ? s.gunRef.name : 'Расчёт', `Номер расчёта (${s.crewRole}) выбыл!${s.gunRef && !s.gunRef.crewAlive() ? ' Расчёт выбит — заряжать придётся самим.' : ''}`, true);
+      return;
+    }
     if (s.squadOf !== undefined) {
       // сетевая игра: боец отделения игрока; хост сообщает серверу (очки PvP, лента)
       if (this.net && this.net.isHost) {
@@ -941,6 +946,7 @@ export class Mission {
   onDestructible(d, by) {
     if (!d.alive) return;
     d.alive = false;
+    if (d.kind === 'ammo') { d.gun.boxExplode(by); return; }
     if (d.kind === 'art') {
       this.fx.addFire(d.pos.clone(), 1.6, 300);
       this.fx.addSmoke(d.pos.clone().add(new THREE.Vector3(3, 0, 2)), 2);
@@ -1341,6 +1347,25 @@ export class Mission {
     if (Math.abs(cam.fov - fov) > 0.01 || cam.aspect !== W / H) { cam.fov = fov; cam.aspect = W / H; cam.updateProjectionMatrix(); }
     cam.updateMatrixWorld(true);
     // оружие от первого лица
+    // снаряд или гильза с зарядом в руках (игрок заряжает сам) — вместо оружия
+    const carry = p.carry && !v && !p.gun ? p.carry.item : null;
+    if (!this.vmCarry && carry) {
+      const I = crewItems();
+      this.vmCarry = { shell: I.shell.clone(), charge: I.charge.clone() };
+      for (const o of Object.values(this.vmCarry)) { o.rotation.set(0.15, Math.PI / 2, 0); this.vmScene.add(o); }
+    }
+    if (this.vmCarry) for (const [k, o] of Object.entries(this.vmCarry)) {
+      o.visible = k === carry;
+      if (o.visible) { o.position.set(0.02, -0.34 + Math.sin(p.walkPhase * 2) * 0.012, -0.52); }
+    }
+    if (carry) {
+      if (this.viewmodel.cur) this.viewmodel.cur.root.visible = false;
+      if (this.viewmodel.arms) this.viewmodel.arms.root.visible = false;
+      this.vmVisible = b.alive;
+      if (this.vmVisible) { const sd = this.lights.sunDir.clone().applyQuaternion(look.quaternion.clone().invert()); this.vmSun.position.copy(sd); this.vmCamera.fov = cam.fov; this.vmCamera.aspect = W / H; this.vmCamera.updateProjectionMatrix(); }
+      this.fx.setView(cam, H, this.scene.fog);
+      return;
+    }
     this.vmVisible = vmVisible;
     if (vmVisible) {
       this.viewmodel.setKind(p.vmKind());

@@ -430,7 +430,7 @@ export class Projectiles {
       if (d < ex.radius * 2.2) v.damageBlast(ex, d, owner);
     }
     for (const dd of g.world.destructibles) {
-      if (!dd.alive) continue;
+      if (!dd.alive || dd.stowed) continue;
       const d = Math.max(0, dd.pos.distanceTo(pos) - (dd.r || 1));
       if (dd === directDestructible) { dd.hp -= ex.dmg * (ex.pen > 100 ? 3 : 1.2); }
       else if (d < ex.radius * 1.5) dd.hp -= ex.dmg * (1 - d / (ex.radius * 1.5)) * 0.8;

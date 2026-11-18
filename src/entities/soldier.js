@@ -64,7 +64,7 @@ export class Soldier {
     if (opts.secondary) { this.secondary = { id: opts.secondary, def: WEAPONS[opts.secondary], mag: 1, mags: WEAPONS[opts.secondary].mags }; }
     this.faction = opts.faction || (this.team === 'negs' ? 'negs' : 'denter');
     this._modelOpts = { scale: opts.scale || 1, seed: this.id * 7 + (opts.x | 0) };
-    if (!this.isPlayer) {
+    if (!this.isPlayer && !opts.noModel) {
       this.model = this._makeModel();
       game.scene.add(this.model.root);
       this.blob = blobShadow(0.9, 0.9, 0.45); game.scene.add(this.blob);

@@ -27,7 +27,8 @@ export class GunUI {
     const diff = h.elM - h.wantEl;
     const bub = Math.max(-1, Math.min(1, diff / 12));
     const ok = Math.abs(diff) < 0.6;
-    const st = h.loaded ? `<b class="ok">ЗАРЯЖЕНО</b> (заряд ${CHARGES[h.loaded.ci].name}, ${h.loaded.fuze === 'О' ? 'оск.' : 'фуг.'})` : h.loadT > 0 ? `заряжается… ${h.loadT.toFixed(1)} с` : h.recoilT < 1.4 ? 'накат ствола…' : '<span class="warn">не заряжено</span> — R';
+    const ls = h.loadStatus();
+    const st = h.loaded ? `<b class="ok">ЗАРЯЖЕНО</b> (заряд ${CHARGES[h.loaded.ci].name}, ${h.loaded.fuze === 'О' ? 'оск.' : 'фуг.'})` : ls ? `заряжают: ${ls}` : '<span class="warn">не заряжено</span> — R';
     this.panel.innerHTML = `
       <div class="gt">${h.name} · наводчик</div>
       <div class="gr"><span>Снаряд</span><b>ОФ-462</b></div>

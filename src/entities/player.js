@@ -3,18 +3,24 @@
 // Никакой точки прицеливания: пуля летит из дульного среза по оси ствола.
 import * as THREE from 'three';
 import { Soldier, solverFor } from './soldier.js';
-import { WEAPONS, SCOPES, AMMO, defaultPattern } from '../data/weapons.js';
+import { WEAPONS, SCOPES, AMMO, defaultPattern, loadCount } from '../data/weapons.js';
 import { clamp, lerp, randn, rand, MIL, wrapAngle } from '../core/math.js';
 import { MODEL_INFO } from '../weapons/viewmodel.js';
 
-const VM_KIND = { ak74m: 'ak74', ak74m_gp: 'ak74gp', ak74m_1p78: 'ak74scope', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg7', pkp_mount: 'pkm' };
+const VM_KIND = { ak74m: 'ak74', ak74m_gp: 'ak74gp', ak74m_1p78: 'ak74scope', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg7', pkp_mount: 'pkm', ptrd: 'ptrd' };
 
 export function makeState(id, loads = null) {
   const def = WEAPONS[id];
   const st = { def, id, mag: def.mag, spare: Array(def.mags).fill(def.mag), sightIdx: 0, mode: def.modes[0], optic: true };
   // порядок патронов в магазине/ленте: [0] — первый выстрел
   const pat = loads && loads[id];
-  st.pattern = pat && pat.length === def.mag ? pat.slice() : (def.ammo.startsWith('545') || def.ammo.startsWith('762') ? defaultPattern(id) : null);
+  if (def.pouch) {
+    // однозарядное (ПТРД): весь носимый запас по порядку, первый — в патроннике
+    const n = loadCount(id);
+    st.pouch = (pat && pat.length === n ? pat : defaultPattern(id)).slice();
+    st.chamber = st.pouch.shift();
+    st.pattern = null;
+  } else st.pattern = pat && pat.length === def.mag ? pat.slice() : (def.ammo.startsWith('545') || def.ammo.startsWith('762') ? defaultPattern(id) : null);
   if (def.ugl) { const u = WEAPONS[def.ugl]; st.ugl = { def: u, id: def.ugl, mag: 1, spare: Array(u.mags).fill(1), sightIdx: 3 }; }
   if (def.sight.type === 'scope' && def.sight.scope === 'pso1') st.sightIdx = 2;
   if (def.sight.type === 'iron') st.sightIdx = 0;
@@ -35,8 +41,12 @@ export class Player {
     this.stamina = 1; this.breath = 1; this.breathLock = 0; this.holding = false;
     const loads = (game.app && game.app.save && game.app.save.loads) || null;
     this.slots = [makeState(primary, loads)];
-    this.slots.push(loadout.launcher ? makeState('rpg7') : null);
-    this.slots.push({ id: 'grenade', grenade: true, count: 3 });
+    // второй слот: РПГ-7В или ПТРД-41 (launcher: true — по-старому РПГ)
+    const heavy = loadout.launcher === true ? 'rpg7' : loadout.launcher || null;
+    this.slots.push(heavy && WEAPONS[heavy] ? makeState(heavy, loads) : null);
+    const ng = loadout.grenades ?? 3;
+    this.body.grenades = ng;
+    this.slots.push({ id: 'grenade', grenade: true, count: ng });
     this.slots.push({ id: 'b8', binocular: true });
     this.cur = 0;
     this.aim = false; this.aimT = 0;
@@ -164,7 +174,12 @@ export class Player {
     // обзор мышью
     const fovK = this.scoped ? (g.camera.fov / g.settings.fov) : this.aimT > 0.5 ? 0.75 : 1;
     const mdx = inp.dx * sens * fovK, mdy = inp.dy * sens * fovK * (g.settings.invertY ? -1 : 1);
-    if (this.gun) { this.gun.control(dt); this.shake = Math.max(0, this.shake - dt * 2.5); this.interact = null; return; }
+    if (this.gun) {
+      this.gun.control(dt); this.shake = Math.max(0, this.shake - dt * 2.5); this.interact = null;
+      // наводчик стоит у маховиков: хитбоксы — там же (иначе по нему нельзя попасть)
+      if (this.gun) { this.yaw = -this.gun.az * MIL; b.yaw = b.aimYaw = this.yaw; this.updateHitboxes(); }
+      return;
+    }
     if (this.vehicle) { this.updateVehicle(dt, mdx, mdy); return; }
     this.yaw -= mdx; this.pitch = clamp(this.pitch - mdy, -1.45, 1.45);
     // инерция оружия: ствол отстаёт от поворота головы
@@ -199,10 +214,15 @@ export class Player {
     // выдохся: бег недоступен, пока не восстановится хотя бы треть выносливости и не отпущен Shift
     if (this.stamina <= 0.03 && !this.winded) { this.winded = true; this.game.hud.message('Выдохся — бег недоступен, нужно отдышаться', 2); }
     if (this.winded && this.stamina > 0.35) this.winded = false;
-    const wantSprint = inp.bd('sprint') && iz < 0 && !this.aim && b.stance !== 'prone' && !this.winded && this.medT <= 0;
+    const wantSprint = inp.bd('sprint') && iz < 0 && !this.aim && b.stance !== 'prone' && !this.winded && this.medT <= 0 && !this.carry;
     if (wantSprint && b.stance === 'crouch') b.stance = 'stand';
     let speed = b.stance === 'prone' ? 0.55 : b.stance === 'crouch' ? 1.5 : 2.5;
     if (wantSprint) speed = 5.3;
+    // тяжёлое оружие (ПТРД 17 кг): за спиной — медленнее, в руках — ещё медленнее, бег короче
+    const hv = this.slots[1] && this.slots[1].def.heavy;
+    if (hv) { speed *= this.cur === 1 ? 0.7 : 0.86; if (wantSprint) this.stamina = Math.max(0, this.stamina - dt * 0.07); }
+    // снаряд 22 кг или гильза с зарядом в руках: только шагом
+    if (this.carry) { speed = Math.min(speed, this.carry.item === 'shell' ? 1.9 : 2.2); if (b.stance === 'prone') b.stance = 'crouch'; }
     if (this.aimT > 0.5) speed *= 0.55;
     if (iz > 0) speed *= 0.75;
     if (b.health < 40) speed *= 0.8;
@@ -217,11 +237,11 @@ export class Player {
     b.vel.x += (wx - b.vel.x) * Math.min(1, acc * dt);
     b.vel.z += (wz - b.vel.z) * Math.min(1, acc * dt);
     // прыжок и гравитация
-    if (inp.bh('jump') && this.onGround && b.stance !== 'prone' && this.stamina > 0.08) {
+    if (inp.bh('jump') && this.onGround && b.stance !== 'prone' && this.stamina > 0.08 && !this.carry) {
       // присевший сначала встаёт и отталкивается слабее; с полной выкладкой прыжок ~0,6 м
       const crouched = b.stance === 'crouch';
       if (crouched) b.stance = 'stand';
-      this.vy = crouched ? 3.0 : 3.6; this.onGround = false; this.jumpT = 0.25;
+      this.vy = (crouched ? 3.0 : 3.6) * (this.slots[1] && this.slots[1].def.heavy ? 0.82 : 1); this.onGround = false; this.jumpT = 0.25;
       this.stamina = Math.max(0, this.stamina - 0.07);
       this.game.audio.footstep(null, true, 0.12);
     }
@@ -258,6 +278,12 @@ export class Player {
     const g = this.game, b = this.body;
     this.fireCD -= dt; this.flashT -= dt;
     this.shotAge = (this.shotAge ?? 9) + dt;
+    // руки заняты снарядом: оружие за спиной; G — бросить груз
+    if (this.carry) {
+      this.aim = false; this.aimT = lerp(this.aimT, 0, 1 - Math.exp(-11 * dt)); this.scoped = false;
+      if (inp.hit('KeyG')) { this.game.hud.message('Груз брошен', 1.5); this.carry = null; }
+      return;
+    }
     // смена оружия
     let want = -1;
     for (let i = 0; i < 4; i++) if (inp.bh('slot' + (i + 1))) want = i;
@@ -324,6 +350,7 @@ export class Player {
     const nm = aw.spare.shift();
     if (keep > 0 && aw.def.mag > 1) { aw.spare.push(keep - 1); aw.mag = nm + 1; }
     else aw.mag = nm;
+    if (aw.pouch) aw.chamber = aw.pouch.shift() || aw.def.ammo;
     aw.spare = aw.spare.filter((x) => x > 0);
   }
 
@@ -337,7 +364,7 @@ export class Player {
     // раскачка
     const sw = this.sway;
     sw.t += dt;
-    const stanceF = b.stance === 'prone' ? (def && def.id === 'pkm' ? 0.2 : 0.33) : b.stance === 'crouch' ? 0.62 : 1;
+    const stanceF = b.stance === 'prone' ? (def && def.id === 'pkm' ? 0.2 : def && def.bipod ? 0.09 : 0.33) : b.stance === 'crouch' ? 0.62 : 1;
     const mounted = this.vehicle ? 0.35 : 1;
     let A = 0.0017 * (def ? def.sway : 1) * stanceF * mounted * (1 + (1 - this.stamina) * 2.2) * (1 + this.suppression * 1.6) * (b.health < 50 ? 1.4 : 1);
     if (this.holding) A *= 0.18;
@@ -411,6 +438,7 @@ export class Player {
 
   // Патрон, который сейчас будет выстрелен
   nextRound(aw) {
+    if (aw.pouch) return aw.chamber || aw.def.ammo;
     if (!aw.pattern) return aw.def.ammo;
     const cap = aw.def.mag;
     const i = Math.max(0, Math.min(cap - 1, cap - aw.mag));
@@ -453,7 +481,7 @@ export class Player {
     this.rec.vp += up * 55; this.rec.vy += randn() * side * 45; this.rec.kick = 1;
     this.pitch += up * def.recoil.cam * (0.8 + Math.random() * 0.4);
     this.yaw += randn() * side * def.recoil.cam * 0.6;
-    this.shake = Math.max(this.shake, def.id === 'rpg7' ? 0.6 : def.id === 'svd' ? 0.25 : 0.08);
+    this.shake = Math.max(this.shake, def.id === 'rpg7' ? 0.6 : def.id === 'ptrd' ? 0.75 : def.id === 'svd' ? 0.25 : 0.08);
     if (def.mag === 1 && aw.spare.length) {
       // одноразовая перезарядка гранатомёта
       this.reloadTotal = this.reloadT = def.reload + 0.3;
@@ -536,6 +564,7 @@ export class Player {
   // ================= техника =================
   enterVehicle(v) {
     const b = this.body;
+    this.carry = null;
     let seat = -1;
     if (!v.seats[0]) seat = 0;
     else if (v.gunWeapon && !v.seats[1]) seat = 1;
@@ -647,6 +676,7 @@ export class Player {
   }
 
   respawn(x, z, yaw) {
+    this.carry = null;
     const g = this.game, b = this.body;
     if (this.gun) this.gun.dismount(this);
     if (this.vehicle) { this.vehicle.removeOccupant(b); this.vehicle = null; this.seat = -1; }
@@ -659,7 +689,7 @@ export class Player {
     const loads = (g.app && g.app.save && g.app.save.loads) || null;
     const prim = this.slots[0] ? this.slots[0].id : 'ak74m';
     this.slots[0] = makeState(prim, loads);
-    if (this.slots[1]) this.slots[1] = makeState('rpg7');
+    if (this.slots[1]) this.slots[1] = makeState(this.slots[1].id, loads);
     this.slots[2].count = 3; b.grenades = 3; b.medkits = 2;
     this.cur = 0;
     this.updateHitboxes();
@@ -669,6 +699,7 @@ export class Player {
     for (const s of this.slots) {
       if (!s || s.grenade || s.binocular) continue;
       s.spare = Array(s.def.mags).fill(s.def.mag);
+      if (s.pouch) { const f = makeState(s.id, (this.game.app && this.game.app.save && this.game.app.save.loads) || null); s.pouch = f.pouch; if (s.mag === 0) { s.chamber = f.chamber; } else s.pouch.pop(); }
       if (s.ugl) s.ugl.spare = Array(s.ugl.def.mags).fill(1);
     }
     this.slots[2].count = 3; this.body.grenades = 3;

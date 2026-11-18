@@ -199,3 +199,8 @@ table.ft tr:nth-child(odd) td { background: #ebe5d5; }
 #hud .dronebox .dvtop { position: absolute; left: 0; right: 0; top: 0; font: 600 11px Arial, sans-serif; color: #c8f0d8; background: rgba(6, 10, 12, 0.55); padding: 2px 6px; letter-spacing: 0.5px; }
 #hud .dronebox .dvbot { position: absolute; left: 0; right: 0; bottom: -21px; font-size: 11px; background: rgba(8, 12, 16, 0.8); padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #hud .dronebox .dvlost { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #ff5a48; font-weight: 700; letter-spacing: 3px; text-shadow: 0 0 6px #000; }
+#hud .netping { position: absolute; left: 50%; top: 78px; transform: translateX(-50%); font-size: 11px; color: #9fd6a8; text-shadow: 0 1px 2px #000; pointer-events: none; }
+#hud .netping.mid { color: #e8d070; } #hud .netping.bad { color: #ff7a60; }
+.panel .netform.kit .sq { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.panel .netform.kit .sq select { min-width: 0; width: 150px; }
+.panel .netform.kit label { min-width: 300px; }

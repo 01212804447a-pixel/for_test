@@ -16,6 +16,7 @@ import { preload, hasAssets } from './core/assets.js';
 import { NetClient } from './net/net.js';
 import { NetSession } from './net/session.js';
 import { WEAPONS } from './data/weapons.js';
+import { kitOf } from './data/pvp.js';
 
 class MenuScene {
   constructor(app) {
@@ -206,9 +207,11 @@ class App {
         const session = new NetSession(this, this.net, start);
         const pvp = room.mode === 'pvp';
         const me = room.players.find((p) => p.id === this.net.id) || {};
-        const primary = pvp ? (WEAPONS[me.weapon] ? me.weapon : 'ak74m') : this.save.primary;
+        // своё снаряжение — как выбрано в комнате
+        const kit = kitOf(me, room);
+        const primary = WEAPONS[kit.weapon] ? kit.weapon : 'ak74m';
         const n = room.players.length;
-        const m = new Mission(this, def, { squad: [], primary, launcher: pvp ? false : this.save.launcher, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: room.howitzer !== false, net: session });
+        const m = new Mission(this, def, { squad: [], primary, launcher: kit.heavy || null, grenades: kit.grenades, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: false, net: session });
         this.hud.reset();
         m.build();
         this.mission = m;

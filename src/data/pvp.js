@@ -15,3 +15,29 @@ export const pvpMap = (id) => PVP_MAPS.find((m) => m.id === id) || PVP_MAPS[0];
 // Оружие для PvP (выбирается в комнате)
 export const PVP_WEAPONS = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];
 export const TEAM_NAMES = { negs: 'N.E.G.S', denter: '«Дентер»' };
+
+// Состав отделения ИИ в сетевой игре — по выбору игрока
+export const NET_ROLES = {
+  rifleman: { role: 'rifleman', weapon: 'ak74m', name: 'стрелок' },
+  rifleman_akm: { role: 'rifleman', weapon: 'akm', name: 'стрелок (АКМ)' },
+  mg: { role: 'mg', weapon: 'pkm', name: 'пулемётчик' },
+  sniper: { role: 'sniper', weapon: 'svd', name: 'разведчик-снайпер' },
+  at: { role: 'at', weapon: 'ak74m', secondary: 'rpg7', name: 'гранатомётчик' },
+  gp: { role: 'rifleman', weapon: 'ak74m_gp', name: 'стрелок с ГП-25' },
+  medic: { role: 'medic', weapon: 'ak74m', name: 'медик' },
+};
+export const TOW_CHOICES = ['tigr', 'niva', 'mtlb'];
+// Снаряжение игрока в сетевой игре (комната): оружие, тяжёлое оружие, гранаты, отделение, Д-30 и тягач
+export function defaultKit(save = {}, room = {}) {
+  const sq = ['sniper', 'mg', 'rifleman', 'at', 'medic', 'rifleman_akm'].slice(0, room.squad ?? 3);
+  return {
+    weapon: PVP_WEAPONS.includes(save.primary) ? save.primary : 'ak74m',
+    heavy: save.launcher === true ? 'rpg7' : save.launcher || null,
+    grenades: 3, squad: sq, howitzer: false, tow: 'tigr',
+  };
+}
+export function kitOf(pl, room) {
+  const k = pl && pl.kit;
+  if (!k) return defaultKit({ primary: pl && pl.weapon }, room || {});
+  return k;
+}

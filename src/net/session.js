@@ -17,11 +17,34 @@ const r3 = (x) => Math.round(x * 1000) / 1000;
 const wrap = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 
-// Буфер интерполяции: показываем состояние ~120 мс назад, между двумя снимками
+// Буфер интерполяции. Снимки ставятся на шкалу времени ОТПРАВИТЕЛЯ (ts — его performance.now),
+// переведённую в местное время по наименьшей наблюдавшейся задержке: так пачки пакетов,
+// пришедшие «гурьбой» после подвисшего кадра или сетевой задержки, не дают рывков.
+// Задержка показа подстраивается под частоту снимков и разброс доставки (в LAN ~50–70 мс);
+// если новых данных нет, движение коротко продолжается по последней скорости (≤ 0,12 с).
 class Interp {
-  constructor(angles = [], delay = 0.12) { this.buf = []; this.angles = angles; this.delay = delay; }
-  push(v) { const t = performance.now() / 1000; const b = this.buf; if (b.length && t - b[b.length - 1].t < 0.004) b[b.length - 1].v = v; else b.push({ t, v }); if (b.length > 24) b.shift(); }
-  reset() { this.buf.length = 0; }
+  constructor(angles = [], delay = 0.1) {
+    this.buf = []; this.angles = angles; this.base = delay;
+    this.off = null; this.gap = 0.05; this.jit = 0.012; this.lastTs = null;
+  }
+  push(v, ts) {
+    const now = performance.now() / 1000;
+    if (ts == null || !isFinite(ts)) ts = now;
+    const o = now - ts;
+    if (this.off == null || o < this.off) this.off = o;
+    else this.off += Math.min(o - this.off, 0.0004); // медленный дрейф часов
+    if (this.lastTs != null) {
+      const g = ts - this.lastTs;
+      if (g <= 0) return; // устаревший или повторный снимок
+      if (g < 1) { this.gap += (g - this.gap) * 0.1; this.jit += (Math.max(0, o - this.off) - this.jit) * 0.1; }
+    }
+    this.lastTs = ts;
+    const b = this.buf;
+    b.push({ t: ts + this.off, v });
+    if (b.length > 32) b.shift();
+  }
+  reset() { this.buf.length = 0; this.lastTs = null; }
+  get delay() { return Math.min(0.25, Math.max(0.04, this.gap * 1.25 + this.jit * 2 + 0.012)); }
   sample(out = []) {
     const b = this.buf;
     if (!b.length) return null;
@@ -29,7 +52,18 @@ class Interp {
     let i = b.length - 1;
     while (i > 0 && b[i].t > rt) i--;
     const a = b[i], n = b[i + 1];
-    if (!n || rt <= a.t) { for (let k = 0; k < a.v.length; k++) out[k] = a.v[k]; return out; }
+    if (!n) {
+      // данных новее нет — продолжаем по последней скорости, недолго
+      const p = b[i - 1];
+      const ex = p ? Math.min(0.12, Math.max(0, rt - a.t)) : 0;
+      const dt = p ? Math.max(1e-3, a.t - p.t) : 1;
+      for (let k = 0; k < a.v.length; k++) {
+        const x = a.v[k];
+        out[k] = ex > 0 ? x + (this.angles.includes(k) ? wrap(x - p.v[k]) : x - p.v[k]) * (ex / dt) : x;
+      }
+      return out;
+    }
+    if (rt <= a.t) { for (let k = 0; k < a.v.length; k++) out[k] = a.v[k]; return out; }
     const f = Math.min(1, (rt - a.t) / Math.max(1e-3, n.t - a.t));
     for (let k = 0; k < a.v.length; k++) {
       const x = a.v[k], y = n.v[k];
@@ -137,8 +171,9 @@ export class NetSession {
   onBuilt() {
     const m = this.m, root = m.hud.root;
     this.el = {
-      feed: document.createElement('div'), board: document.createElement('div'), top: document.createElement('div'), dead: document.createElement('div'), tags: document.createElement('div'),
+      feed: document.createElement('div'), board: document.createElement('div'), top: document.createElement('div'), dead: document.createElement('div'), tags: document.createElement('div'), ping: document.createElement('div'),
     };
+    this.el.ping.className = 'netping';
     this.el.feed.className = 'netfeed'; this.el.board.className = 'netboard'; this.el.top.className = 'nettop'; this.el.dead.className = 'netdead'; this.el.tags.className = 'nettags';
     for (const e of Object.values(this.el)) root.appendChild(e);
     this.msg(this.pvp ? `Противостояние: ${TEAM_NAMES.negs} против ${TEAM_NAMES.denter}. Ваша команда — <b>${TEAM_NAMES[this.team]}</b>.` : `Кооператив: ${this.nPlayers} ${this.nPlayers > 1 && this.nPlayers < 5 ? 'игрока' : 'игроков'}. ${this.isHost ? 'Вы — хост (ИИ и задачи считаются у вас).' : 'Хост — создатель комнаты.'}`);
@@ -221,11 +256,12 @@ export class NetSession {
     if (!p) { this.addPeer({ id: st.id, name: '?', team: 'negs' }); p = this.peers.get(st.id); }
     p.last = st;
     if (st.w && st.w !== p.weapon && WEAPONS[st.w] && WEAPONS[st.w].sight) p.weapon = st.w;
-    p.interp.push([st.p[0], st.p[1], st.p[2], st.yaw, st.ay, st.ap, st.v[0], st.v[1]]);
+    const ts = st.ts != null ? st.ts / 1000 : null;
+    p.interp.push([st.p[0], st.p[1], st.p[2], st.yaw, st.ay, st.ap, st.v[0], st.v[1]], ts);
     if (st.vs && st.veh >= 0) {
       const vi = this.vehInterp[st.veh] || (this.vehInterp[st.veh] = { src: null, buf: new Interp([3]) });
       if (vi.src !== st.id) { vi.src = st.id; vi.buf.reset(); }
-      vi.buf.push(st.vs);
+      vi.buf.push(st.vs, ts);
     }
   }
 
@@ -233,6 +269,7 @@ export class NetSession {
     if (this.isHost || !this.m) return;
     const m = this.m;
     this.lastWorld = w;
+    const wts = w.ts != null ? w.ts / 1000 : null;
     // ИИ
     for (const a of w.ai || []) {
       const i = a[0], s = m.netAI[i];
@@ -242,7 +279,7 @@ export class NetSession {
       if ((a[10] & 1) && !s.alive) { s.revive(a[1], a[2], a[3], a[4]); if (this.aiInterp[i]) this.aiInterp[i].reset(); }
       if (!(a[10] & 1)) { if (s.alive) { if (s.vehicle) { s.vehicle.removeOccupant(s); s.vehicle = null; s.hidden = false; } s.pos.set(a[1], a[2], a[3]); s.yaw = a[4]; s.die(null); } continue; }
       const it = this.aiInterp[i] || (this.aiInterp[i] = new Interp([3, 4]));
-      it.push([a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[9]]);
+      it.push([a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[9]], wts);
       s._net = a;
     }
     // техника: прочность и положение (если ею управляет хост)
@@ -254,7 +291,7 @@ export class NetSession {
       if (v[11]) {
         const vi = this.vehInterp[v[0]] || (this.vehInterp[v[0]] = { src: null, buf: new Interp([3]) });
         if (vi.src !== 'host') { vi.src = 'host'; vi.buf.reset(); }
-        vi.buf.push([v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[12] || 0, v[13] || 0]);
+        vi.buf.push([v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[12] || 0, v[13] || 0], wts);
       }
     }
     // БПЛА
@@ -491,8 +528,8 @@ export class NetSession {
     const m = this.m;
     if (!m) return;
     this.stT += dt; this.wsT += dt;
-    if (this.stT >= 0.05) { this.stT = 0; this.sendState(); }
-    if (this.isHost && this.wsT >= 0.1) { this.wsT = 0; this.sendWorld(); }
+    if (this.stT >= 1 / 30) { this.stT = 0; this.sendState(); }
+    if (this.isHost && this.wsT >= 1 / 15) { this.wsT = 0; this.sendWorld(); }
     if (this.out.length) { this.net.send({ t: 'ev', list: this.out }); this.out = []; }
     if (this.hostOut.length) { this.net.send({ t: 'ev', to: 'host', list: this.hostOut }); this.hostOut = []; }
     // кооператив: вся группа погибла — задание провалено
@@ -509,7 +546,7 @@ export class NetSession {
     const m = this.m, p = m.player, b = p.body;
     const aw = p.activeWeapon, ws = p.state;
     const st = {
-      t: 'st', p: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z)], v: [r2(b.vel.x), r2(b.vel.z)],
+      t: 'st', ts: Math.round(performance.now()), p: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z)], v: [r2(b.vel.x), r2(b.vel.z)],
       yaw: r3(p.yaw), ay: r3(p.yaw), ap: r3(p.pitch), s: Math.max(0, STANCES.indexOf(b.stance)),
       w: aw ? aw.def.id : ws ? ws.id : '', aim: p.aimT > 0.5 ? 1 : 0, rl: p.reloadT > 0 ? 1 : 0,
       hp: Math.max(0, Math.round(b.health)), alive: b.alive ? 1 : 0,
@@ -534,7 +571,7 @@ export class NetSession {
     const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll)]);
     const st = m.stages[m.stageIdx];
     this.net.send({
-      t: 'ws', st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',
+      t: 'ws', ts: Math.round(performance.now()), st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',
       ai, vh, dd: m.world.destructibles.map((d) => (d.alive === false ? '0' : '1')).join(''), it: m.netItems.map((it) => (it.done ? '1' : '0')).join(''),
       dr: (m.drones || []).map((d) => d.netState()),
     });
@@ -553,7 +590,13 @@ export class NetSession {
       const tl = this.timeLeft != null ? `${Math.floor(this.timeLeft / 60)}:${String(this.timeLeft % 60).padStart(2, '0')}` : '';
       const th = `<span class="tn">${TEAM_NAMES.negs}</span> <b>${this.score.negs}</b> : <b>${this.score.denter}</b> <span class="td">${TEAM_NAMES.denter}</span>${tl ? ` · ${tl}` : ''} · до ${this.room.scoreLimit}`;
       if (th !== this._th) { el.top.innerHTML = th; this._th = th; }
-    } else if (!this._th) { el.top.innerHTML = `Кооператив · ${this.isHost ? 'хост' : 'клиент'}`; this._th = 'c'; }
+    } else {
+      const th = `Кооператив · ${this.isHost ? 'хост' : 'клиент'}`;
+      if (th !== this._th) { el.top.innerHTML = th; this._th = th; }
+    }
+    // пинг до сервера (раз в 2 с)
+    const pg = `пинг ${Math.round(this.net.rtt || 0)} мс`;
+    if (pg !== this._pg) { el.ping.textContent = pg; el.ping.className = 'netping' + (this.net.rtt > 120 ? ' bad' : this.net.rtt > 60 ? ' mid' : ''); this._pg = pg; }
     // экран гибели
     if (!m.player.body.alive && this.respawnAt) {
       const left = Math.max(0, this.respawnAt - m.time);

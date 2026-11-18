@@ -10,13 +10,15 @@ import { buildD30, D30, shellGeometry } from './d30model.js';
 import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid } from './d30.js';
 import { WEAPONS } from '../data/weapons.js';
 import { charAvailable } from '../entities/charRig.js';
-import { CrewMan } from './crew.js';
+import { CrewSoldier, crewItems as crewItemsLazy } from './crew.js';
 import { Parts } from '../weapons/gunkit.js';
 import { GunUI } from './gunUI.js';
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const EL_MIN = -117, EL_MAX = 1167; // −7° … +70°
-const LOAD_TIME = 5.5;
+const BOX_DIST = 11;    // ящик с боеприпасами — в 11 м за орудием (по наставлению 10–15 м)
+const BOX_N = 50;       // в ящике 50 снарядов и 50 зарядов
+const V_RUN = 3.4, V_CARRY = 2.3; // скорость номера расчёта налегке и со снарядом 22 кг, м/с
 const TRANS_TIME = 16;
 const HITCH_R = 4.0;     // фаркоп у проушины ближе этого — можно прицепить   // перевод из боевого в походное и обратно силами расчёта, с
 const AXLE = 0.15;       // ось колёс от оси вращения лафета (к проушине — +Z)
@@ -27,8 +29,8 @@ const VIEWS = ['eye', 'pano', 'op4m', 'side'];
 export const VIEW_NAMES = { eye: 'Обзор', pano: 'Панорама ПГ-1М', op4m: 'Прицел прямой наводки ОП4М-45', side: 'Вид со стороны' };
 
 export class Howitzer {
-  constructor(m, { x, z, dir = 0, name = 'Д-30 № 1', mode = 'combat', heading = null, towBy = null }) {
-    this.m = m; this.name = name;
+  constructor(m, { x, z, dir = 0, name = 'Д-30 № 1', mode = 'combat', heading = null, towBy = null, team = 'negs' }) {
+    this.m = m; this.name = name; this.team = team;
     this.model = buildD30();
     const y0 = m.terrain.heightAt(x, z);
     this.pos = new THREE.Vector3(x, y0, z);
@@ -44,42 +46,44 @@ export class Howitzer {
     this.level = 3000;      // уровень (тыс.)
     this.ci = 5;            // заряд (индекс в CHARGES), по умолчанию — четвёртый
     this.fuze = 'О';        // взрыватель РГМ-2: «О» — осколочное, «Ф» — фугасное
-    this.loaded = null; this.loadT = 0; this.recoilT = 9; this.breech = 1; this.shots = 0;
+    this.loaded = null; this.load = null; this.recoilT = 9; this.breech = 1; this.shots = 0;
+    this.shells = BOX_N; this.charges = BOX_N;
     this.view = 'pano';
     this.orbit = { yaw: 0.6, pitch: 0.25, dist: 7.5 };
     this.reports = [];
     this.collider = null;
     if (this.tr === 0) this._makeCollider();
-    // расчёт
-    // расчёт: в боевом положении стоят у орудия, при переводе — работают со станинами,
+    // расчёт — три номера (замковый, снарядный, зарядный): бойцы, которых можно ранить и убить.
+    // В боевом положении стоят у орудия и заряжают, при переводе — работают со станинами,
     // креплением ствола и колёсами; в походном едут в тягаче
     this.crew = [];
     if (charAvailable('negs')) {
-      for (const [pose, lx, lz, ry] of [['stand', 0.9, 1.9, 0.4], ['crouch', -1.3, 2.2, -0.3], ['look', 1.8, 0.9, 1.2]]) {
-        const a = new CrewMan(m);
-        a.idle = { pose, local: new THREE.Vector3(lx, 0, lz), ry };
-        a.visible = false;
-        this.crew.push(a);
-      }
+      [['замковый', 'stand', 0.75, 1.75, 0.4], ['снарядный', 'crouch', 1.8, 2.7, 0.2], ['зарядный', 'look', 0.3, 3.1, -0.3]].forEach(([role, pose, lx, lz, ry], i) => {
+        const s = new CrewSoldier(m, { team, name: `${name}: ${role}`, callsign: `${role} ${name.replace(/^Д-30\s*/, '')}`.trim(), x, z });
+        s.idle = { pose, local: new THREE.Vector3(lx, 0, lz), ry };
+        s.crewRole = role; s.gunRef = this; s.job = null;
+        m.soldiers.push(s);
+        s.netIdx = m.netAI.length; m.netAI.push(s);
+        if (m.net && !m.net.isHost) s.damage = (amount, zone, source, dir, opts) => m.net.aiDamage(s, amount, zone, source, dir, opts);
+        this.crew.push(s);
+      });
     }
-    // снаряд для заряжания
-    const SP = new Parts(); shellGeometry(SP);
-    this.loadShell = SP.build({ shell: new THREE.MeshStandardMaterial({ color: 0x4e5a38, roughness: 0.55, metalness: 0.3 }), copper: new THREE.MeshStandardMaterial({ color: 0x9a6a3a, metalness: 1, roughness: 0.35 }), metal: new THREE.MeshStandardMaterial({ color: 0x5a5d61, metalness: 0.9, roughness: 0.35 }), red: new THREE.MeshStandardMaterial({ color: 0x8a1a12, roughness: 0.6 }) });
-    this.loadShell.visible = false;
-    this.model.root.add(this.loadShell);
+    // ящик с боеприпасами (разрушаемый: попадание — взрыв боекомплекта)
+    this.box = this._makeBox();
+    if (this.tr === 0) this._placeBox();
     this.casing = { t: 9, p: new THREE.Vector3(), v: new THREE.Vector3() };
     // взаимодействие
     // место наводчика (слева у маховиков) и работа с орудием (справа у колеса / у проушины)
     this.gunIt = {
       pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, label: `Занять место наводчика: ${name}`, hold: 0.25,
-      enabled: () => !m.player.gun && !this.netUser && m.player.body.alive && this.ready, action: () => this.mount(m.player),
+      enabled: () => !m.player.gun && !m.player.carry && !this.netUser && m.player.body.alive && this.ready, action: () => this.mount(m.player),
     };
     const self = this;
-    const can = () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !this.netUser && this.tr === this.trTarget;
+    const can = () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !m.player.carry && !this.netUser && this.tr === this.trTarget;
     // справа у колеса: боевое ↔ походное положение
     this.posIt = {
       pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, hold: 1.0,
-      get label() { return self.tr === 0 ? `Привести ${self.name} в походное положение (≈${TRANS_TIME} с)` : `Привести ${self.name} в боевое положение (≈${TRANS_TIME} с)`; },
+      get label() { return self.tr === 0 ? `Привести ${self.name} в походное положение (≈${Math.round(self.transTime)} с)` : `Привести ${self.name} в боевое положение (≈${Math.round(self.transTime)} с)`; },
       enabled: () => can() && !this.towBy,
       action: () => { if (this.tr === 0) this.startTravel(); else this.startDeploy(); },
     };
@@ -90,7 +94,20 @@ export class Howitzer {
       enabled: () => can() && this.tr === 1,
       action: () => this.towAction(),
     };
-    m.interactables.push(this.gunIt, this.posIt, this.towIt);
+    // ручное заряжание, когда расчёт выбыл: взять снаряд/заряд из ящика, дослать у казённика
+    this.boxIt = {
+      pos: new THREE.Vector3(x, y0 + 0.8, z), r: 1.8, hold: 0.5,
+      get label() { return self._boxLabel(); },
+      enabled: () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !m.player.carry && this.box.alive && !this.box.stowed && !this.crewAlive(),
+      action: () => this.manualPick(m.player),
+    };
+    this.breechIt = {
+      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, hold: 0.6,
+      get label() { return m.player.carry && m.player.carry.item === 'shell' ? `Дослать снаряд в ${self.name}` : `Вставить гильзу с зарядом в ${self.name}`; },
+      enabled: () => { const c = m.player.carry; return !!c && c.gun === this && this.ready && !this.loaded && this.breech > 0.9 && (c.item === 'shell' ? !(this.load && this.load.shellIn) : !!(this.load && this.load.shellIn && !this.load.chargeIn)); },
+      action: () => this.manualInsert(m.player),
+    };
+    m.interactables.push(this.gunIt, this.posIt, this.towIt, this.boxIt, this.breechIt);
     this.ui = null;
     if (towBy) this.hitch(towBy, true);
     this._place();
@@ -98,14 +115,24 @@ export class Howitzer {
 
   get ready() { return this.tr === 0 && this.trTarget === 0 && !this.towBy; }
 
+  // Препятствия орудия: щит (впереди наводчика, тонкая броня) и верхний станок с люлькой.
+  // Наводчик слева-сзади и расчёт стоят СНАРУЖИ — их можно поразить сбоку, сзади и сверху.
   _makeCollider() {
-    if (this.collider) { this.collider.blocksMove = this.collider.blocksBullet = this.collider.blocksSight = false; this.collider.coverOk = false; }
-    this.collider = this.m.world.addCylCollider({ x: this.pos.x, z: this.pos.z, y0: this.pos.y, r: 1.0, h: 1.7, mat: 'metal', pen: 15, cover: true });
+    this._dropCollider();
+    const W = this.m.world, P = this.pos, yaw = -this.az * MIL;
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const at = (lx, lz) => ({ x: P.x + lx * c + lz * s, z: P.z - lx * s + lz * c });
+    const sh = at(0, -0.6);
+    this.colliders = [
+      W.addBoxCollider({ x: sh.x, z: sh.z, y0: P.y + 0.55, w: 2.1, d: 0.12, h: 1.08, yaw, mat: 'metal', pen: 7, cover: true, owner: { kind: 'gun', gun: this } }),
+      W.addCylCollider({ x: P.x, z: P.z, y0: P.y, r: 0.42, h: 1.35, mat: 'metal', pen: 35, cover: true, owner: { kind: 'gun', gun: this } }),
+    ];
+    this.collider = this.colliders[1];
+    this._colAz = this.az;
   }
   _dropCollider() {
-    const c = this.collider;
-    if (c) { c.blocksMove = c.blocksBullet = c.blocksSight = false; c.coverOk = false; }
-    this.collider = null;
+    for (const o of this.colliders || []) this.m.world.removeObstacle(o);
+    this.colliders = []; this.collider = null;
   }
 
   // ---------- походное положение, прицеп ----------
@@ -154,7 +181,9 @@ export class Howitzer {
   startTravel(fromNet = false) {
     if (this.tr !== 0 || this.trTarget !== 0) return;
     if (this.m.player.gun === this) this.dismount(this.m.player);
-    this.trTarget = 1; this.loaded = null; this.loadT = 0;
+    this.trTarget = 1; this.loaded = null; this.load = null;
+    for (const c of this.crew) c.job = null;
+    this._stowBox();
     this.m.hud.message(`Расчёт приводит ${this.name} в походное положение: станины сводятся, ствол на походное крепление`, 4);
     this.m.audio.mech('reload');
     if (!fromNet) this._net(['t']);
@@ -195,6 +224,9 @@ export class Howitzer {
     else if (op === 'c') { if (this.towBy) this.unhitch(true); this.startDeploy(true, e[3]); }
     else if (op === 'h') { const v = this.m.vehicles[e[3]]; if (v && !this.towBy) { if (this.tr !== 1) { this.tr = this.trTarget = 1; this._dropCollider(); } this.hitch(v, false, true); } }
     else if (op === 'u') this.unhitch(true, [e[3], e[4], e[5]]);
+    else if (op === 'l') this.orderLoad(true, e[3], e[4] ? 'Ф' : 'О');
+    else if (op === 'k') this.manualPick(null, true, e[3]);
+    else if (op === 'n') this.manualInsert(null, true, e[3], e[4], e[5] ? 'Ф' : 'О');
   }
 
   // Геометрия походного положения: проушина относительно лафета (считается один раз)
@@ -279,6 +311,8 @@ export class Howitzer {
       this.gunIt.pos.copy(this.seatWorld()); this.gunIt.pos.y += 1.0;
       this.posIt.pos.set(0.95, 0.7, 0.15).applyMatrix4(g.body.matrixWorld);
       this.lunetteWorld(this.towIt.pos);
+      if (this.box) this.boxIt.pos.copy(this.box.pos).setY(this.box.pos.y + 0.5);
+      if (this.tr === 0) { const bp = this._breechPoints(); this.breechIt.pos.copy(bp.S).setY(bp.S.y + 1.0); }
       this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
     }
   }
@@ -292,60 +326,264 @@ export class Howitzer {
     const T = this.m.terrain, g = this.model, e = ease(this.tr);
     const moving = this.tr !== this.trTarget;
     const show = !this.towBy && (this.tr < 1 || moving);
-    for (const a of this.crew) a.visible = show;
-    if (!show) return;
     const P = this.pos;
     const ground = (v) => { v.y = T.heightAt(v.x, v.z); return v; };
     const faceTo = (from, to) => Math.atan2(-(to.x - from.x), -(to.z - from.z));
-    const tasks = [];
-    if (!moving && this.tr === 0) {
-      // боевое положение: у орудия, по местам
-      const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.az * MIL);
-      for (const a of this.crew) {
-        const p = ground(a.idle.local.clone().applyQuaternion(yawQ).add(P));
-        tasks.push({ p, yaw: -this.az * MIL + a.idle.ry, pose: a.idle.pose });
-      }
-    } else {
-      const t = this.m.time;
-      // номера 1 и 2 — у сошников крайних станин: несут их по дуге, в боевом — забивают сошники
-      for (const k of [0, 2]) {
-        const H = this._trailPt(k, 0, 0.32, -2.9);
-        const piv = this._trailPt(k, 0, 0.32, -0.4);
+    const t = this.m.time;
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.az * MIL);
+    const idleTask = (a) => {
+      const p = ground(a.idle.local.clone().applyQuaternion(yawQ).add(P));
+      return { p, yaw: -this.az * MIL + a.idle.ry, pose: a.idle.pose };
+    };
+    // работа со станинами, креплением ствола, колёсами (перевод из положения в положение)
+    const transTask = (k) => {
+      if (k < 2) {
+        const tk = k === 0 ? 0 : 2;
+        const H = this._trailPt(tk, 0, 0.32, -2.9), piv = this._trailPt(tk, 0, 0.32, -0.4);
         const out = new THREE.Vector3(H.x - piv.x, 0, H.z - piv.z).normalize();
         const p = ground(H.clone().addScaledVector(out, 0.62));
         const hy = H.y - p.y;
         const side = new THREE.Vector3(-out.z, 0, out.x).multiplyScalar(0.13);
         let hands = [H.clone().add(side), H.clone().sub(side)], pose, carry = false;
-        if (e < 0.25) {
-          // сошник в грунт: удары кувалдой/ногой — руки ходят вверх-вниз
-          pose = 'kneel';
-          const bob = Math.max(0, Math.sin(t * 7 + k)) * 0.12;
-          hands = hands.map((h) => h.clone().setY(h.y - 0.1 + bob));
-        } else if (e <= 0.75) { pose = hy < 0.62 ? 'crouch' : 'stand'; carry = true; }
+        if (e < 0.25) { pose = 'kneel'; const bob = Math.max(0, Math.sin(t * 7 + tk)) * 0.12; hands = hands.map((h) => h.clone().setY(h.y - 0.1 + bob)); }
+        else if (e <= 0.75) { pose = hy < 0.62 ? 'crouch' : 'stand'; carry = true; }
         else pose = hy < 0.62 ? 'crouch' : 'stand';
-        tasks.push({ p, yaw: faceTo(p, piv), pose, hands, carry, from: p.clone().addScaledVector(out, 2.5) });
+        return { p, yaw: faceTo(p, piv), pose, hands, carry, from: p.clone().addScaledVector(out, 2.5) };
       }
-      // номер 3 — сначала у походного крепления ствола (снимает/кладёт ствол), затем у колеса (вывешивание)
       if (e > 0.3) {
-        const L = new THREE.Vector3(0, -0.12, -2.35).applyMatrix4(g.recoil.matrixWorld);
-        const L2 = new THREE.Vector3(0, -0.12, -2.0).applyMatrix4(g.recoil.matrixWorld);
-        const ax = new THREE.Vector3(L.x - L2.x, 0, L.z - L2.z).normalize();
-        const sideV = new THREE.Vector3(-ax.z, 0, ax.x);
+        const L = new THREE.Vector3(0, -0.12, -2.35).applyMatrix4(g.recoil.matrixWorld), L2 = new THREE.Vector3(0, -0.12, -2.0).applyMatrix4(g.recoil.matrixWorld);
+        const ax = new THREE.Vector3(L.x - L2.x, 0, L.z - L2.z).normalize(), sideV = new THREE.Vector3(-ax.z, 0, ax.x);
         const p = ground(L.clone().addScaledVector(sideV, 0.62));
-        const hands = [L.clone().addScaledVector(ax, 0.16), L.clone().addScaledVector(ax, -0.16)];
-        tasks.push({ p, yaw: faceTo(p, L), pose: L.y - p.y < 0.75 ? 'crouch' : 'stand', hands, from: p.clone().addScaledVector(sideV, 2) });
-      } else {
-        const W = new THREE.Vector3(); g.wheels[1].getWorldPosition(W);
-        const out = new THREE.Vector3(W.x - P.x, 0, W.z - P.z).normalize();
-        const p = ground(W.clone().addScaledVector(out, 0.75));
-        const pump = Math.sin(this.m.time * 5) * 0.09;
-        const hub = W.clone().addScaledVector(out, 0.15);
-        const fwd = new THREE.Vector3(-out.z, 0, out.x);
-        const hands = [hub.clone().addScaledVector(fwd, 0.18).setY(hub.y + 0.05 + pump), hub.clone().addScaledVector(fwd, -0.12).setY(hub.y + 0.05 + pump)];
-        tasks.push({ p, yaw: faceTo(p, W), pose: 'work', hands });
+        return { p, yaw: faceTo(p, L), pose: L.y - p.y < 0.75 ? 'crouch' : 'stand', hands: [L.clone().addScaledVector(ax, 0.16), L.clone().addScaledVector(ax, -0.16)], from: p.clone().addScaledVector(sideV, 2) };
+      }
+      const W = new THREE.Vector3(); g.wheels[1].getWorldPosition(W);
+      const out = new THREE.Vector3(W.x - P.x, 0, W.z - P.z).normalize();
+      const p = ground(W.clone().addScaledVector(out, 0.75));
+      const pump = Math.sin(t * 5) * 0.09, hub = W.clone().addScaledVector(out, 0.15), fwd = new THREE.Vector3(-out.z, 0, out.x);
+      return { p, yaw: faceTo(p, W), pose: 'work', hands: [hub.clone().addScaledVector(fwd, 0.18).setY(hub.y + 0.05 + pump), hub.clone().addScaledVector(fwd, -0.12).setY(hub.y + 0.05 + pump)] };
+    };
+    // живые номера делят работу при переводе: у кого меньше людей — тот дольше
+    const alive = this.crew.filter((a) => a.alive);
+    for (const a of this.crew) {
+      const M = a.man;
+      if (!a.alive) { M.visible = true; M.update(dt, { p: M.pos, yaw: M.yaw, dead: true }); a.sync(); a.hidden = true; continue; }
+      M.visible = show;
+      if (!show) { a.sync(); continue; }
+      let task;
+      if (moving || this.tr > 0) task = transTask(alive.indexOf(a) % 3);
+      else if (a.job) task = this._jobTask(a, dt);
+      else task = idleTask(a);
+      M.update(dt, task);
+      a.sync();
+    }
+  }
+
+  get transTime() { return TRANS_TIME / [0.35, 0.5, 0.75, 1][Math.min(3, this.crew.length ? this.crew.filter((a) => a.alive).length : 3)]; }
+  crewAlive() { return this.crew.some((a) => a.alive); }
+
+  // ---------- ящик с боеприпасами ----------
+  _makeBox() {
+    const m = this.m, g = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0x5b4a2e, roughness: 0.85 });
+    const woodD = new THREE.MeshStandardMaterial({ color: 0x433621, roughness: 0.9 });
+    const stencil = new THREE.MeshStandardMaterial({ color: 0x1d1d18, roughness: 0.9 });
+    // штабель укупорок: ящики со снарядами (длинные) и с зарядами (короткие)
+    const crate = (w, h, d, x, y, z, ry, mat) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); b.position.set(x, y, z); b.rotation.y = ry; b.castShadow = true; b.receiveShadow = true; g.add(b); return b; };
+    crate(1.0, 0.28, 0.42, -0.25, 0.14, 0, 0, wood); crate(1.0, 0.28, 0.42, -0.25, 0.14, 0.46, 0.02, wood); crate(1.0, 0.28, 0.42, -0.25, 0.42, 0.22, -0.03, woodD);
+    crate(0.62, 0.3, 0.4, 0.62, 0.15, 0.05, 0.1, woodD); crate(0.62, 0.3, 0.4, 0.62, 0.15, 0.5, -0.05, wood);
+    for (const z of [0, 0.46]) crate(0.3, 0.005, 0.12, -0.25, 0.283, z, 0, stencil);
+    // открытый ящик: видны носики снарядов
+    const I = crewItemsLazy();
+    for (let i = 0; i < 3; i++) { const sh = I.shell.clone(); sh.rotation.y = Math.PI / 2; sh.position.set(-0.25, 0.62, 0.08 + i * 0.13); g.add(sh); }
+    g.visible = false;
+    m.scene.add(g);
+    const d = { kind: 'ammo', hp: 14, maxHp: 14, mesh: g, pos: new THREE.Vector3(), alive: true, r: 0.8, gun: this, stowed: true, collider: null };
+    m.world.destructibles.push(d);
+    return d;
+  }
+
+  _boxPlace() {
+    const yaw = -this.az * MIL, c = Math.cos(yaw), s = Math.sin(yaw);
+    const lx = 2.2, lz = BOX_DIST;
+    return { x: this.pos.x + lx * c + lz * s, z: this.pos.z - lx * s + lz * c, yaw };
+  }
+  _placeBox() {
+    const d = this.box;
+    if (!d.alive) return;
+    const W = this.m.world, b = this._boxPlace();
+    const y = this.m.terrain.heightAt(b.x, b.z);
+    d.pos.set(b.x, y + 0.35, b.z); d.yaw = b.yaw;
+    d.mesh.position.set(b.x, y, b.z); d.mesh.rotation.y = b.yaw; d.mesh.visible = true;
+    if (d.collider) W.removeObstacle(d.collider);
+    d.collider = W.addBoxCollider({ x: b.x, z: b.z, y0: y, w: 1.7, d: 1.0, h: 0.72, yaw: b.yaw, mat: 'wood', pen: 25, owner: d, cover: true });
+    d.stowed = false;
+  }
+  _stowBox() {
+    const d = this.box;
+    if (d.collider) { this.m.world.removeObstacle(d.collider); d.collider = null; }
+    d.stowed = true; d.mesh.visible = false;
+  }
+
+  // попадание в ящик: детонация боекомплекта — 50 снарядов и 50 зарядов
+  boxExplode(by) {
+    const m = this.m, d = this.box, P = d.pos.clone();
+    this.shells = 0; this.charges = 0; this.load = null; this.loaded = null;
+    for (const c of this.crew) c.job = null;
+    if (m.player.carry && m.player.carry.gun === this) m.player.carry = null;
+    if (d.collider) { m.world.removeObstacle(d.collider); d.collider = null; }
+    d.mesh.visible = false;
+    m.fx.shellBurst(P);
+    m.audio.explosion(P, 3);
+    for (let k = 1; k <= 4; k++) m.after(0.18 * k + Math.random() * 0.2, () => { const Q = P.clone().add(new THREE.Vector3((Math.random() - 0.5) * 8, 0, (Math.random() - 0.5) * 8)); Q.y = m.terrain.heightAt(Q.x, Q.z) + 0.3; m.fx.shellBurst(Q); m.audio.explosion(Q, 2); });
+    m.fx.addFire(P, 2.4, 150);
+    m.fx.addDecal(new THREE.Vector3(P.x, m.terrain.heightAt(P.x, P.z), P.z), new THREE.Vector3(0, 1, 0), 9, 0x141210);
+    m.noise(P, 2500, this.team, by || null);
+    m.player.shake = Math.max(m.player.shake, 2.5 * Math.max(0, 1 - P.distanceTo(m.camPos) / 300));
+    if (!m.netVisual) m.projectiles.explode(P, { radius: 18, frag: 55, dmg: 700, pen: 45, fxSize: 4 }, by, null, null, { fx: false });
+    m.hud.message(`Взрыв боекомплекта у ${this.name}!`, 4, true);
+  }
+
+  _boxLabel() {
+    const c = this.m.player.carry;
+    if (c) return 'Руки заняты';
+    const needShell = !(this.load && this.load.shellIn);
+    return needShell ? `Взять снаряд ОФ-462 (в ящике ${this.shells})` : `Взять гильзу с зарядом (в ящике ${this.charges})`;
+  }
+
+  // игрок сам носит из ящика (расчёт выбыл)
+  manualPick(p, fromNet = false, item = null) {
+    const it = item || (this.load && this.load.shellIn ? 'charge' : 'shell');
+    if (it === 'shell' ? this.shells <= 0 : this.charges <= 0) { if (!fromNet) this.m.hud.message(it === 'shell' ? 'Снаряды кончились' : 'Заряды кончились', 2); return; }
+    if (it === 'shell') this.shells--; else this.charges--;
+    if (fromNet) return;
+    p.carry = { item: it, gun: this };
+    this.m.audio.mech('reload');
+    this.m.hud.message(it === 'shell' ? 'Снаряд в руках (22 кг): несите к казённику справа, E — дослать' : 'Гильза с зарядом в руках: к казённику, E — вставить', 3);
+    this._net(['k', it]);
+  }
+  manualInsert(p, fromNet = false, item = null, ci = null, fuze = null) {
+    const it = item || (p.carry && p.carry.item);
+    if (!it) return;
+    if (!this.load) this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shellIn: false, chargeIn: false, closeT: 0 };
+    this.load[it + 'In'] = true;
+    this.m.audio.mech(it === 'shell' ? 'reload' : 'switch');
+    if (fromNet) return;
+    p.carry = null;
+    this.m.hud.message(it === 'shell' ? 'Снаряд дослан. Теперь гильза с зарядом' : 'Заряд вставлен, клин закрыт', 2.5);
+    this._net(['n', it, this.load.ci, this.load.fuze === 'О' ? 0 : 1]);
+  }
+
+  // команда «Заряжай!» (наводчик, R)
+  orderLoad(fromNet = false, ci = null, fuze = null) {
+    const m = this.m;
+    const say = (t, d = 1.5) => { if (!fromNet) m.hud.message(t, d); };
+    if (this.loaded) return say('Орудие заряжено');
+    if (this.load) return say('Уже заряжают');
+    if (this.recoilT < 1.4) return say('Ствол накатывается…', 1.2);
+    if (!this.box.alive || this.shells <= 0 || this.charges <= 0) return say('Боеприпасы кончились', 2.5);
+    this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shellIn: false, chargeIn: false, closeT: 0 };
+    if (!fromNet) {
+      if (!this.crewAlive()) m.hud.message(`Расчёт выбыл: снаряд и заряд носите сами — ящик в ${BOX_DIST} м за орудием (E), затем к казённику справа (E)`, 5);
+      else m.hud.radio('Командир орудия', `Заряжай! Осколочно-фугасным, заряд ${CHARGES[this.load.ci].name}, взрыватель ${this.load.fuze === 'О' ? 'осколочный' : 'фугасный'}`);
+      m.audio.mech('reload');
+      this._net(['l', this.load.ci, this.load.fuze === 'О' ? 0 : 1]);
+    }
+  }
+
+  loadStatus() {
+    const L = this.load;
+    if (this.loaded) return null;
+    if (!L) return this.recoilT < 1.4 ? 'накат ствола…' : null;
+    if (L.shellIn && L.chargeIn) return 'клин закрывается…';
+    const job = (it) => { const c = this.crew.find((a) => a.alive && a.job && a.job.item === it); return c ? { toBox: 'бежит к ящику', pick: 'берёт из ящика', toGun: 'несёт', wait: 'ждёт у казённика', insert: 'досылает' }[c.job.phase] : null; };
+    const a = L.shellIn ? 'снаряд дослан' : `снаряд: ${job('shell') || (this.crewAlive() ? 'ждём' : 'несите сами')}`;
+    const b = L.chargeIn ? 'заряд вставлен' : `заряд: ${job('charge') || (this.crewAlive() ? 'ждём' : 'несите сами')}`;
+    return `${a} · ${b}`;
+  }
+
+  // распределение работы при заряжании и закрывание клина
+  _loadStep(dt) {
+    const L = this.load;
+    if (!L) return;
+    for (const c of this.crew) if (c.job && !c.alive) c.job = null;
+    if (this.tr !== 0) { this.load = null; return; }
+    const busy = (it) => this.crew.some((a) => a.alive && a.job && a.job.item === it);
+    for (const it of ['shell', 'charge']) {
+      if (L[it + 'In'] || busy(it)) continue;
+      if ((it === 'shell' ? this.shells : this.charges) <= 0 && !busy(it)) continue;
+      for (const i of it === 'shell' ? [1, 2, 0] : [2, 1, 0]) {
+        const a = this.crew[i];
+        if (a && a.alive && !a.hidden && !a.job) { a.job = { item: it, phase: 'toBox', t: 0 }; break; }
       }
     }
-    this.crew.forEach((a, i) => a.update(dt, tasks[i]));
+    if (L.shellIn && L.chargeIn) {
+      L.closeT += dt;
+      this.breech = Math.max(0, 1 - L.closeT / 0.6);
+      if (L.closeT >= 0.6) {
+        this.loaded = { ci: L.ci, fuze: L.fuze }; this.load = null; this.breech = 0;
+        if (this.m.player.gun === this) this.m.hud.radio(this.crewAlive() ? 'Замковый' : this.name, 'Готово!');
+        this.m.audio.mech('switch');
+      }
+    }
+  }
+
+  // точка у казённика справа-сзади, где номер досылает снаряд
+  _breechPoints() {
+    const R = this.model.recoil.matrixWorld;
+    const B = new THREE.Vector3(0, 0, D30.breech + 0.02).applyMatrix4(R);
+    const E = new THREE.Vector3(0, 0, D30.breech + 0.42).applyMatrix4(R);
+    const S = new THREE.Vector3(0.62, 0, D30.breech + 0.5).applyMatrix4(R);
+    S.y = this.m.terrain.heightAt(S.x, S.z);
+    const q = new THREE.Quaternion(); this.model.recoil.getWorldQuaternion(q);
+    return { B, E, S, q };
+  }
+
+  // задача номера, занятого заряжанием
+  _jobTask(a, dt) {
+    const j = a.job, M = a.man, L = this.load;
+    if (!L) { a.job = null; return { p: M.pos.clone(), yaw: M.yaw, pose: 'stand' }; }
+    j.t += dt;
+    const box = this.box;
+    if (!box.alive || box.stowed) { a.job = null; return { p: M.pos.clone(), yaw: M.yaw, pose: 'stand' }; }
+    const bp = this._breechPoints();
+    const bx = box.pos, toGun = new THREE.Vector3(this.pos.x - bx.x, 0, this.pos.z - bx.z).normalize();
+    const boxStand = new THREE.Vector3(bx.x, 0, bx.z).addScaledVector(toGun, 0.85).add(new THREE.Vector3(-toGun.z, 0, toGun.x).multiplyScalar(j.item === 'shell' ? -0.35 : 0.35));
+    boxStand.y = this.m.terrain.heightAt(boxStand.x, boxStand.z);
+    const faceBox = Math.atan2(-(bx.x - boxStand.x), -(bx.z - boxStand.z));
+    const low = bp.B.y - bp.S.y < 0.85;
+    switch (j.phase) {
+      case 'toBox': {
+        if (Math.hypot(M.pos.x - boxStand.x, M.pos.z - boxStand.z) < 0.25) { j.phase = 'pick'; j.t = 0; }
+        return { p: boxStand, yaw: faceBox, pose: 'stand', speed: V_RUN };
+      }
+      case 'pick': {
+        if (j.t > 1.0) {
+          const has = j.item === 'shell' ? this.shells : this.charges;
+          if (has <= 0) { a.job = null; this.m.hud.message(j.item === 'shell' ? 'Снаряды кончились' : 'Заряды кончились', 2); return { p: boxStand, yaw: faceBox, pose: 'stand' }; }
+          if (j.item === 'shell') this.shells--; else this.charges--;
+          j.phase = 'toGun'; j.t = 0;
+        }
+        const top = new THREE.Vector3(bx.x, bx.y + 0.3, bx.z);
+        return { p: boxStand, yaw: faceBox, pose: 'work', hands: [top.clone().add(new THREE.Vector3(-0.15, 0, 0)), top.clone().add(new THREE.Vector3(0.15, 0, 0))] };
+      }
+      case 'toGun': {
+        if (Math.hypot(M.pos.x - bp.S.x, M.pos.z - bp.S.z) < 0.3) { j.phase = j.item === 'charge' && !L.shellIn ? 'wait' : 'insert'; j.t = 0; }
+        return { p: bp.S.clone(), yaw: Math.atan2(-(bp.B.x - bp.S.x), -(bp.B.z - bp.S.z)), pose: 'stand', speed: V_CARRY, carry: true, item: j.item };
+      }
+      case 'wait': {
+        if (L.shellIn) { j.phase = 'insert'; j.t = 0; }
+        return { p: bp.S.clone(), yaw: Math.atan2(-(bp.B.x - bp.S.x), -(bp.B.z - bp.S.z)), pose: low ? 'crouch' : 'stand', carry: true, item: j.item };
+      }
+      case 'insert': {
+        const dur = j.item === 'shell' ? 1.1 : 0.8;
+        const u = Math.min(1, j.t / dur);
+        // предмет ложится на лоток у казённика и уходит в камору по оси канала
+        const pos = u < 0.45 ? M.pos.clone().setY(M.pos.y + 1.0).lerp(bp.E, u / 0.45) : bp.E.clone().lerp(bp.B, (u - 0.45) / 0.55);
+        if (u >= 1) { L[j.item + 'In'] = true; a.job = null; this.m.audio.mech(j.item === 'shell' ? 'reload' : 'switch'); return { p: bp.S.clone(), yaw: M.yaw, pose: 'stand' }; }
+        return { p: bp.S.clone(), yaw: Math.atan2(-(bp.B.x - bp.S.x), -(bp.B.z - bp.S.z)), pose: low ? 'crouch' : 'stand', carry: true, item: j.item, itemPos: pos, itemQuat: bp.q };
+      }
+    }
+    return { p: M.pos.clone(), yaw: M.yaw, pose: 'stand' };
   }
 
   // ---------- место наводчика ----------
@@ -378,11 +616,11 @@ export class Howitzer {
     if (inp.hit('KeyM')) { this.ui.fireMap(); return; }
     if (inp.hit('KeyT')) { this.ui.table(this.ci); return; }
     for (let i = 0; i < 6; i++) if (inp.hit('Digit' + (i + 1))) {
-      if (this.loaded || this.loadT > 0) m.hud.message('Орудие уже заряжено — заряд сменить нельзя', 2);
+      if (this.loaded || this.load) m.hud.message('Орудие уже заряжают — заряд сменить нельзя', 2);
       else { this.ci = i; m.hud.message(`Заряд ${CHARGES[i].name}`, 1.5); m.audio.click(); }
     }
     if (inp.hit('KeyX')) {
-      if (this.loaded || this.loadT > 0) m.hud.message('Взрыватель устанавливается до заряжания', 2);
+      if (this.loaded || this.load) m.hud.message('Взрыватель устанавливается до заряжания', 2);
       else { this.fuze = this.fuze === 'О' ? 'Ф' : 'О'; m.hud.message(this.fuze === 'О' ? 'Взрыватель РГМ-2: осколочное действие' : 'Взрыватель РГМ-2: фугасное действие (замедление)', 2); m.audio.click(); }
     }
     // прицел и уровень (механический прицел)
@@ -409,12 +647,7 @@ export class Howitzer {
     this.elM = clamp(this.elM, EL_MIN, EL_MAX);
     if (Math.abs(tr) + Math.abs(ev) > 0) { this._crank = (this._crank || 0) + dt; if (this._crank > 0.35) { this._crank = 0; m.audio.mech('sight'); } }
     // заряжание
-    if (inp.bh('reload') || inp.hit('KeyR')) {
-      if (this.loaded) m.hud.message('Орудие заряжено', 1.5);
-      else if (this.loadT > 0) {}
-      else if (this.recoilT < 1.4) m.hud.message('Ствол накатывается…', 1.2);
-      else { this.loadT = LOAD_TIME; this.loadInfo = { ci: this.ci, fuze: this.fuze }; m.hud.radio('Заряжающий', `Снаряд ОФ-462, заряд ${this.charge.name}, взрыватель ${this.fuze === 'О' ? 'осколочный' : 'фугасный'} — заряжаю!`); m.audio.mech('reload'); }
-    }
+    if (inp.bh('reload') || inp.hit('KeyR')) this.orderLoad();
     if (inp.bh('fire') || inp.hit('Space')) this.fire();
     p.body.pos.copy(this.seatWorld());
   }
@@ -435,12 +668,12 @@ export class Howitzer {
   fire() {
     const m = this.m;
     if (!this.ready) return;
-    if (!this.loaded) { if (this.loadT > 0) m.hud.message('Ещё не заряжено', 1); else m.hud.message('Орудие не заряжено (R — заряжать)', 1.5); m.audio.click(); return; }
+    if (!this.loaded) { if (this.load) m.hud.message('Ещё не заряжено', 1); else m.hud.message('Орудие не заряжено (R — заряжать)', 1.5); m.audio.click(); return; }
     if (this.breech > 0.05) return;
     const L = this.loaded;
     this.loaded = null;
     const pos = this.muzzleWorld(), dir = this.boreDir();
-    const p = m.projectiles.spawn({ weapon: WEAPONS.d30, pos, dir, owner: m.player.body, team: 'negs', ammoId: 'of462_' + CHARGES[L.ci].id });
+    const p = m.projectiles.spawn({ weapon: WEAPONS.d30, pos, dir, owner: m.player.body, team: m.player.body.team, ammoId: 'of462_' + CHARGES[L.ci].id });
     p.fuze = L.fuze; p.gun = this; p.shotNo = ++this.shots; p.charge = L.ci;
     // фугасное действие (замедление): снаряд углубляется — меньше осколков, сильнее по укрытиям
     if (L.fuze === 'Ф') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
@@ -465,7 +698,8 @@ export class Howitzer {
   // Выстрел этого орудия другим игроком (сеть): откат, дульная волна, звук
   remoteFire(p) {
     const m = this.m;
-    this.recoilT = 0; this.shots++; this.loaded = null; this.breech = 0;
+    this.recoilT = 0; this.shots++; this.loaded = null; this.load = null; this.breech = 0;
+    for (const c of this.crew) if (c.job && c.job.phase !== 'toBox' && c.job.phase !== 'pick') c.job = null;
     const pos = this.muzzleWorld(), dir = this.boreDir();
     m.fx.muzzleBlast(pos, dir);
     m.fx.flashLight(pos, 90, 0.07, 0xffb050, 40);
@@ -506,12 +740,14 @@ export class Howitzer {
     this.recoilT += dt;
     // перевод из положения в положение
     if (this.tr !== this.trTarget) {
-      const d = dt / TRANS_TIME;
+      const d = dt / this.transTime;
       if (this.trTarget > this.tr) this.tr = Math.min(1, this.tr + d); else this.tr = Math.max(0, this.tr - d);
-      if (this.tr === 0 && this.trTarget === 0) { this.rootPitch = 0; this.rootRoll = 0; this.pos.y = this.m.terrain.heightAt(this.pos.x, this.pos.z); this._makeCollider(); this.m.hud.message(`${this.name} в боевом положении. Наводчик — слева у маховиков (E)`, 3); this.m.audio.mech('switch'); }
+      if (this.tr === 0 && this.trTarget === 0) { this.rootPitch = 0; this.rootRoll = 0; this.pos.y = this.m.terrain.heightAt(this.pos.x, this.pos.z); this._makeCollider(); this._placeBox(); this.m.hud.message(`${this.name} в боевом положении. Наводчик — слева у маховиков (E); ящик с боеприпасами — в ${BOX_DIST} м за орудием`, 3.5); this.m.audio.mech('switch'); }
       if (this.tr === 1 && this.trTarget === 1) { this._dropCollider(); this.m.hud.message(`${this.name} в походном положении. Подгоните тягач задом к буксирной проушине (E — прицепить)`, 4); this.m.audio.mech('switch'); }
       if (this.tr > 0 && this.collider && this.trTarget === 1) this._dropCollider();
     }
+    // щит поворачивается вместе с верхним станком — обновляем препятствия
+    if (this.collider && Math.abs(this.az - this._colAz) > 25 && (this._colT = (this._colT || 0) + dt) > 0.3) { this._colT = 0; this._makeCollider(); }
     if (this.towBy) this._tow(dt);
     else if (this.tr > 0) {
       // без тягача: проушина на походной опоре, орудие стоит на колёсах
@@ -532,29 +768,8 @@ export class Howitzer {
       const br = new THREE.Vector3(0, 0, D30.breech + 0.1).applyMatrix4(this.model.recoil.matrixWorld);
       this.casing = { t: 0, p: br, v: this.boreDir().multiplyScalar(-2.2).add(new THREE.Vector3(0, 1.2, 0)) };
     }
-    // заряжание: снаряд досылается в камору, клин закрывается
-    if (this.loadT > 0) {
-      this.loadT -= dt;
-      const k = 1 - this.loadT / LOAD_TIME;
-      const s = this.loadShell;
-      if (k > 0.35 && k < 0.85) {
-        s.visible = true;
-        const u = (k - 0.35) / 0.5;
-        const inv = new THREE.Matrix4().copy(this.model.root.matrixWorld).invert();
-        const br = new THREE.Vector3(0, 0, D30.breech + 0.9 - u * 1.4).applyMatrix4(this.model.recoil.matrixWorld).applyMatrix4(inv);
-        s.position.copy(br);
-        const q = new THREE.Quaternion(); this.model.pitch.getWorldQuaternion(q);
-        const rq = new THREE.Quaternion(); this.model.root.getWorldQuaternion(rq);
-        s.quaternion.copy(rq.invert().multiply(q));
-      } else s.visible = false;
-      if (k > 0.88) this.breech = Math.max(0, 1 - (k - 0.88) / 0.1);
-      if (this.loadT <= 0) {
-        this.loadT = 0; this.breech = 0; this.loaded = this.loadInfo;
-        s.visible = false;
-        this.m.hud.radio('Заряжающий', 'Готово!');
-        this.m.audio.mech('switch');
-      }
-    }
+    // заряжание: номера расчёта носят снаряд и заряд из ящика, замковый закрывает клин
+    this._loadStep(dt);
     // гильза
     const c = this.casing;
     const cm = this.model.casing;

@@ -43,6 +43,16 @@ export const AMMO = {
     id: '762x54_b32', name: '7,62×54R Б-32 (бронебойно-зажигательный)', short: 'Б-32', cls: 'ap', kind: 'bullet', model: 'G7', bc: 0.2,
     mass: 0.01, caliber: 0.00762, v0: 810, spin: { sg: 1.7, dir: 1 }, pen: 16, dmgK: 1.15,
   },
+  // 14,5×114 для ПТРД-41
+  'ptrd_b32': {
+    id: 'ptrd_b32', name: '14,5×114 Б-32 (бронебойно-зажигательный)', short: 'Б-32', cls: 'ap', kind: 'bullet', model: 'G7', bc: 0.45,
+    mass: 0.064, caliber: 0.0145, v0: 1000, spin: { sg: 1.8, dir: 1 }, pen: 38, dmgK: 1.0,
+  },
+  'ptrd_mdz': {
+    id: 'ptrd_mdz', name: '14,5×114 МДЗ (мгновенного действия, фугасно-зажигательный)', short: 'МДЗ', cls: 'he', kind: 'bullet', model: 'G7', bc: 0.4,
+    mass: 0.0596, caliber: 0.0145, v0: 1005, spin: { sg: 1.7, dir: 1 }, pen: 8, dmgK: 1.0,
+    explosive: { pen: 8, radius: 1.6, frag: 4, dmg: 170, fxSize: 0.6 },
+  },
   'pg7vm': {
     id: 'pg7vm', name: 'ПГ-7ВМ (кумулятивная)', kind: 'rocket', model: 'const', cd: 0.24,
     mass: 2.0, caliber: 0.07, v0: 140,
@@ -149,6 +159,14 @@ export const WEAPONS = {
     reload: 4.2, reloadEmpty: 4.2, weight: 6.3, vm: 'rpg7', sound: 'rpg',
     desc: 'Оптика ПГО-7 (2,7×) с марками 200–500 м; механический прицел (O) — целик 2–5 и мушка. Граната флюгирует: на активном участке уходит ПРОТИВ ветра.',
   },
+  ptrd: {
+    id: 'ptrd', name: 'ПТРД-41', cls: 'Противотанковое ружьё', ammo: 'ptrd_b32', mag: 1, mags: 19, pouch: true, heavy: true, bipod: true,
+    rpm: 20, modes: ['single'],
+    sight: { type: 'iron', h: 0.09, radius: 0.92, settings: [{ label: 'до 400', range: 400 }, { label: 'св. 400', range: 1000 }] },
+    recoil: { up: 24, side: 5, cam: 0.75 }, sway: 3.0, disp: 0.3,
+    reload: 2.6, reloadEmpty: 2.6, weight: 17.3, vm: 'ptrd', sound: 'ptrd',
+    desc: 'Однозарядное противотанковое ружьё 14,5 мм (17,3 кг): с ним медленнее ходят и быстро устают. Лёжа — на сошках, точно; стоя — сильно водит. Б-32 пробивает ~35 мм брони на 100 м (броня МТ-ЛБ и «Тигра» — насквозь), МДЗ рвётся при попадании. По умолчанию патроны чередуются: Б-32, МДЗ. Прицел: «до 400» и «свыше 400 м».',
+  },
   gp25: {
     id: 'gp25', name: 'ГП-25', cls: 'Подствольный гранатомёт', ammo: 'vog25', mag: 1, mags: 10,
     rpm: 10, modes: ['single'],
@@ -186,6 +204,7 @@ export const SOUNDS = {
   r762r: { crack: 1.0, body: 1.0, freq: 1100, decay: 0.26, thump: 65 },
   rpg: { crack: 0.3, body: 1.3, freq: 500, decay: 0.6, thump: 45 },
   gl: { crack: 0.1, body: 0.5, freq: 400, decay: 0.15, thump: 80 },
+  ptrd: { crack: 1.5, body: 1.7, freq: 650, decay: 0.5, thump: 38 },
 };
 
 // Совместимые патроны (по калибру) для снаряжения
@@ -194,12 +213,18 @@ export const AMMO_FAMILY = {
   '762x39_ps': ['762x39_ps', '762x39_t45', '762x39_bp'],
   '762x54_7n1': ['762x54_7n1', '762x54_lps', '762x54_t46', '762x54_b32'],
   '762x54_lps': ['762x54_lps', '762x54_t46', '762x54_b32', '762x54_7n1'],
+  'ptrd_b32': ['ptrd_b32', 'ptrd_mdz'],
 };
+// число патронов в схеме снаряжения: магазин или (для однозарядных — ПТРД) весь носимый запас
+export function loadCount(weaponId) { const w = WEAPONS[weaponId]; return w.pouch ? w.mag * (1 + w.mags) : w.mag; }
 export function ammoChoices(weaponId) { const w = WEAPONS[weaponId]; return AMMO_FAMILY[w.ammo] || [w.ammo]; }
 export function defaultPattern(weaponId) {
   const w = WEAPONS[weaponId];
   const fam = ammoChoices(weaponId);
   if (w.id === 'pkm' || w.id === 'pkp_mount') return Array.from({ length: w.mag }, (_, i) => (i % 4 === 3 ? fam.find((a) => AMMO[a].tracer) : w.ammo));
+  if (w.id === 'ptrd') return Array.from({ length: loadCount('ptrd') }, (_, i) => (i % 2 ? 'ptrd_mdz' : 'ptrd_b32'));
   return Array(w.mag).fill(w.ammo);
 }
-export const LOADABLE = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];
+export const LOADABLE = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm', 'ptrd'];
+// тяжёлое оружие во втором слоте
+export const HEAVY_CHOICES = [{ id: null, name: 'Нет' }, { id: 'rpg7', name: 'РПГ-7В' }, { id: 'ptrd', name: 'ПТРД-41' }];

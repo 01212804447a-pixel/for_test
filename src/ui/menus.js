@@ -3,14 +3,14 @@
 import { STORY } from '../data/story.js';
 import { MISSIONS } from '../data/missions.js';
 import { ROSTER, STAT_NAMES } from '../data/squad.js';
-import { WEAPONS, AMMO, PRIMARY_CHOICES, ammoChoices, defaultPattern, LOADABLE } from '../data/weapons.js';
+import { WEAPONS, AMMO, PRIMARY_CHOICES, ammoChoices, defaultPattern, LOADABLE, loadCount, HEAVY_CHOICES } from '../data/weapons.js';
 import { VEHICLE_TYPES } from '../entities/vehicle.js';
 import { buildFiringTable, handGrenadeTable, TABLE_WEAPONS } from '../physics/firingTable.js';
 import { drawChart } from './charts.js';
 import { CARDINALS } from '../core/math.js';
 import { ACTIONS, DEFAULT_BINDS, keyName } from '../core/input.js';
 import { CHARGES, MIL, firingTable, sightFor, fmtDiv, fmtSigned } from '../artillery/d30.js';
-import { PVP_MAPS, PVP_WEAPONS, TEAM_NAMES, pvpMap } from '../data/pvp.js';
+import { PVP_MAPS, PVP_WEAPONS, TEAM_NAMES, pvpMap, NET_ROLES, TOW_CHOICES, defaultKit, kitOf } from '../data/pvp.js';
 import { defaultServer } from '../net/net.js';
 import { lethalityTable } from '../data/lethality.js';
 
@@ -249,7 +249,7 @@ export class UI {
     this.show(`<h1>${m.title}</h1><div class="opc">${m.code}</div>
       <div class="brief">${m.brief.split('\n').map((p) => `<p>${p}</p>`).join('')}</div>
       <div class="cond"><b>Условия:</b> ${timeName}; t = ${e.tempC} °C; ветер ${CARDINALS[Math.round(e.windFrom / 45) % 8]} (${e.windFrom}°), ${e.wind} м/с; видимость ~${e.visibility} м${e.snow > 0.3 ? '; снегопад' : ''}${e.aurora ? '; северное сияние' : ''}.</div>
-      ${m.noSquad ? '' : `<div class="cond"><b>Отделение:</b> ${squad.map((id) => '«' + ROSTER.find((r) => r.id === id).callsign + '»').join(', ') || 'Кей идёт один'}.<br><b>Оружие Кея:</b> ${WEAPONS[s.primary].name}${s.launcher ? ' + РПГ-7В' : ''}. <b>Техника:</b> ${(s.vehicles || []).map((v) => VEHICLE_TYPES[v].name).join(', ') || 'пешком'} (мест: ${seats}, нужно ${squad.length + 1}).</div>
+      ${m.noSquad ? '' : `<div class="cond"><b>Отделение:</b> ${squad.map((id) => '«' + ROSTER.find((r) => r.id === id).callsign + '»').join(', ') || 'Кей идёт один'}.<br><b>Оружие Кея:</b> ${WEAPONS[s.primary].name}${s.launcher ? ' + ' + WEAPONS[s.launcher === true ? 'rpg7' : s.launcher].name : ''}. <b>Техника:</b> ${(s.vehicles || []).map((v) => VEHICLE_TYPES[v].name).join(', ') || 'пешком'} (мест: ${seats}, нужно ${squad.length + 1}).</div>
       <p class="note">Изменить состав, оружие и технику — у стендов в штабе.</p>`}
       <div class="row"><button class="btn" id="go">Выход на задание</button>${m.guide ? '<button class="btn sec" id="gd">Гайд: Д-30</button>' : ''}<button class="btn sec" id="back">Назад</button></div>`, { wide: true });
     this.bind('#go', () => { this.close(); this.app.startMission(m.id); });
@@ -342,7 +342,7 @@ export class UI {
         <li><b>Прицел</b> — по таблице для Д<sub>и</sub>, ставится клавишами [ ] (Shift — по 10). <b>Уровень</b> — 30-00 + ε, клавишами − =.</li>
         <li><b>Угломер</b> — A/D или мышью в панораме до нужного отсчёта (Shift — грубо, без Shift — точно).</li>
         <li><b>Подъёмным механизмом</b> (W/S) выведите пузырёк на середину (зелёный).</li>
-        <li><b>R</b> — «Заряжай!». Дождитесь доклада «Готово!». Перед выстрелом проверьте угломер и пузырёк.</li>
+        <li><b>R</b> — «Заряжай!». Снарядный и зарядный бегут к ящику с боеприпасами (11 м за орудием, 50 снарядов и 50 зарядов), несут снаряд (22 кг — шагом) и гильзу с зарядом; сначала досылается снаряд, потом гильза, замковый закрывает клин — «Готово!». Обычно 9–10 с; если кто-то из расчёта убит, остальные бегают за двоих, дольше. Если расчёт выбит — заряжайте сами: у ящика <b>E</b> — взять снаряд, у казённика справа <b>E</b> — дослать, затем так же гильзу (G — бросить груз). Попадание в ящик — взрыв всего боекомплекта.</li>
         <li><b>ЛКМ</b> — «Выстрел!». Справа откроется <b>камера снаряда</b>: она ведёт снаряд и показывает дальность, скорость, время полёта и высоту над рельефом, после падения — место разрыва крупным планом и доклад наблюдателя.</li>
       </ol>
 
@@ -494,35 +494,57 @@ export class UI {
     const me = r.players.find((p) => p.id === net.id) || {};
     const owner = r.owner === net.id, pvp = r.mode === 'pvp';
     const title = pvp ? pvpMap(r.mission).title : (MISSIONS.find((q) => q.id === r.mission) || {}).title || r.mission;
+    // своё снаряжение — хранится в сохранении и уходит на сервер
+    const sv = this.app.save;
+    const kit = sv.netKit = { ...defaultKit(sv, r), ...(sv.netKit || {}) };
+    const sendKit = () => { this.app.persist(); net.send({ t: 'set', kit }); };
+    const lobby = r.state === 'lobby';
+    const sel = (id, opts, cur) => `<select id="${id}" ${lobby ? '' : 'disabled'}>${opts.map(([v, n]) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+    const roleOpts = [['', '—'], ...Object.entries(NET_ROLES).map(([k, v]) => [k, v.name])];
+    const summary = (p) => {
+      const k = kitOf(p, r);
+      const w = (WEAPONS[k.weapon] || {}).name || '';
+      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}`;
+    };
     this.show(`<h1>${escH(r.name)}</h1><div class="opc">${pvp ? `Противостояние · ${escH(title)} · до ${r.scoreLimit} побед или ${r.timeLimit} мин` : `Кооператив · ${escH(title)}`}</div>
       <div id="nerr" class="bad"></div>
       <div id="pl" class="netrooms"></div>
-      ${pvp ? `<div class="netform"><label>Команда <span><button class="btn ${me.team === 'negs' ? '' : 'sec'}" id="tn">${TEAM_NAMES.negs}</button> <button class="btn ${me.team === 'denter' ? '' : 'sec'}" id="td">${TEAM_NAMES.denter}</button></span></label>
-        <label>Оружие <select id="wp">${PVP_WEAPONS.map((w) => `<option value="${w}" ${me.weapon === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></label></div>`
-        : `<p class="note">Оружие и РПГ — как выбрано в оружейной штаба (${escH(WEAPONS[this.app.save.primary].name)}${this.app.save.launcher ? ' + РПГ-7В' : ''}). На старте — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}. Хост (создатель комнаты) считает противника и задачи.</p>`}
-      ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label>
-        <label>Бойцов ИИ в отделении у каждого <select id="sq">${[0, 1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}" ${n === (r.squad ?? 3) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
-        <label><input type="checkbox" id="hw" ${r.howitzer !== false ? 'checked' : ''}> Д-30 на прицепе ${pvp ? 'у каждой команды' : 'у «Тигра»'}</label></div>`
-        : `<p class="note">Отделение ИИ у каждого игрока: ${r.squad ?? 3} · Д-30: ${r.howitzer !== false ? 'есть' : 'нет'}</p>`}
-      <div class="row">${owner ? `<button class="btn" id="go">Начать${r.state === 'play' ? ' (идёт бой)' : ''}</button>` : `<span class="note">${r.state === 'play' ? 'Идёт бой' : 'Ждём, когда создатель комнаты начнёт'}</span>`}${pvp && r.state === 'play' && !owner ? '' : ''}<button class="btn sec" id="lv">Покинуть комнату</button></div>`, { wide: true });
+      ${pvp ? `<div class="netform"><label>Команда <span><button class="btn ${me.team === 'negs' ? '' : 'sec'}" id="tn">${TEAM_NAMES.negs}</button> <button class="btn ${me.team === 'denter' ? '' : 'sec'}" id="td">${TEAM_NAMES.denter}</button></span></label></div>` : ''}
+      <h2 class="nh">Моё снаряжение${lobby ? '' : ' (меняется до начала боя)'}</h2>
+      <div class="netform kit">
+        <label>Оружие ${sel('kw', PVP_WEAPONS.map((w) => [w, WEAPONS[w].name]), kit.weapon)}</label>
+        <label>Тяжёлое оружие ${sel('kh', [['', 'нет'], ['rpg7', WEAPONS.rpg7.name], ['ptrd', WEAPONS.ptrd.name + ' (тяжёлое, медленнее ходьба)']], kit.heavy || '')}</label>
+        <label>Гранаты Ф-1 ${sel('kg', [0, 1, 2, 3, 4].map((n) => [n, n]), kit.grenades)}</label>
+        <label>Патроны <button class="btn sec" id="kl">Снаряжение магазинов…</button></label>
+        <label>Отделение ИИ <span class="sq">${[0, 1, 2, 3, 4, 5].map((i) => sel('ks' + i, roleOpts, kit.squad[i] || '')).join('')}</span></label>
+        <label><input type="checkbox" id="kd" ${kit.howitzer ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Д-30 с расчётом на прицепе — тягач ${sel('kt', TOW_CHOICES.map((t) => [t, VEHICLE_TYPES[t].name]), kit.tow)}</label>
+      </div>
+      ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
+      <p class="note">${pvp ? 'Каждый выбирает своё: оружие, РПГ или ПТРД, гранаты, состав отделения ИИ, нужна ли ему Д-30 и на каком тягаче.' : `На старте у всех — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}; Д-30 — у тех, кто её взял. Хост (создатель комнаты) считает противника и задачи.`}</p>
+      <div class="row">${owner ? `<button class="btn" id="go">Начать${r.state === 'play' ? ' (идёт бой)' : ''}</button>` : `<span class="note">${r.state === 'play' ? 'Идёт бой' : 'Ждём, когда создатель комнаты начнёт'}</span>`}<button class="btn sec" id="lv">Покинуть комнату</button></div>`, { wide: true });
     const draw = () => {
       const rr = net.room; const el = this.panel.querySelector('#pl');
       if (!rr || !el) return;
-      el.innerHTML = `<table class="ctl"><tr><th>Боец</th>${pvp ? '<th>Команда</th><th>Оружие</th>' : ''}<th>Пинг</th><th></th></tr>${rr.players.map((p) => `<tr class="${p.id === net.id ? 'me' : ''}"><td>${escH(p.name)}</td>${pvp ? `<td>${TEAM_NAMES[p.team] || ''}</td><td>${escH((WEAPONS[p.weapon] || {}).name || '')}</td>` : ''}<td>${p.ping || '—'}</td><td>${p.id === rr.owner ? (pvp ? 'создатель' : 'хост') : ''}</td></tr>`).join('')}</table>`;
+      el.innerHTML = `<table class="ctl"><tr><th>Боец</th>${pvp ? '<th>Команда</th>' : ''}<th>Снаряжение</th><th>Пинг</th><th></th></tr>${rr.players.map((p) => `<tr class="${p.id === net.id ? 'me' : ''}"><td>${escH(p.name)}</td>${pvp ? `<td>${TEAM_NAMES[p.team] || ''}</td>` : ''}<td>${summary(p)}</td><td>${p.ping || '—'}</td><td>${p.id === rr.owner ? (pvp ? 'создатель' : 'хост') : ''}</td></tr>`).join('')}</table>`;
     };
     draw();
-    this._netOn('room', (m) => { const was = r; if (m.room.owner !== was.owner || m.room.mission !== was.mission || m.room.mode !== was.mode || m.room.state !== was.state || m.room.squad !== was.squad || m.room.howitzer !== was.howitzer || (m.room.players.find((p) => p.id === net.id) || {}).team !== me.team) this.netRoom(); else draw(); });
+    this._netOn('room', (m) => { const was = r; if (m.room.owner !== was.owner || m.room.mission !== was.mission || m.room.mode !== was.mode || m.room.state !== was.state || (m.room.players.find((p) => p.id === net.id) || {}).team !== me.team) this.netRoom(); else draw(); });
     this._netOn('err', (m) => { const e = this.panel.querySelector('#nerr'); if (e) e.textContent = m.msg; });
     this._netOn('close', () => this.netMenu('Соединение с сервером потеряно'));
     if (pvp) {
-      if (!me.weapon || !PVP_WEAPONS.includes(me.weapon)) net.send({ t: 'set', weapon: PVP_WEAPONS.includes(this.app.save.primary) ? this.app.save.primary : 'ak74m' });
       this.bind('#tn', () => net.send({ t: 'set', team: 'negs' }));
       this.bind('#td', () => net.send({ t: 'set', team: 'denter' }));
-      const wp = this.panel.querySelector('#wp'); if (wp) wp.addEventListener('change', () => net.send({ t: 'set', weapon: wp.value }));
-    } else net.send({ t: 'set', weapon: this.app.save.primary });
+    }
+    const on = (id, fn) => { const e = this.panel.querySelector(id); if (e) e.addEventListener('change', () => { fn(e); sendKit(); draw(); }); };
+    on('#kw', (e) => { kit.weapon = e.value; });
+    on('#kh', (e) => { kit.heavy = e.value || null; });
+    on('#kg', (e) => { kit.grenades = +e.value; });
+    for (let i = 0; i < 6; i++) on('#ks' + i, () => { kit.squad = [0, 1, 2, 3, 4, 5].map((k) => this.panel.querySelector('#ks' + k).value).filter(Boolean); });
+    on('#kd', (e) => { kit.howitzer = e.checked; });
+    on('#kt', (e) => { kit.tow = e.value; });
+    this.bind('#kl', () => { this._netClear(); this.magLoader(LOADABLE.includes(kit.weapon) ? kit.weapon : null, () => this.netRoom()); });
+    if (lobby) sendKit();
     const ms = this.panel.querySelector('#ms'); if (ms) ms.addEventListener('change', () => net.send({ t: 'set', mission: ms.value }));
-    const sq = this.panel.querySelector('#sq'); if (sq) sq.addEventListener('change', () => net.send({ t: 'set', squad: +sq.value }));
-    const hw = this.panel.querySelector('#hw'); if (hw) hw.addEventListener('change', () => net.send({ t: 'set', howitzer: hw.checked }));
     this.bind('#go', () => net.send({ t: 'start' }));
     this.bind('#lv', () => { net.send({ t: 'leave' }); net.room = null; this.netLobby(); });
   }
@@ -586,10 +608,11 @@ export class UI {
         return `<div class="card ${s.primary === id ? 'on' : ''}" data-id="${id}"><div class="ct">${w.name}</div><div class="cr">${w.cls} · ${a.name}</div>
           <div class="cn">V₀ ${a.v0} м/с · ${w.rpm > 60 ? w.rpm + ' выстр/мин · ' : ''}магазин ${w.mag} · масса ${w.weight} кг</div><div class="cb">${w.desc}</div></div>`;
       }).join('')}</div>
-      <label class="chk"><input type="checkbox" id="rpg" ${s.launcher ? 'checked' : ''}> Взять РПГ-7В (3 выстрела ПГ-7ВМ, слот 2) — ${WEAPONS.rpg7.desc}</label>
+      <div class="netform"><label>Тяжёлое оружие (слот 2) <select id="rpg">${HEAVY_CHOICES.map((h) => `<option value="${h.id || ''}" ${(s.launcher === true ? 'rpg7' : s.launcher || '') === (h.id || '') ? 'selected' : ''}>${h.name}</option>`).join('')}</select></label></div>
+      <p class="note">${WEAPONS.rpg7.name}: ${WEAPONS.rpg7.desc}<br>${WEAPONS.ptrd.name}: ${WEAPONS.ptrd.desc}</p>
       <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
       this.bind('.card', (e) => { s.primary = e.dataset.id; this.app.persist(); render(); });
-      this.panel.querySelector('#rpg').onchange = (e) => { s.launcher = e.target.checked; this.app.persist(); };
+      this.panel.querySelector('#rpg').onchange = (e) => { s.launcher = e.target.value || null; this.app.persist(); };
       this.bind('#b', () => this.close());
     };
     render();
@@ -624,19 +647,21 @@ export class UI {
     s.loads = s.loads || {};
     let wid = weaponId || (LOADABLE.includes(s.primary) ? s.primary : 'ak74m');
     let sel = null;
-    const CLS = { std: '#9aa3a8', tracer: '#d8402a', ap: '#202020', sniper: '#c9c2a0' };
+    const CLS = { std: '#9aa3a8', tracer: '#d8402a', ap: '#202020', sniper: '#c9c2a0', he: '#c8a020' };
     const render = () => {
       const w = WEAPONS[wid];
       const fam = ammoChoices(wid);
       if (!sel || !fam.includes(sel)) sel = fam[0];
+      const n = loadCount(wid);
       let pat = s.loads[wid];
-      if (!pat || pat.length !== w.mag) pat = defaultPattern(wid);
-      const per = w.mag > 30 ? 25 : w.mag;
-      const cells = pat.map((a, i) => `<i class="rnd" data-i="${i}" title="${i + 1}: ${AMMO[a].name}" style="--c:${CLS[AMMO[a].cls] || '#999'}">${AMMO[a].cls === 'tracer' ? 'Т' : AMMO[a].cls === 'ap' ? 'Б' : AMMO[a].cls === 'sniper' ? 'С' : ''}</i>`);
+      if (!pat || pat.length !== n) pat = defaultPattern(wid);
+      const per = n > 30 ? 25 : n;
+      const mark = (c) => (c === 'tracer' ? 'Т' : c === 'ap' ? 'Б' : c === 'sniper' ? 'С' : c === 'he' ? 'М' : '');
+      const cells = pat.map((a, i) => `<i class="rnd" data-i="${i}" title="${i + 1}: ${AMMO[a].name}" style="--c:${CLS[AMMO[a].cls] || '#999'}">${mark(AMMO[a].cls)}</i>`);
       const rows = [];
       for (let i = 0; i < cells.length; i += per) rows.push(`<div class="rrow"><span>${i + 1}</span>${cells.slice(i, i + per).join('')}</div>`);
       const trc = fam.find((a) => AMMO[a].cls === 'tracer');
-      this.show(`<h1>Снаряжение ${w.mag > 30 ? 'ленты' : 'магазинов'}</h1>
+      this.show(`<h1>Снаряжение ${w.pouch ? 'патронов (по порядку заряжания)' : w.mag > 30 ? 'ленты' : 'магазинов'}</h1>
         <div class="tabs">${LOADABLE.map((id) => `<button class="tab ${id === wid ? 'on' : ''}" data-w="${id}">${WEAPONS[id].name}</button>`).join('')}</div>
         <p class="note">Порядок слева направо — от первого выстрела к последнему (верхний патрон в магазине — первый). Выберите патрон и нажимайте на ячейки (можно провести с зажатой кнопкой). Схема применяется ко всем магазинам этого оружия.</p>
         <div class="pal">${fam.map((a) => `<button class="btn pa ${a === sel ? 'on' : ''}" data-a="${a}"><i style="--c:${CLS[AMMO[a].cls]}"></i>${AMMO[a].name}<small>V₀ ${AMMO[a].v0} м/с · пробитие ${AMMO[a].pen} мм</small></button>`).join('')}</div>
@@ -645,22 +670,23 @@ export class UI {
           <button class="btn sec" data-p="all">Все — ${AMMO[fam[0]].short}</button>
           ${trc ? `<button class="btn sec" data-p="first3">Трассеры: первые 3</button><button class="btn sec" data-p="last3">Трассеры: последние 3 (сигнал)</button><button class="btn sec" data-p="every4">Каждый 4-й трассер</button><button class="btn sec" data-p="every3">Каждый 3-й трассер</button>` : ''}
           <button class="btn sec" data-p="fillSel">Все — выбранным</button>
+          ${w.pouch ? '<button class="btn sec" data-p="alt">Чередовать (по умолчанию)</button>' : ''}
         </div>
         <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
       const save = () => { s.loads[wid] = pat; this.app.persist(); };
       this.panel.querySelectorAll('[data-w]').forEach((b) => b.addEventListener('click', () => { wid = b.dataset.w; render(); }));
       this.panel.querySelectorAll('.pa').forEach((b) => b.addEventListener('click', () => { sel = b.dataset.a; render(); }));
       let painting = false;
-      const paint = (el) => { const i = +el.dataset.i; pat[i] = sel; el.style.setProperty('--c', CLS[AMMO[sel].cls]); el.textContent = AMMO[sel].cls === 'tracer' ? 'Т' : AMMO[sel].cls === 'ap' ? 'Б' : AMMO[sel].cls === 'sniper' ? 'С' : ''; save(); };
+      const paint = (el) => { const i = +el.dataset.i; pat[i] = sel; el.style.setProperty('--c', CLS[AMMO[sel].cls]); el.textContent = mark(AMMO[sel].cls); save(); };
       this.panel.querySelectorAll('.rnd').forEach((el) => {
         el.addEventListener('mousedown', (e) => { e.preventDefault(); painting = true; paint(el); });
         el.addEventListener('mouseenter', () => { if (painting) paint(el); });
       });
       addEventListener('mouseup', () => { painting = false; }, { once: true });
       this.panel.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click', () => {
-        const base = fam[0], n = w.mag;
+        const base = fam[0];
         const P = b.dataset.p;
-        pat = Array.from({ length: n }, (_, i) => {
+        pat = P === 'alt' ? defaultPattern(wid) : Array.from({ length: n }, (_, i) => {
           if (P === 'fillSel') return sel;
           if (P === 'first3' && i < 3) return trc;
           if (P === 'last3' && i >= n - 3) return trc;

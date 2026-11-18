@@ -1,5 +1,5 @@
 // Соединение с игровым сервером (WebSocket): сообщения, пинг, оценка времени сервера
-export const NET_VER = 1;
+export const NET_VER = 2;
 
 // Адрес сервера по умолчанию: если игра открыта с самого игрового сервера — он же
 export function defaultServer() {

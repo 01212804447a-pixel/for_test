@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { CharAnimator, charAvailable } from './charRig.js';
 import { thirdPersonGun } from '../weapons/guns.js';
 
-export const TP_KIND = { ak74m: 'ak74', ak74m_gp: 'ak74gp', ak74m_1p78: 'ak74scope', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg7' };
+export const TP_KIND = { ak74m: 'ak74', ak74m_gp: 'ak74gp', ak74m_1p78: 'ak74scope', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg7', ptrd: 'ptrd' };
 
 export function characterAvailable() { return charAvailable('negs'); }
 

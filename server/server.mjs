@@ -78,7 +78,7 @@ function send(c, msg) { if (c.ws.readyState === 1) c.ws.send(typeof msg === 'str
 function roomPublic(r) {
   return {
     id: r.id, name: r.name, mode: r.mode, mission: r.mission, max: r.max, state: r.state, owner: r.owner, host: r.host,
-    scoreLimit: r.scoreLimit, timeLimit: r.timeLimit, endsAt: r.endsAt,
+    scoreLimit: r.scoreLimit, timeLimit: r.timeLimit, endsAt: r.endsAt, howitzer: r.howitzer, squad: r.squad,
     players: [...r.players].map((id) => { const c = clients.get(id); return c ? { id, name: c.name, team: c.team, weapon: c.weapon, ready: c.ready, ping: c.ping, kills: c.kills, deaths: c.deaths } : null; }).filter(Boolean),
     score: r.score,
   };
@@ -190,7 +190,7 @@ function onMessage(c, raw) {
       const room = {
         id, name: clean(m.name, 32) || `${c.name}: ${mode === 'pvp' ? 'PvP' : 'кооп'}`, mode, mission: clean(m.mission, 24) || 'm1',
         max: Math.max(2, Math.min(mode === 'pvp' ? 16 : 4, +m.max || (mode === 'pvp' ? 12 : 4))), state: 'lobby', owner: c.id, host: c.id,
-        players: new Set(), score: { negs: 0, denter: 0 }, scoreLimit: Math.max(5, Math.min(200, +m.scoreLimit || 30)), timeLimit: Math.max(3, Math.min(60, +m.timeLimit || 15)), endsAt: 0,
+        players: new Set(), howitzer: m.howitzer !== false, squad: Math.max(0, Math.min(6, m.squad ?? 3)), score: { negs: 0, denter: 0 }, scoreLimit: Math.max(5, Math.min(200, +m.scoreLimit || 30)), timeLimit: Math.max(3, Math.min(60, +m.timeLimit || 15)), endsAt: 0,
       };
       rooms.set(id, room);
       room.players.add(c.id); c.room = id; c.team = mode === 'pvp' ? 'negs' : 'negs'; c.ready = false;
@@ -225,6 +225,8 @@ function onMessage(c, raw) {
         if (m.mission) r.mission = clean(m.mission, 24);
         if (m.scoreLimit) r.scoreLimit = Math.max(5, Math.min(200, +m.scoreLimit));
         if (m.timeLimit) r.timeLimit = Math.max(3, Math.min(60, +m.timeLimit));
+        if (m.howitzer !== undefined) r.howitzer = !!m.howitzer;
+        if (m.squad !== undefined) r.squad = Math.max(0, Math.min(6, +m.squad || 0));
       }
       roomUpdate(r);
       break;
@@ -264,6 +266,22 @@ function onMessage(c, raw) {
     case 'died': {
       if (!r || r.state !== 'play' || !c.alive) break;
       onKill(r, c, m.by && r.players.has(m.by) ? m.by : null, m.w);
+      break;
+    }
+    case 'aikill': {
+      // гибель бойца ИИ из отделения (сообщает хост): очки команде убийцы в PvP
+      if (!r || r.state !== 'play' || r.host !== c.id) break;
+      const k = m.by ? clients.get(m.by) : null;
+      const vt = m.team === 'denter' ? 'denter' : 'negs';
+      if (r.mode === 'pvp' && k && r.players.has(k.id)) {
+        if (k.team !== vt) { k.kills = (k.kills || 0) + 1; r.score[k.team]++; }
+        else { k.kills = (k.kills || 0) - 1; r.score[k.team] = Math.max(0, r.score[k.team] - 1); }
+      }
+      broadcast(r, { t: 'kill', killer: k ? k.id : null, kname: k ? k.name : null, victim: null, vname: clean(m.vname, 40), vteam: vt, w: clean(m.w, 20), score: r.score, stats: [...r.players].map((id) => { const q = clients.get(id); return q ? [id, q.kills || 0, q.deaths || 0] : null; }).filter(Boolean) });
+      if (r.mode === 'pvp' && (r.score.negs >= r.scoreLimit || r.score.denter >= r.scoreLimit)) {
+        const w = r.score.negs >= r.scoreLimit ? 'negs' : 'denter';
+        endMatch(r, true, `Победа: ${w === 'negs' ? 'N.E.G.S' : '«Дентер»'} (${r.score.negs}:${r.score.denter})`);
+      }
       break;
     }
     case 'end':

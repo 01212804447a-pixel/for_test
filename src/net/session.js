@@ -238,6 +238,8 @@ export class NetSession {
       const i = a[0], s = m.netAI[i];
       if (!s) continue;
       if (a.length < 3) { if (s.alive) { s.die(null); } continue; }
+      if (s._deadSent) s._deadSent = 0;
+      if ((a[10] & 1) && !s.alive) { s.revive(a[1], a[2], a[3], a[4]); if (this.aiInterp[i]) this.aiInterp[i].reset(); }
       if (!(a[10] & 1)) { if (s.alive) { if (s.vehicle) { s.vehicle.removeOccupant(s); s.vehicle = null; s.hidden = false; } s.pos.set(a[1], a[2], a[3]); s.yaw = a[4]; s.die(null); } continue; }
       const it = this.aiInterp[i] || (this.aiInterp[i] = new Interp([3, 4]));
       it.push([a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[9]]);
@@ -252,7 +254,7 @@ export class NetSession {
       if (v[11]) {
         const vi = this.vehInterp[v[0]] || (this.vehInterp[v[0]] = { src: null, buf: new Interp([3]) });
         if (vi.src !== 'host') { vi.src = 'host'; vi.buf.reset(); }
-        vi.buf.push([v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]]);
+        vi.buf.push([v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[12] || 0, v[13] || 0]);
       }
     }
     // разрушаемые объекты
@@ -277,6 +279,8 @@ export class NetSession {
       try {
         if (e[0] === 's') this.applyShot(e, msg.from);
         else if (e[0] === 'g') this.applyGrenade(e, msg.from);
+        else if (e[0] === 'gm') { const h = this.m.guns[e[1]]; if (h) h.netOp(e); }
+        else if (e[0] === 'mk') this.m.addMark({ team: e[1], x: e[2], z: e[3], label: e[4], kind: e[5], by: e[6], ttl: e[7], fromNet: true });
         else if (this.isHost) this.applyHostEvent(e, msg.from);
       } catch (err) { console.warn('net ev', e, err); }
     }
@@ -337,6 +341,11 @@ export class NetSession {
         if (it && !it.done) it.localTake();
         break;
       }
+      case 'o': {
+        const grp = m.netSquads && m.netSquads.get(from);
+        if (grp) m.squadOrder(e[1], e[5] ? new THREE.Vector3(e[2], e[3], e[4]) : null, grp, true);
+        break;
+      }
     }
   }
 
@@ -353,7 +362,7 @@ export class NetSession {
     for (const [id, kk, dd] of k.stats || []) this.stats.set(id, [kk, dd]);
     if (k.score) this.score = k.score;
     const team = (id) => (id === this.net.id ? this.team : (this.peers.get(id) || {}).team);
-    const col = (id) => (team(id) === 'denter' ? '#e08a6a' : '#8fc0e8');
+    const col = (id) => ((id ? team(id) : k.vteam) === 'denter' ? '#e08a6a' : '#8fc0e8');
     const wn = k.w && WEAPONS[k.w] ? WEAPONS[k.w].name : '';
     if (k.killer && k.killer !== k.victim) this.msg(`<b style="color:${col(k.killer)}">${esc(k.kname)}</b> ✕ <b style="color:${col(k.victim)}">${esc(k.vname)}</b>${wn ? ` <span class="w">${esc(wn)}</span>` : ''}`);
     else this.msg(`<b style="color:${col(k.victim)}">${esc(k.vname)}</b> погиб`);
@@ -381,6 +390,7 @@ export class NetSession {
     const m = this.m;
     const sp = this.spawnPoint(m.def);
     m.player.respawn(sp.x, sp.z, sp.yaw);
+    if (this.isHost) m.reviveSquad(this.net.id, m.player.body.pos, sp.yaw);
     this.respawnAt = 0;
     this._lastHitBy = null;
     m.hud.message(this.pvp ? 'В бой!' : 'Вы снова в строю', 2);
@@ -402,7 +412,7 @@ export class NetSession {
       const s = p.soldier;
       if (!s) continue;
       if (!st.alive && s.alive) s.netDie();
-      else if (st.alive && !s.alive) { this.dropSoldier(p); p.interp.reset(); p.interp.push([st.p[0], st.p[1], st.p[2], st.yaw, st.ay, st.ap, 0, 0]); p.soldier = new RemoteSoldier(m, p, st.p[0], st.p[1], st.p[2]); m.soldiers.push(p.soldier); continue; }
+      else if (st.alive && !s.alive) { if (this.isHost) m.reviveSquad(p.id, new THREE.Vector3(st.p[0], st.p[1], st.p[2]), st.yaw); this.dropSoldier(p); p.interp.reset(); p.interp.push([st.p[0], st.p[1], st.p[2], st.yaw, st.ay, st.ap, 0, 0]); p.soldier = new RemoteSoldier(m, p, st.p[0], st.p[1], st.p[2]); m.soldiers.push(p.soldier); continue; }
       const v = p.interp.sample(tmp);
       if (v && s.alive) {
         s.pos.set(v[0], v[1], v[2]);
@@ -494,7 +504,7 @@ export class NetSession {
       veh: p.vehicle ? m.vehicles.indexOf(p.vehicle) : -1, seat: p.vehicle ? p.seat : -1,
       gun: p.gun ? m.guns.indexOf(p.gun) : -1,
     };
-    if (p.vehicle && p.seat === 0) { const v = p.vehicle; st.vs = [r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch)]; }
+    if (p.vehicle && p.seat === 0) { const v = p.vehicle; st.vs = [r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), r3(v.pitch), r3(v.roll)]; }
     if (p.vehicle && p.seat === 1) st.tg = [r3(p.vehicle.turretYaw), r3(p.vehicle.gunPitch)];
     if (p.gun) st.gs = [r2(p.gun.az), r2(p.gun.elM)];
     this.net.send(st);
@@ -509,7 +519,7 @@ export class NetSession {
       const fl = (s.alive ? 1 : 0) | (s.brain && s.brain.aiming ? 2 : 0) | (s.reloadT > 0 ? 4 : 0) | (s.hidden ? 8 : 0);
       ai.push([i, r2(s.pos.x), r2(s.pos.y), r2(s.pos.z), r3(s.yaw), r3(s.aimYaw), r3(s.aimPitch), Math.max(0, STANCES.indexOf(s.stance)), r2(s.vel.x), r2(s.vel.z), fl, s.vehicle ? m.vehicles.indexOf(s.vehicle) : -1, s.vehicle ? s.seat : -1]);
     }
-    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1]);
+    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll)]);
     const st = m.stages[m.stageIdx];
     this.net.send({
       t: 'ws', st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',

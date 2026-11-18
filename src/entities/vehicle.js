@@ -14,6 +14,7 @@ export const VEHICLE_TYPES = {
     wheelbase: 3.3, track: 1.84, wheelR: 0.56, maxSpeed: 23, accel: 3.6, brake: 7, steerMax: 0.55, grip: 3.4,
     seats: 9, gun: 'pkp_mount', gunExposed: true, armor: { front: 7, side: 6, top: 3 }, hp: 300,
     engine: 'diesel', camo: ['#e7eaed', '#b6bdc4', '#8e979e'],
+    susp: { droop: 0.15, comp: 0.17, zeta: 0.38, hcg: 0.95 }, hitch: 3.05,
     desc: 'Бронированный автомобиль повышенной проходимости. Защита от 5,45 и 7,62×39. Турель с ПКП, 9 мест.',
   },
   niva: {
@@ -21,6 +22,7 @@ export const VEHICLE_TYPES = {
     wheelbase: 2.2, track: 1.4, wheelR: 0.34, maxSpeed: 27, accel: 3.4, brake: 7.5, steerMax: 0.62, grip: 2.8,
     seats: 4, gun: null, armor: { front: 1, side: 0.8, top: 0.6 }, hp: 120,
     engine: 'car', camo: ['#3e4d33', '#34422b', '#4a5a3d'],
+    susp: { droop: 0.13, comp: 0.14, zeta: 0.34, hcg: 0.62 }, hitch: 2.0,
     desc: 'Быстрая и манёвренная, но не защищена: кузов пробивается любой пулей. 4 места.',
   },
   mtlb: {
@@ -28,6 +30,7 @@ export const VEHICLE_TYPES = {
     wheelbase: 4.6, track: 2.4, wheelR: 0.3, maxSpeed: 15, accel: 2.4, brake: 6, turnRate: 0.85, grip: 7,
     tracked: true, seats: 13, gun: 'pkt', turret: true, armor: { front: 11, side: 7, top: 5 }, hp: 460,
     engine: 'tracked', camo: ['#55613f', '#dde1e3', '#3e4a31'],
+    susp: { droop: 0.08, comp: 0.13, zeta: 0.55, hcg: 0.8 }, hitch: 3.35,
     desc: 'Гусеничный бронетранспортёр-тягач. Отличная проходимость по глубокому снегу, башня с ПКТ и прицелом ПП-61АМ, 11 мест десанта.',
   },
 };
@@ -49,7 +52,7 @@ export class Vehicle {
     this.pos = new THREE.Vector3(x, game.world.terrain.heightAt(x, z), z);
     this.vel = new THREE.Vector3();
     this.yaw = yaw; this.speed = 0; this.steer = 0; this.pitch = 0; this.roll = 0;
-    this.yVel = 0;
+    this.yVel = 0; this.pVel = 0; this.rVel = 0; this.contact = 1; this.airT = 0; this._settle = true;
     const mdl = buildModel(type);
     this.model = mdl;
     this.mesh = mdl.group;
@@ -201,11 +204,17 @@ export class Vehicle {
     let aF = 0;
     const th = ctl.throttle;
     const deep = T.tracked ? 0.15 : 0.45;
-    if (th > 0) aF = vF < -0.3 ? th * T.brake : th * T.accel * Math.max(0, 1 - Math.max(0, vF) / T.maxSpeed);
-    else if (th < 0) aF = vF > 0.3 ? th * T.brake : th * T.accel * 0.6 * Math.max(0, 1 - Math.max(0, -vF) / 6);
+    // сцепление только у колёс, касающихся грунта: в полёте газ, тормоз и руль не работают
+    const gc = this.contact ?? 1;
+    // с орудием на прицепе (3,2 т) разгон и максимальная скорость ниже
+    const tow = this.towing ? (T.tracked ? 0.85 : this.typeId === 'niva' ? 0.5 : 0.7) : 1;
+    const acc = T.accel * tow, vmax = T.maxSpeed * (this.towing ? 0.75 : 1);
+    if (th > 0) aF = vF < -0.3 ? th * T.brake : th * acc * Math.max(0, 1 - Math.max(0, vF) / vmax);
+    else if (th < 0) aF = vF > 0.3 ? th * T.brake : th * acc * 0.6 * Math.max(0, 1 - Math.max(0, -vF) / 6);
     aF += -9.81 * Math.sin(this.pitch) * 0.85;
-    const roll = (deep + 0.0011 * vF * vF) * Math.sign(vF);
+    const roll = (deep * gc + 0.0011 * vF * vF) * Math.sign(vF);
     if (ctl.brake) aF -= Math.sign(vF) * T.brake;
+    aF *= gc;
     const before = vF;
     vF += aF * dt;
     vF -= roll * dt;
@@ -213,8 +222,8 @@ export class Vehicle {
     if (ctl.brake && Math.abs(vF) < 0.5) vF = 0;
     // боковая составляющая веса на поперечном склоне и сцепление со снегом
     const muLat = (T.tracked ? 0.75 : 0.42) * (ctl.brake && !T.tracked ? 0.8 : 1);
-    vR += -9.81 * Math.sin(this.groundRoll || 0) * dt;
-    const fric = Math.min(Math.abs(vR), muLat * 9.81 * Math.cos(this.groundRoll || 0) * dt + Math.abs(vR) * (1 - Math.exp(-T.grip * dt)) * 0.6);
+    vR += -9.81 * Math.sin(this.groundRoll || 0) * dt * gc;
+    const fric = Math.min(Math.abs(vR), (muLat * 9.81 * Math.cos(this.groundRoll || 0) * dt + Math.abs(vR) * (1 - Math.exp(-T.grip * dt)) * 0.6) * gc);
     vR -= Math.sign(vR) * fric;
     this.accF = aF;
     let yawRate;
@@ -225,10 +234,15 @@ export class Vehicle {
       this.steer += (target - this.steer) * Math.min(1, dt * 5);
       yawRate = (vF * Math.tan(this.steer)) / T.wheelbase;
     }
+    // в воздухе машина сохраняет вращение по курсу
+    yawRate = yawRate * gc + (this._yawRate || 0) * (1 - gc) * Math.exp(-0.5 * dt);
+    this._yawRate = yawRate;
     this.yaw += yawRate * dt;
     this.accLat = (this.accLat || 0) * 0.85 + vF * yawRate * 0.15;
     // опрокидывание на слишком крутом поперечном склоне
     if (Math.abs(this.roll) > 0.85 && this.alive && Math.abs(this.groundRoll || 0) > 0.7) { this.hp -= 40 * dt; if (this.hp <= 0) this.destroy(null); }
+    // лежит на боку или на крыше — дальше не едет
+    if ((Math.abs(this.roll) > 1.2 || Math.abs(this.pitch) > 1.2) && gc > 0) { vF *= Math.exp(-4 * dt); this.hp -= 15 * dt; if (this.hp <= 0) this.destroy(null); }
     const nfx = -Math.sin(this.yaw), nfz = -Math.cos(this.yaw), nrx = Math.cos(this.yaw), nrz = -Math.sin(this.yaw);
     this.vel.set(nfx * vF + nrx * vR, 0, nfz * vF + nrz * vR);
     this.speed = vF;
@@ -285,50 +299,144 @@ export class Vehicle {
     if (v) {
       const ox = this.pos.x, oz = this.pos.z;
       this.pos.x = v[0]; this.pos.z = v[2]; this.yaw = v[3]; this.speed = v[4]; this.steer = v[5];
+      if (v.length > 9) { this.pos.y = v[1]; this.pitch = v[8]; this.roll = v[9]; this.netPose = true; }
       if (!this.netLocalGunner && !this.netTurret) { this.turretYaw = v[6]; this.gunPitch = v[7]; }
       if (dt > 0) this.vel.set((this.pos.x - ox) / dt, 0, (this.pos.z - oz) / dt);
       if (this.vel.lengthSq() > 900) this.vel.set(-Math.sin(this.yaw) * this.speed, 0, -Math.cos(this.yaw) * this.speed);
     }
     this.accF = 0; this.accLat = 0;
     this._place(dt);
+    this.netPose = false;
     this._tail(dt, this.speed, Math.abs(this.speed) > 0.5 ? 0.5 : 0);
   }
 
+  // Точки опоры подвески: колёса (у гусеничной — опорные катки)
+  _contacts() {
+    if (this._cp) return this._cp;
+    const T = this.type, cps = [];
+    for (const wh of this.model.wheels) {
+      if (T.tracked && wh.steer.position.y > 0.5) continue; // ленивец и звёздочка не опорные
+      cps.push({ wh, lx: wh.steer.position.x, lz: wh.steer.position.z, baseY: wh.steer.position.y, x: T.susp.droop, g: 0 });
+    }
+    if (!cps.length) {
+      const hl = T.len * 0.4, hw = T.width * 0.45;
+      for (const [lx, lz] of [[-hw, -hl], [hw, -hl], [-hw, hl], [hw, hl]]) cps.push({ wh: null, lx, lz, baseY: 0, x: T.susp.droop, g: 0 });
+    }
+    this._cp = cps;
+    return cps;
+  }
+
+  // Высота опоры под точкой: рельеф и низкие препятствия (валы, мешки, бордюры)
+  _groundUnder(x, z, top) {
+    const w = this.game.world;
+    let g = w.terrain.heightAt(x, z);
+    w._cellsAround(x, z, 0.4, (o) => {
+      if (!o.blocksMove || o.y1 <= g || o.y1 > top) return;
+      if (w.pointObstacleDist(o, x, z) <= 0.05) g = o.y1;
+    });
+    return g;
+  }
+
+  // Подвеска: пружина и амортизатор в каждой точке опоры, кузов — твёрдое тело (высота,
+  // тангаж, крен) с инерцией. На гребне машина сохраняет вертикальную скорость и отрывается,
+  // в воздухе летит по баллистике, при посадке — удар в упоры (сильный — повреждения).
   _place(dt) {
-    const T = this.type, w = this.game.world;
+    const T = this.type, w = this.game.world, S = T.susp;
     const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
     const hl = T.len * 0.4, hw = T.width * 0.45;
     const H = (lx, lz) => w.terrain.heightAt(this.pos.x + c * lx + s * lz, this.pos.z - s * lx + c * lz);
     const fl = H(-hw, -hl), fr = H(hw, -hl), rl = H(-hw, hl), rr = H(hw, hl);
     const gy = (fl + fr + rl + rr) / 4;
-    // плоскость опоры по четырём точкам + динамика кузова на подвеске
     this.groundPitch = Math.atan2((fl + fr) / 2 - (rl + rr) / 2, hl * 2);
     this.groundRoll = Math.atan2((fr + rr) / 2 - (fl + rl) / 2, hw * 2);
-    const soft = T.tracked ? 0.35 : 1;
-    const tp = this.groundPitch + clamp((this.accF || 0) * 0.006 * soft, -0.06, 0.06);
-    const tr = this.groundRoll + clamp(-(this.accLat || 0) * 0.012 * soft, -0.09, 0.09);
-    if (dt > 0.2) { this.pitch = tp; this.roll = tr; this.pVel = 0; this.rVel = 0; }
-    else {
-      const K = 90, C = 13;
-      this.pVel = (this.pVel || 0) + ((tp - this.pitch) * K - (this.pVel || 0) * C) * dt;
-      this.rVel = (this.rVel || 0) + ((tr - this.roll) * K - (this.rVel || 0) * C) * dt;
-      this.pitch += this.pVel * dt; this.roll += this.rVel * dt;
-    }
-    // ход колёс: каждое колесо прижимается к земле под собой
-    if (!T.tracked && this.model.wheels.length >= 4) {
-      for (let i = 0; i < 4; i++) {
-        const wh = this.model.wheels[i];
-        if (wh.baseY === undefined) wh.baseY = wh.steer.position.y;
-        const lx = wh.steer.position.x, lz = wh.steer.position.z;
-        const ground = H(lx, lz);
-        const plane = gy + Math.sin(this.pitch) * -lz + Math.sin(this.roll) * lx;
-        const target = clamp(wh.baseY + (ground - plane), wh.baseY - 0.14, wh.baseY + 0.14);
-        wh.steer.position.y += (target - wh.steer.position.y) * Math.min(1, dt * 18);
+    const cps = this._contacts();
+    if (this.netPose) {
+      // сетевая кукла: положение и наклоны приходят готовыми
+      for (const p of cps) p.x = S.droop;
+      this.contact = 1;
+    } else if (dt > 0.2 || this.yVel === undefined || this._settle) {
+      // первый кадр / телепорт: ставим на грунт без колебаний
+      this.pos.y = gy; this.pitch = this.groundPitch; this.roll = this.groundRoll;
+      this.yVel = 0; this.pVel = 0; this.rVel = 0; this.contact = 1; this._settle = false;
+      for (const p of cps) p.x = S.droop;
+    } else {
+      const n = Math.max(1, Math.ceil(dt / 0.006)), h = dt / n;
+      const N = cps.length;
+      const kS = 9.81 / (N * S.droop);                     // жёсткость на единицу массы
+      const w0 = Math.sqrt(9.81 / S.droop);
+      const cD = (2 * S.zeta * w0) / N;
+      const rgP2 = (T.len * 0.3) ** 2, rgR2 = (T.width * 0.36) ** 2;
+      // грунт под точками опоры (за кадр смещение мало)
+      for (const p of cps) {
+        const yA = this.pos.y - Math.sin(this.pitch) * p.lz + Math.sin(this.roll) * p.lx;
+        p.g = this._groundUnder(this.pos.x + c * p.lx + s * p.lz, this.pos.z - s * p.lx + c * p.lz, yA + 0.35);
       }
+      let contacts = 0, landV = 0;
+      const wasAir = (this.contact || 0) === 0;
+      for (let k = 0; k < n; k++) {
+        let ay = -9.81, ap = 0, ar = 0;
+        contacts = 0;
+        const sp = Math.sin(this.pitch), sr = Math.sin(this.roll), cp = Math.cos(this.pitch), cr = Math.cos(this.roll);
+        for (const p of cps) {
+          const yA = this.pos.y - sp * p.lz + sr * p.lx;
+          const vA = this.yVel - this.pVel * cp * p.lz + this.rVel * cr * p.lx;
+          const x = p.g - (yA - S.droop);
+          p.x = x;
+          if (x <= 0) continue;
+          contacts++;
+          let f = kS * x - cD * vA;
+          const over = x - S.droop - S.comp;
+          if (over > 0) f += kS * 30 * over - cD * 6 * vA; // упор хода сжатия
+          if (f < 0) f = 0;
+          ay += f; ap += f * -p.lz / rgP2; ar += f * p.lx / rgR2;
+        }
+        if (contacts) {
+          const cf = contacts / N;
+          ap += clamp(this.accF || 0, -9, 9) * S.hcg / rgP2 * cf;   // клевок при торможении, приседание при разгоне
+          ar += -clamp(this.accLat || 0, -9, 9) * S.hcg / rgR2 * cf; // крен в повороте
+        } else {
+          this.pVel *= Math.exp(-0.2 * h); this.rVel *= Math.exp(-0.2 * h);
+        }
+        this.yVel += ay * h; this.pVel += ap * h; this.rVel += ar * h;
+        this.pos.y += this.yVel * h; this.pitch += this.pVel * h; this.roll += this.rVel * h;
+        // днище не проваливается сквозь грунт: жёсткий контакт
+        let deficit = 0;
+        const sp2 = Math.sin(this.pitch), sr2 = Math.sin(this.roll);
+        for (const p of cps) {
+          const yA = this.pos.y - sp2 * p.lz + sr2 * p.lx;
+          const d = p.g - S.comp - 0.04 - yA; // полностью сжатая пружина: yA = g − comp
+          if (d > deficit) deficit = d;
+        }
+        if (deficit > 0) {
+          this.pos.y += deficit;
+          if (this.yVel < 0) { landV = Math.max(landV, -this.yVel); this.yVel = -this.yVel * 0.12; }
+          this.pVel *= 0.6; this.rVel *= 0.6;
+        }
+      }
+      this.contact = contacts / N;
+      if (wasAir && contacts && this.airT > 0.25) {
+        landV = Math.max(landV, this._fallV || 0);
+        this.game.audio.impact(this.pos, 'metal');
+      }
+      this.airT = contacts ? 0 : (this.airT || 0) + dt;
+      if (!contacts) this._fallV = Math.max(0, -this.yVel);
+      // жёсткое приземление: повреждения машины и экипажа
+      if (landV > 8 && this.alive) {
+        const dmg = (landV - 8) * (T.tracked ? 10 : 16);
+        this.hp -= dmg;
+        for (const o of this.seats) if (o && o.alive && Math.random() < 0.5) o.damage((landV - 8) * 4, 'leg', null, null, { penetrating: false });
+        if (this.hp <= 0) this.destroy(null);
+      }
+      // опрокидывание набок/на крышу
+      if ((Math.abs(this.roll) > 1.35 || Math.abs(this.pitch) > 1.35) && contacts === 0 && this.airT === 0) { /* в полёте */ }
+      this.pitch = clamp(this.pitch, -1.5, 1.5); this.roll = clamp(this.roll, -1.6, 1.6);
     }
-    // вертикаль: пружина + гравитация
-    if (this.pos.y > gy + 0.05) { this.yVel -= 9.81 * dt; this.pos.y += this.yVel * dt; if (this.pos.y < gy) { this.pos.y = gy; this.yVel = 0; } }
-    else { this.pos.y += (gy - this.pos.y) * Math.min(1, dt * 14); this.yVel = 0; }
+    // ход колёс по сжатию подвески
+    for (const p of cps) {
+      if (!p.wh) continue;
+      const off = clamp(p.x - S.droop, -S.droop, S.comp);
+      p.wh.steer.position.y = p.baseY + off;
+    }
     if (w.terrain.hasSea && gy < -1.2 && this.alive) { this.game.hud && this.game.hud.message(`${T.name} провалился под воду`); this.destroy(null); }
     this.mesh.position.copy(this.pos);
     this.mesh.rotation.set(0, 0, 0);
@@ -336,7 +444,7 @@ export class Vehicle {
     this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = this.pitch; this.mesh.rotation.z = this.roll;
     this.mesh.updateMatrixWorld(true);
     this._updateCollider();
-    if (this.blob) { this.blob.position.set(this.pos.x, gy + 0.06, this.pos.z); this.blob.rotation.z = this.yaw; }
+    if (this.blob) { this.blob.position.set(this.pos.x, gy + 0.06, this.pos.z); this.blob.rotation.z = this.yaw; this.blob.visible = this.pos.y - gy < 3; }
   }
 
   _collide(dt) {
@@ -405,8 +513,8 @@ export class Vehicle {
       }
     }
     // граница карты
-    const R = Math.hypot(this.pos.x, this.pos.z);
-    if (R > 1150) { this.pos.x *= 1150 / R; this.pos.z *= 1150 / R; this.vel.multiplyScalar(0.5); }
+    const R = Math.hypot(this.pos.x, this.pos.z), Rmax = w.terrain.boundary + 100;
+    if (R > Rmax) { this.pos.x *= Rmax / R; this.pos.z *= Rmax / R; this.vel.multiplyScalar(0.5); }
   }
 
   // Мировое положение дула и направление ствола турели

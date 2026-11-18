@@ -8,6 +8,7 @@ import { SoldierModel } from '../entities/soldierModel.js';
 import { ClipActor, CharAnimator, charAvailable } from '../entities/charRig.js';
 import { thirdPersonGun, buildGun } from '../weapons/guns.js';
 import { MISSIONS } from '../data/missions.js';
+import { lethalityTable } from '../data/lethality.js';
 import { WEAPONS } from '../data/weapons.js';
 import { model, pbr, hdr as hdrAsset } from '../core/assets.js';
 import { ROSTER } from '../data/squad.js';
@@ -77,6 +78,40 @@ function mapCanvas(progress) {
     g.fillStyle = '#111'; g.fillText(m.title, x + 18, y + 8);
   }
   g.fillStyle = '#1b2a40'; g.font = 'bold 30px Arial'; g.fillText('ОПЕРАЦИИ N.E.G.S — ЗАПОЛЯРЬЕ', 30, 610);
+  return c;
+}
+
+
+// Плакат «Поражающее действие» (рисуется по расчёту модели урона)
+function lethalityPoster() {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 768;
+  const g = c.getContext('2d');
+  g.fillStyle = '#efe9dc'; g.fillRect(0, 0, 1024, 768);
+  g.fillStyle = '#7a1a12'; g.fillRect(0, 0, 1024, 86);
+  g.fillStyle = '#fff'; g.font = 'bold 40px Arial'; g.fillText('ПОРАЖАЮЩЕЕ ДЕЙСТВИЕ БОЕПРИПАСОВ', 30, 58);
+  const T = lethalityTable();
+  // круги радиусов для ОФ-462 (масштаб)
+  const e = T.ex.find((x) => x.id === 'of462o'), cx = 760, cy = 430, k = 5.2;
+  const ring = (r, col, lw) => { g.strokeStyle = col; g.lineWidth = lw; g.beginPath(); g.arc(cx, cy, r * k, 0, 6.283); g.stroke(); };
+  g.fillStyle = 'rgba(150,20,10,0.12)'; g.beginPath(); g.arc(cx, cy, e.none.rHurt * k, 0, 6.283); g.fill();
+  ring(e.none.rMax, '#999', 2); ring(e.none.rHurt, '#d08a20', 3); ring(e.none.r50, '#b01810', 4); ring(e.none.r100, '#600', 6);
+  g.fillStyle = '#111'; g.font = 'bold 22px Arial'; g.fillText('122-мм ОФ-462', cx - 75, cy - e.none.rMax * k - 12);
+  g.font = '18px Arial';
+  g.fillText(`сплошное ${e.none.r100.toFixed(0)} м`, cx - 60, cy + 6);
+  g.fillText(`ранение ${e.none.rHurt.toFixed(0)} м`, cx - 60, cy - e.none.rHurt * k + 22);
+  // таблица
+  g.font = 'bold 22px Arial'; g.fillStyle = '#222';
+  g.fillText('Боеприпас', 30, 130); g.fillText('99 %', 290, 130); g.fillText('50 %', 360, 130); g.fillText('ранение', 430, 130);
+  let y = 170;
+  g.font = '21px Arial';
+  for (const x of T.ex) {
+    g.fillStyle = '#111'; g.fillText(x.name.replace(', взрыватель', ''), 30, y);
+    g.fillText(x.none.r100 < 0.3 ? '—' : x.none.r100.toFixed(1), 290, y); g.fillText(x.none.r50.toFixed(1), 360, y); g.fillText(x.none.rHurt.toFixed(0), 440, y);
+    y += 40;
+  }
+  g.font = '18px Arial'; g.fillStyle = '#444';
+  y += 10;
+  for (const line of ['Радиусы в метрах, разрыв на грунте, боец стоит.', 'Лёжа поражение в 2–3 раза меньше — ЛОЖИСЬ!', 'Подробно: E у плаката.']) { g.fillText(line, 30, y); y += 28; }
   return c;
 }
 
@@ -292,6 +327,12 @@ export class HQ {
     this.prop('industrial_wall_lamp', -4.4, 2.6, -D / 2 + 0.05, 0);
     this.prop('industrial_wall_lamp', 4.4, 2.6, -D / 2 + 0.05, 0);
     this.interact.push({ pos: new THREE.Vector3(0, 1.6, -D / 2 + 1.2), r: 3.2, label: 'Изучить таблицы стрельбы и графики траекторий', act: () => this.app.ui.firingTables() });
+    // ---------- плакат: поражающее действие боеприпасов ----------
+    const lc = lethalityPoster();
+    const lm = new THREE.Mesh(new THREE.PlaneGeometry(2.05, 1.54), std({ map: canvasTex(lc), color: 0xd8d4cb, roughness: 0.9 }));
+    lm.position.set(5.38, 1.55, -D / 2 + 0.05); S.add(lm);
+    this.box(2.17, 1.66, 0.04, trimM, 5.38, 1.55, -D / 2 + 0.025, false);
+    this.interact.push({ pos: new THREE.Vector3(5.38, 1.5, -D / 2 + 1.1), r: 2.2, label: 'Плакат: поражающее действие боеприпасов (радиусы, пробитие)', act: () => this.app.ui.lethality() });
     // ---------- стол с картой операций ----------
     this.box(4.1, 0.07, 2.7, tableTop, 0, 0.8, 0.2, true, 0, 1.5);
     for (const [x, z] of [[-1.9, -1.0], [1.9, -1.0], [-1.9, 1.4], [1.9, 1.4]]) this.box(0.09, 0.77, 0.09, trimM, x, 0.385, z, false);
@@ -326,12 +367,12 @@ export class HQ {
     this.prop('desk_lamp_arm_01', 7.0, 0.79, -4.5, -0.8);
     this.prop('office_notepads', 6.3, 0.795, -4.55, 0.1, { scale: 0.45 });
     this.prop('SchoolChair_01', 6.2, 0, -3.95, 0);
-    this.prop('wall_clock', 6.2, 2.55, -D / 2 + 0.03, 0, { scale: 1.2 });
+    this.prop('wall_clock', 7.2, 2.9, -D / 2 + 0.03, 0, { scale: 1.0 });
     this.prop('power_box_01', 8.6, 1.4, -5.2, -Math.PI / 2, { scale: 0.8 });
     // дверь в коридор (закрыта)
     this.door(7.2, -D / 2 + 0.02, 1.1, 2.15, 0, doorM, trimM, ['КОРИДОР', 'посторонним вход воспрещён']);
     // доска брифинга
-    const bc = this.prop('standing_chalkboard_01', 4.9, 0, -4.9, -0.25);
+    const bc = this.prop('standing_chalkboard_01', 8.15, 0, -4.35, -1.15); // у правой стены — не закрывает плакат
     // ---------- печка-буржуйка, дрова, ящики ----------
     this.prop('barrel_stove', 7.9, 0, 5.1, -0.6, { collide: 0.45 });
     const pipeM = std({ color: 0x2a2a2a, roughness: 0.6, metalness: 0.6 });

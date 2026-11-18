@@ -16,17 +16,26 @@ import { GunUI } from './gunUI.js';
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const EL_MIN = -117, EL_MAX = 1167; // −7° … +70°
 const LOAD_TIME = 5.5;
+const TRANS_TIME = 16;   // перевод из боевого в походное и обратно силами расчёта, с
+const AXLE = 0.15;       // ось колёс от оси вращения лафета (к проушине — +Z)
+const TRAVEL_EL = -0.045; // ствол в походном положении, рад
+const wrapA = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
+const ease = (t) => t * t * (3 - 2 * t);
 const VIEWS = ['eye', 'pano', 'op4m', 'side'];
 export const VIEW_NAMES = { eye: 'Обзор', pano: 'Панорама ПГ-1М', op4m: 'Прицел прямой наводки ОП4М-45', side: 'Вид со стороны' };
 
 export class Howitzer {
-  constructor(m, { x, z, dir = 0, name = 'Д-30 № 1' }) {
+  constructor(m, { x, z, dir = 0, name = 'Д-30 № 1', mode = 'combat', heading = null, towBy = null }) {
     this.m = m; this.name = name;
     this.model = buildD30();
     const y0 = m.terrain.heightAt(x, z);
     this.pos = new THREE.Vector3(x, y0, z);
     this.model.root.position.copy(this.pos);
     m.scene.add(this.model.root);
+    // положение: tr = 0 — боевое, 1 — походное; лафет: курс и наклоны (при буксировке)
+    this.tr = mode === 'travel' ? 1 : 0; this.trTarget = this.tr;
+    this.rootYaw = heading ?? 0; this.rootPitch = 0; this.rootRoll = 0;
+    this.towBy = null; this.snapT = 0;
     this.az = dir;          // угломер (тыс.)
     this.elM = 0;           // возвышение ствола (тыс.)
     this.drum = 0;          // прицел на барабане (тыс.)
@@ -37,7 +46,8 @@ export class Howitzer {
     this.view = 'pano';
     this.orbit = { yaw: 0.6, pitch: 0.25, dist: 7.5 };
     this.reports = [];
-    this.collider = m.world.addCylCollider({ x, z, y0, r: 1.0, h: 1.7, mat: 'metal', pen: 15, cover: true });
+    this.collider = null;
+    if (this.tr === 0) this._makeCollider();
     // расчёт
     this.crew = [];
     if (charAvailable('negs')) {
@@ -56,22 +66,191 @@ export class Howitzer {
     this.model.root.add(this.loadShell);
     this.casing = { t: 9, p: new THREE.Vector3(), v: new THREE.Vector3() };
     // взаимодействие
-    m.interactables.push({
-      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 2.6, label: `Занять место наводчика: ${name}`, hold: 0.25,
-      enabled: () => !m.player.gun && !this.netUser && m.player.body.alive, action: () => this.mount(m.player),
-    });
+    // место наводчика (слева у маховиков) и работа с орудием (справа у колеса / у проушины)
+    this.gunIt = {
+      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, label: `Занять место наводчика: ${name}`, hold: 0.25,
+      enabled: () => !m.player.gun && !this.netUser && m.player.body.alive && this.ready, action: () => this.mount(m.player),
+    };
+    const self = this;
+    this.towIt = {
+      pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.6, hold: 1.0,
+      get label() { return self.towLabel(); },
+      enabled: () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !this.netUser && this.tr === this.trTarget && !!this.towLabel(),
+      action: () => this.towAction(),
+    };
+    m.interactables.push(this.gunIt, this.towIt);
     this.ui = null;
+    if (towBy) this.hitch(towBy, true);
     this._place();
+  }
+
+  get ready() { return this.tr === 0 && this.trTarget === 0 && !this.towBy; }
+
+  _makeCollider() {
+    if (this.collider) { this.collider.blocksMove = this.collider.blocksBullet = this.collider.blocksSight = false; this.collider.coverOk = false; }
+    this.collider = this.m.world.addCylCollider({ x: this.pos.x, z: this.pos.z, y0: this.pos.y, r: 1.0, h: 1.7, mat: 'metal', pen: 15, cover: true });
+  }
+  _dropCollider() {
+    const c = this.collider;
+    if (c) { c.blocksMove = c.blocksBullet = c.blocksSight = false; c.coverOk = false; }
+    this.collider = null;
+  }
+
+  // ---------- походное положение, прицеп ----------
+  towLabel() {
+    if (this.tr !== this.trTarget) return null;
+    if (this.towBy) return Math.abs(this.towBy.speed) < 1.5 ? `Отцепить ${this.name} от «${this.towBy.type.name.replace(/^.*«|».*$/g, '')}»` : null;
+    if (this.tr === 0) return `Привести ${this.name} в походное положение (≈${TRANS_TIME} с)`;
+    const v = this.nearHitchVehicle();
+    return v ? `Прицепить ${this.name} к ${v.type.name}` : `Привести ${this.name} в боевое положение (≈${TRANS_TIME} с)`;
+  }
+
+  // фаркоп машины (сзади по оси, на высоте проушины)
+  hitchPoint(v, out = new THREE.Vector3()) { return v.toWorld(0, 0.62, v.type.hitch, out); }
+  lunetteWorld(out = new THREE.Vector3()) {
+    this.model.recoil.updateWorldMatrix(true, false);
+    return out.copy(D30.lunette).applyMatrix4(this.model.recoil.matrixWorld);
+  }
+  nearHitchVehicle() {
+    const L = this.lunetteWorld();
+    let best = null, bd = 2.8;
+    // только что отцепленную машину снова не предлагаем, пока она не отъедет
+    if (this._noHitch && this.hitchPoint(this._noHitch).distanceTo(L) > 4.5) this._noHitch = null;
+    for (const v of this.m.vehicles) {
+      if (!v.alive || v.towing || Math.abs(v.speed) > 1.5 || !v.type.hitch || v === this._noHitch) continue;
+      const d = this.hitchPoint(v).distanceTo(L);
+      if (d < bd) { bd = d; best = v; }
+    }
+    return best;
+  }
+
+  towAction(fromNet = false) {
+    const m = this.m;
+    if (this.towBy) { this.unhitch(); return; }
+    if (this.tr === 0) { this.startTravel(); return; }
+    const v = this.nearHitchVehicle();
+    if (v) this.hitch(v); else this.startDeploy();
+    void fromNet; void m;
+  }
+
+  _net(e) { const n = this.m.net; if (n) n.ev(['gm', this.m.guns.indexOf(this), ...e]); }
+
+  startTravel(fromNet = false) {
+    if (this.tr !== 0 || this.trTarget !== 0) return;
+    if (this.m.player.gun === this) this.dismount(this.m.player);
+    this.trTarget = 1; this.loaded = null; this.loadT = 0;
+    this.m.hud.message(`Расчёт приводит ${this.name} в походное положение: станины сводятся, ствол на походное крепление`, 4);
+    this.m.audio.mech('reload');
+    if (!fromNet) this._net(['t']);
+  }
+  startDeploy(fromNet = false, az = null) {
+    if (this.tr !== 1 || this.towBy) return;
+    // ствол остаётся направленным туда, куда смотрел в походе (на машину)
+    this.az = az ?? ((((-(this.rootYaw + Math.PI)) / MIL) % 6000) + 6000) % 6000;
+    this.elM = 0;
+    this.trTarget = 0;
+    this.m.hud.message(`Расчёт приводит ${this.name} в боевое положение: станины разводятся, орудие на опорную плиту`, 4);
+    this.m.audio.mech('reload');
+    if (!fromNet) this._net(['c', Math.round(this.az)]);
+  }
+  hitch(v, silent = false, fromNet = false) {
+    if (this.towBy || this.tr !== 1) return;
+    this.towBy = v; v.towing = this;
+    this.snapT = silent ? 0 : 0.7;
+    this._snapFrom = { pos: this.pos.clone(), yaw: this.rootYaw };
+    this._dropCollider();
+    if (!silent) { this.m.hud.message(`${this.name} прицеплена к ${v.type.name}. Тягач медленнее — масса орудия 3,2 т`, 3); this.m.audio.mech('switch'); }
+    if (!fromNet && !silent) this._net(['h', this.m.vehicles.indexOf(v)]);
+  }
+  unhitch(fromNet = false, pose = null) {
+    const v = this.towBy;
+    if (!v) return;
+    v.towing = null; this.towBy = null; this._noHitch = v;
+    if (pose) { this.pos.x = pose[0]; this.pos.z = pose[1]; this.rootYaw = pose[2]; this.pos.y = this.m.terrain.heightAt(this.pos.x, this.pos.z); }
+    this.m.hud.message(`${this.name} отцеплена`, 2);
+    this.m.audio.mech('switch');
+    if (!fromNet) this._net(['u', +this.pos.x.toFixed(2), +this.pos.z.toFixed(2), +this.rootYaw.toFixed(3)]);
+  }
+
+  // Сетевые события расчёта орудия
+  netOp(e) {
+    const op = e[2];
+    if (op === 't') this.startTravel(true);
+    else if (op === 'c') { if (this.towBy) this.unhitch(true); this.startDeploy(true, e[3]); }
+    else if (op === 'h') { const v = this.m.vehicles[e[3]]; if (v && !this.towBy) { if (this.tr !== 1) { this.tr = this.trTarget = 1; this._dropCollider(); } this.hitch(v, false, true); } }
+    else if (op === 'u') this.unhitch(true, [e[3], e[4], e[5]]);
+  }
+
+  // Геометрия походного положения: проушина относительно лафета (считается один раз)
+  _travelGeom() {
+    if (this._lun) return this._lun;
+    const g = this.model;
+    const save = { p: g.root.position.clone(), r: g.root.rotation.clone(), tr: this.tr };
+    g.root.position.set(0, 0, 0); g.root.rotation.set(0, 0, 0);
+    this.tr = 1; this._pose();
+    g.root.updateMatrixWorld(true);
+    const L = this.lunetteWorld();
+    this._lun = { z: L.z, y: L.y, d: L.z - AXLE };
+    g.root.position.copy(save.p); g.root.rotation.copy(save.r); this.tr = save.tr;
+    return this._lun;
+  }
+
+  // Буксировка: ось колёс тянется за фаркопом на постоянном расстоянии (кинематика прицепа)
+  _tow(dt) {
+    const v = this.towBy, m = this.m, T = m.terrain;
+    if (!v.alive) { this.unhitch(true); return; }
+    const G = this._travelGeom();
+    const H = this.hitchPoint(v);
+    const ax = this.pos.x + Math.sin(this.rootYaw) * AXLE, az = this.pos.z + Math.cos(this.rootYaw) * AXLE;
+    let ry = Math.atan2(H.x - ax, H.z - az);
+    // складывание сцепки ограничено
+    const base = v.yaw + Math.PI;
+    ry = base + clamp(wrapA(ry - base), -1.25, 1.25);
+    const Ax = H.x - Math.sin(ry) * G.d, Az = H.z - Math.cos(ry) * G.d;
+    const c = Math.cos(ry), s = Math.sin(ry);
+    const hL = T.heightAt(Ax - 0.95 * c, Az + 0.95 * s), hR = T.heightAt(Ax + 0.95 * c, Az - 0.95 * s);
+    const ga = (hL + hR) / 2;
+    let px = Ax - s * AXLE, pz = Az - c * AXLE;
+    if (this.snapT > 0) {
+      this.snapT = Math.max(0, this.snapT - dt);
+      const k = 1 - this.snapT / 0.7, f = this._snapFrom;
+      px = f.pos.x + (px - f.pos.x) * k; pz = f.pos.z + (pz - f.pos.z) * k;
+      ry = f.yaw + wrapA(ry - f.yaw) * k;
+    }
+    this.pos.set(px, ga, pz);
+    this.rootYaw = ry;
+    this.rootRoll = Math.atan2(hR - hL, 1.9);
+    this.rootPitch = -Math.atan2(H.y - (ga + G.y), G.z);
   }
 
   get charge() { return CHARGES[this.ci]; }
   // требуемое возвышение по прицелу и уровню
   get wantEl() { return this.drum + (this.level - 3000); }
 
+  // Поза орудия по степени перевода tr (0 — боевое, 1 — походное)
+  _pose() {
+    const g = this.model, e = ease(this.tr);
+    const lift = clamp(e / 0.35, 0, 1);                 // сначала колёса опускаются, лафет поднимается
+    const trailK = ease(clamp((e - 0.25) / 0.5, 0, 1));  // станины сводятся и поднимаются к стволу
+    const barK = ease(clamp((e - 0.15) / 0.6, 0, 1));    // ствол — на походное крепление над станинами
+    g.body.position.y = D30.lift * lift;
+    for (const w of g.wheels) w.position.y = 0.66 - (0.66 - 0.57 + D30.lift) * lift;
+    const tgt = [Math.PI - 0.21, Math.PI, Math.PI + 0.21];
+    g.trails.forEach((t, k) => {
+      const a0 = t.a, a1 = tgt[k === 0 ? 0 : k === 1 ? 1 : 2];
+      t.g.rotation.y = a0 + wrapA(a1 - a0) * trailK;
+      t.g.rotation.x = 0.22 * trailK;
+    });
+    const relC = wrapA(-this.az * MIL - this.rootYaw);
+    g.yaw.rotation.y = relC + wrapA(Math.PI - relC) * barK;
+    g.pitch.rotation.x = this.elM * MIL * (1 - barK) + TRAVEL_EL * barK;
+  }
+
   _place() {
     const g = this.model;
-    g.yaw.rotation.y = -this.az * MIL;
-    g.pitch.rotation.x = this.elM * MIL;
+    g.root.position.copy(this.pos);
+    g.root.rotation.set(this.rootPitch, this.rootYaw, this.rootRoll, 'YXZ');
+    this._pose();
     // откат и накат
     const t = this.recoilT;
     const r = t < 0.06 ? t / 0.06 : t < 1.3 ? 1 - Math.pow((t - 0.06) / 1.24, 0.7) : 0;
@@ -79,18 +258,34 @@ export class Howitzer {
     // клин: открывается в конце наката, закрывается после заряжания
     g.wedge.position.y = -0.02 - this.breech * 0.16;
     g.root.updateMatrixWorld(true);
-    // расчёт стоит у орудия (вокруг вращающейся части)
+    // расчёт у орудия только в боевом положении
+    const show = this.tr === 0 && !this.towBy;
     const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.az * MIL);
     for (const a of this.crew) {
+      a.root.visible = show;
+      if (!show) continue;
       const p = a.local.clone().applyQuaternion(yawQ).add(this.pos);
       p.y = this.m.terrain.heightAt(p.x, p.z);
       a.root.position.copy(p);
       a.root.rotation.y = -this.az * MIL + a.ry;
     }
+    // точки взаимодействия: наводчик — слева у маховиков, расчёт — справа у колеса или у проушины
+    if (this.gunIt) {
+      this.gunIt.pos.copy(this.seatWorld()); this.gunIt.pos.y += 1.0;
+      if (this.tr === 0 && !this.towBy) {
+        this.towIt.pos.set(0.95, 0.7, 0.15).applyMatrix4(g.body.matrixWorld);
+        this.towIt.r = 1.6;
+      } else {
+        this.lunetteWorld(this.towIt.pos);
+        this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
+        this.towIt.r = 2.0;
+      }
+    }
   }
 
   // ---------- место наводчика ----------
   mount(p) {
+    if (!this.ready) { this.m.hud.message('Орудие не в боевом положении', 2); return; }
     p.gun = this;
     this.view = 'pano';
     if (!this.ui) this.ui = new GunUI(this);
@@ -174,6 +369,7 @@ export class Howitzer {
 
   fire() {
     const m = this.m;
+    if (!this.ready) return;
     if (!this.loaded) { if (this.loadT > 0) m.hud.message('Ещё не заряжено', 1); else m.hud.message('Орудие не заряжено (R — заряжать)', 1.5); m.audio.click(); return; }
     if (this.breech > 0.05) return;
     const L = this.loaded;
@@ -218,7 +414,7 @@ export class Howitzer {
   report(p) {
     const m = this.m;
     const I = (p.impact && p.impact.pos) ? p.impact.pos.clone() : p.p.clone();
-    const targets = m.artTargets || [];
+    const targets = [...(m.artTargets || []), ...(m.teamMarks ? m.teamMarks() : [])];
     let best = null, bd = 1e9;
     for (const t of targets) { const d = Math.hypot(t.pos.x - I.x, t.pos.z - I.z); if (d < bd) { bd = d; best = t; } }
     const D = Math.hypot(I.x - this.pos.x, I.z - this.pos.z);
@@ -243,6 +439,27 @@ export class Howitzer {
 
   update(dt) {
     this.recoilT += dt;
+    // перевод из положения в положение
+    if (this.tr !== this.trTarget) {
+      const d = dt / TRANS_TIME;
+      if (this.trTarget > this.tr) this.tr = Math.min(1, this.tr + d); else this.tr = Math.max(0, this.tr - d);
+      if (this.tr === 0 && this.trTarget === 0) { this.rootPitch = 0; this.rootRoll = 0; this.pos.y = this.m.terrain.heightAt(this.pos.x, this.pos.z); this._makeCollider(); this.m.hud.message(`${this.name} в боевом положении. Наводчик — слева у маховиков (E)`, 3); this.m.audio.mech('switch'); }
+      if (this.tr === 1 && this.trTarget === 1) { this._dropCollider(); this.m.hud.message(`${this.name} в походном положении. Подгоните тягач задом к буксирной проушине (E — прицепить)`, 4); this.m.audio.mech('switch'); }
+      if (this.tr > 0 && this.collider && this.trTarget === 1) this._dropCollider();
+    }
+    if (this.towBy) this._tow(dt);
+    else if (this.tr > 0) {
+      // без тягача: проушина на походной опоре, орудие стоит на колёсах
+      const G = this._travelGeom(), T = this.m.terrain;
+      const s = Math.sin(this.rootYaw), c = Math.cos(this.rootYaw);
+      const ax = this.pos.x + s * AXLE, az = this.pos.z + c * AXLE;
+      const hL = T.heightAt(ax - 0.95 * c, az + 0.95 * s), hR = T.heightAt(ax + 0.95 * c, az - 0.95 * s);
+      const ga = (hL + hR) / 2, gl = T.heightAt(this.pos.x + s * G.z, this.pos.z + c * G.z) + 0.55;
+      const k = ease(this.tr);
+      this.pos.y = this.pos.y + ((ga * k + T.heightAt(this.pos.x, this.pos.z) * (1 - k)) - this.pos.y) * Math.min(1, dt * 6);
+      this.rootPitch = -Math.atan2(gl - (ga + G.y), G.z) * k;
+      this.rootRoll = Math.atan2(hR - hL, 1.9) * k;
+    }
     // после наката клин открывается и выбрасывает гильзу
     if (this.recoilT > 1.2 && this.recoilT - dt <= 1.2 && this.shots > 0) {
       this.breech = 1;

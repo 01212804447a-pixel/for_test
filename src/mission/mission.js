@@ -23,6 +23,7 @@ import { WEAPONS, SCOPES, PRIMARY_CHOICES } from '../data/weapons.js';
 import { ROSTER, toSkill } from '../data/squad.js';
 import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/math.js';
 import { Howitzer } from '../artillery/howitzer.js';
+import { pvpMap } from '../data/pvp.js';
 
 const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5 }, medium: { seg: 384, shadow: 2048, snow: 1 }, high: { seg: 480, shadow: 4096, snow: 1.4 } };
 
@@ -50,6 +51,7 @@ export class Mission {
     // сетевая игра
     this.net = setup.net || null;
     this.netAI = []; this.netItems = []; this.netVisual = false;
+    this.marks = []; this._markN = 200; this.scoutT = 3;
     if (this.net) this.net.attach(this);
   }
 
@@ -143,6 +145,7 @@ export class Mission {
       ctx.stage = () => {};
     }
     def.build(ctx);
+    if (this.net) this.buildNetSquads(def);
     if (this.pvp) {
       this.updaters = [];
       const lim = this.net.room.scoreLimit;
@@ -153,7 +156,24 @@ export class Mission {
     for (const sg of this.world.signs) ST.sign(this.world, this.mats, sg);
     // техника на старте
     const vlist = this.pvp ? [] : def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
-    for (const v of vlist) this.addVehicle(v.type, { x: v.x, z: v.z, yaw: v.yaw, team: 'negs' });
+    const startV = vlist.map((v) => this.addVehicle(v.type, { x: v.x, z: v.z, yaw: v.yaw, team: 'negs' }));
+    // гаубица Д-30 на прицепе (автопарк штаба / настройка комнаты)
+    const towGun = (v, name) => {
+      const T = v.type, hx = v.pos.x + Math.sin(v.yaw) * (T.hitch + 4.2), hz = v.pos.z + Math.cos(v.yaw) * (T.hitch + 4.2);
+      const h = new Howitzer(this, { x: hx, z: hz, name, mode: 'travel', heading: v.yaw + Math.PI, towBy: v });
+      this.guns.push(h);
+      return h;
+    };
+    if (this.setup.howitzer && !this.pvp && def.id !== 'artillery' && startV.length) towGun(startV[0], 'Д-30 № 1');
+    if (this.pvp && this.setup.howitzer) {
+      for (const team of ['negs', 'denter']) {
+        const sp = pvpMap(def.id).spawns[team];
+        const c = Math.cos(sp.yaw), s = Math.sin(sp.yaw);
+        const x = sp.x + c * 14, z = sp.z - s * 14;
+        const v = this.addVehicle(team === 'negs' ? 'tigr' : 'mtlb', { x, z, yaw: sp.yaw, team: 'negs' });
+        towGun(v, team === 'negs' ? 'Д-30 N.E.G.S' : 'Д-30 «Дентера»');
+      }
+    }
     // отделение
     if (!def.noSquad) {
       const ids = this.setup.squad || [];
@@ -266,6 +286,55 @@ export class Mission {
     this.world.destructibles.push(t);
     this.artTargets.push(t);
     return t;
+  }
+
+  // Сетевая игра: отделение ИИ у каждого игрока (одинаковый порядок у всех; считает хост)
+  buildNetSquads(def) {
+    const net = this.net, room = net.room, n = Math.max(0, Math.min(6, room.squad ?? 3));
+    this.netSquads = new Map();
+    if (!n) return;
+    const ROLES = [
+      { role: 'sniper', weapon: 'svd', name: 'разведчик' },
+      { role: 'mg', weapon: 'pkm', name: 'пулемётчик' },
+      { role: 'rifleman', weapon: 'ak74m', name: 'стрелок' },
+      { role: 'at', weapon: 'ak74m', secondary: 'rpg7', name: 'гранатомётчик' },
+      { role: 'medic', weapon: 'ak74m', name: 'медик' },
+      { role: 'rifleman', weapon: 'akm', name: 'стрелок' },
+    ];
+    room.players.forEach((pl, pi) => {
+      const team = this.pvp ? pl.team : 'negs';
+      const sp = this.pvp ? pvpMap(def.id).spawns[team] : def.start;
+      const grp = this.addGroup(new Group(this, team, 'squad-' + pl.id));
+      grp.leaderId = pl.id;
+      this.netSquads.set(pl.id, grp);
+      for (let i = 0; i < n; i++) {
+        const R = ROLES[i];
+        const c = Math.cos(sp.yaw), sn = Math.sin(sp.yaw);
+        const ox = ((i % 3) - 1) * 3 + (pi % 4) * 1.2, oz = 4 + Math.floor(i / 3) * 3 + Math.floor(pi / 4) * 2;
+        const x = sp.x + c * ox + sn * oz, z = sp.z - sn * ox + c * oz;
+        const s = new Soldier(this, { team, faction: team, name: `${pl.name}: ${R.name}`, callsign: `${pl.name}-${i + 1}`, role: R.role, weapon: R.weapon, secondary: R.secondary, x, z, yaw: sp.yaw, armor: 0.8, helmet: 0.6, grenades: 2, skill: { aim: 0.62, reaction: 0.6, nerve: 0.7 } });
+        s.squadOf = pl.id;
+        new Brain(s, this, { mode: 'squad', slot: i, leaderId: pl.id });
+        grp.add(s);
+        this.soldiers.push(s);
+        s.netIdx = this.netAI.length; this.netAI.push(s);
+        if (!net.isHost) { s.brain = null; s.damage = (amount, zone, source, dir, opts) => net.aiDamage(s, amount, zone, source, dir, opts); }
+      }
+      if (pl.id === net.net.id) this.squadGroup = grp;
+    });
+  }
+
+  // Возрождение отделения вместе с командиром (хост)
+  reviveSquad(leaderId, pos, yaw) {
+    const grp = this.netSquads && this.netSquads.get(leaderId);
+    if (!grp) return;
+    grp.members.forEach((s, i) => {
+      if (s.alive) return;
+      const c = Math.cos(yaw), sn = Math.sin(yaw);
+      const ox = ((i % 3) - 1) * 3, oz = 4 + Math.floor(i / 3) * 3;
+      const x = pos.x + c * ox + sn * oz, z = pos.z - sn * ox + c * oz;
+      s.revive(x, this.world.groundAt(x, z), z, yaw);
+    });
   }
 
   addEnemy(o) {
@@ -496,6 +565,17 @@ export class Mission {
       this.hud.message('Вы погибли', 3, true); this.after(2.5, () => this.fail('Сержант Кей погиб')); return;
     }
     if (s.isRemote) return;
+    if (s.squadOf !== undefined) {
+      // сетевая игра: боец отделения игрока; хост сообщает серверу (очки PvP, лента)
+      if (this.net && this.net.isHost) {
+        const by = src === this.player.body ? this.net.net.id : src && src.isRemote ? src.peer.id : src && src.squadOf !== undefined ? src.squadOf : null;
+        this.net.net.send({ t: 'aikill', team: s.team, vname: s.name, by, w: src && src.weapon ? src.weapon.id : '' });
+      }
+      return;
+    }
+    if (this.net && this.net.isHost && this.pvp === false && src) {
+      // кооператив: убитый противник — в ленту
+    }
     if (s.team === 'negs') {
       this.stats.lost.push(s.rosterId);
       this.hud.radio('Отделение', `«${s.callsign}» тяжело ранен, выбыл!`, true);
@@ -662,6 +742,53 @@ export class Mission {
     this.hud.grenade(gr, this);
   }
 
+  // ---------- целеуказание: отметки противника (общие для команды) ----------
+  get myTeam() { return this.player.body.team; }
+  teamMarks(team = this.myTeam) { return this.marks.filter((k) => k.team === team); }
+
+  addMark({ team, x, z, label, kind = 'enemy', by = '', ttl = 150, fromNet = false, report = true }) {
+    let mk = this.marks.find((q) => q.team === team && q.kind === kind && Math.hypot(q.x - x, q.z - z) < 35);
+    const fresh = !mk;
+    if (!mk) { mk = { num: ++this._markN, team, kind }; this.marks.push(mk); }
+    mk.x = x; mk.z = z; mk.t = this.time; mk.ttl = ttl; mk.by = by; mk.desc = label;
+    mk.pos = new THREE.Vector3(x, this.terrain.heightAt(x, z) + 1, z);
+    mk.alive = true; mk.name = `Цель ${mk.num}`; mk.short = String(mk.num); mk.r = 18;
+    if (this.net && !fromNet) this.net.ev(['mk', team, Math.round(x), Math.round(z), label, kind, by, ttl]);
+    if (report && team === this.myTeam && fresh) {
+      const gx = Math.round(61000 - z), gy = Math.round(34000 + x);
+      this.hud.radio(by || 'Разведчик', `${mk.name}: ${label}. X ${gx.toLocaleString('ru')}, Y ${gy.toLocaleString('ru')}`, true);
+    }
+    return mk;
+  }
+
+  // Разведчики отделений докладывают замеченного противника (считает хост / одиночная игра)
+  updateScouts(dt) {
+    this.scoutT -= dt;
+    for (const mk of this.marks) if (this.time - mk.t > mk.ttl) mk.alive = false;
+    this.marks = this.marks.filter((mk) => mk.alive);
+    if (this.scoutT > 0) return;
+    this.scoutT = 6;
+    const groups = this.netSquads ? [...this.netSquads.values()] : this.squadGroup ? [this.squadGroup] : [];
+    for (const grp of groups) for (const sc of grp.members) {
+      if (!sc.alive || sc.role !== 'sniper' || !sc.brain) continue;
+      const seen = [];
+      for (const [t, mm] of sc.brain.memory) if (t.alive && mm.seen && this.time - mm.lastSeen < 4 && (t.isVehicle ? t.crewTeam && t.crewTeam !== sc.team : t.team !== sc.team)) seen.push(t);
+      // группы по 40 м
+      const used = new Set();
+      for (const t of seen) {
+        if (used.has(t)) continue;
+        const cl = seen.filter((o) => !used.has(o) && o.pos.distanceTo(t.pos) < 40);
+        cl.forEach((o) => used.add(o));
+        const veh = cl.filter((o) => o.isVehicle);
+        const cx = cl.reduce((a, o) => a + o.pos.x, 0) / cl.length, cz = cl.reduce((a, o) => a + o.pos.z, 0) / cl.length;
+        const d = Math.hypot(cx - sc.pos.x, cz - sc.pos.z);
+        const e = d * 0.012; // ошибка глазомера и дальномерной сетки
+        const label = veh.length ? `${veh[0].type.name}${cl.length > 1 ? ` и пехота (${cl.length - veh.length})` : ''}` : `пехота противника (${cl.length})`;
+        this.addMark({ team: sc.team, x: cx + randn() * e, z: cz + randn() * e, label, by: sc.callsign || 'Разведчик' });
+      }
+    }
+  }
+
   spotterRange() {
     const sp = this.squadGroup && this.squadGroup.members.find((m) => m.alive && m.role === 'sniper' && !m.hidden);
     const cam = this.camera;
@@ -671,31 +798,50 @@ export class Mission {
     if (!hit) { this.after(1.2, () => this.shout(sp, 'Не вижу ориентира, слишком далеко.')); return; }
     const D = hit.point.distanceTo(sp.eye) * (1 + randn() * 0.04);
     const r = Math.round(D / 10) * 10;
-    this.after(1.4, () => { this.shoutT.delete(sp); this.shout(sp, `Дальность до ориентира около ${r} м.`); });
+    // разведчик передаёт координаты ориентира — отметка на карте и карте огня
+    const P = hit.point.clone(), e = D * 0.006;
+    this.after(1.4, () => {
+      this.shoutT.delete(sp); this.shout(sp, `Дальность до ориентира около ${r} м, передаю координаты.`);
+      this.addMark({ team: this.myTeam, x: P.x + randn() * e, z: P.z + randn() * e, label: 'ориентир, указан биноклем', kind: 'mark', by: sp.callsign || 'Разведчик', ttl: 300 });
+    });
   }
 
-  squadOrder(type, pt) {
-    if (!this.squadGroup) return;
-    const alive = this.squadGroup.members.filter((m) => m.alive && m.brain);
-    if (!alive.length) return;
-    const names = { follow: 'За мной!', hold: 'Стоять, занять оборону!', move: 'Выдвинуться к точке!', suppress: 'Огонь на подавление по ориентиру!' };
-    this.hud.radio('Кей', names[type], false);
-    for (const s of alive) {
-      const b = s.brain;
-      if (type === 'suppress') {
-        if (!pt) continue;
-        b.prevOrder = b.order && b.order.type !== 'suppress' ? b.order : { type: 'follow' };
-        b.order = { type: 'suppress', pos: pt.clone().add(new THREE.Vector3(0, 0.8, 0)), until: this.time + 14 };
-      } else if (type === 'hold') b.order = { type: 'hold', pos: s.pos.clone() };
-      else if (type === 'move') {
-        const i = alive.indexOf(s);
-        const off = new THREE.Vector3((i % 3 - 1) * 3, 0, Math.floor(i / 3) * 3);
-        b.order = { type: 'move', pos: pt.clone().add(off) };
-        b.path = null;
-      } else b.order = { type: 'follow' };
-      if (type !== 'suppress') b.releaseCover();
+  squadOrder(type, pt, group = this.squadGroup, remote = false) {
+    if (!group) return;
+    if (this.net && !this.net.isHost && !remote) {
+      const names = { follow: 'За мной!', hold: 'Стоять, занять оборону!', move: 'Выдвинуться к точке!', suppress: 'Огонь на подавление по ориентиру!' };
+      this.hud.radio(this.net.me.name, names[type], false);
+      this.net.evHost(['o', type, pt ? +pt.x.toFixed(1) : 0, pt ? +pt.y.toFixed(1) : 0, pt ? +pt.z.toFixed(1) : 0, pt ? 1 : 0]);
+      return;
     }
+    const alive = group.members.filter((m) => m.alive && m.brain);
+    if (!alive.length) return;
+    if (remote) {
+      // приказ удалённого командира: без радиосообщений у хоста
+      for (const s of alive) this._applyOrder(s, type, pt, alive);
+      return;
+    }
+    const names = { follow: 'За мной!', hold: 'Стоять, занять оборону!', move: 'Выдвинуться к точке!', suppress: 'Огонь на подавление по ориентиру!' };
+    this.hud.radio(this.net ? this.net.me.name : 'Кей', names[type], false);
+    for (const s of alive) this._applyOrder(s, type, pt, alive);
     this.after(0.8, () => { const s = alive[0]; this.shoutT.delete(s); this.shout(s, type === 'suppress' ? 'Есть, работаем по ориентиру!' : 'Есть!'); });
+  }
+
+  _applyOrder(s, type, pt, alive) {
+    const b = s.brain;
+    if (type === 'suppress') {
+      if (!pt) return;
+      b.prevOrder = b.order && b.order.type !== 'suppress' ? b.order : { type: 'follow' };
+      b.order = { type: 'suppress', pos: pt.clone().add(new THREE.Vector3(0, 0.8, 0)), until: this.time + 14 };
+    } else if (type === 'hold') b.order = { type: 'hold', pos: s.pos.clone() };
+    else if (type === 'move') {
+      if (!pt) return;
+      const i = alive.indexOf(s);
+      const off = new THREE.Vector3((i % 3 - 1) * 3, 0, Math.floor(i / 3) * 3);
+      b.order = { type: 'move', pos: pt.clone().add(off) };
+      b.path = null;
+    } else b.order = { type: 'follow' };
+    if (type !== 'suppress') b.releaseCover();
   }
 
   findInteraction(p) {
@@ -752,6 +898,7 @@ export class Mission {
     }
     // скрипты
     if (host) for (const fn of this.updaters) fn(dt);
+    if (host) this.updateScouts(dt); else { for (const mk of this.marks) if (this.time - mk.t > mk.ttl) mk.alive = false; this.marks = this.marks.filter((mk) => mk.alive); }
     for (let i = this.timers.length - 1; i >= 0; i--) if (this.timers[i].t <= this.time) { const t = this.timers[i]; this.timers.splice(i, 1); t.fn(); }
     const st = this.stages[this.stageIdx];
     if (st && !this.finished && host) {

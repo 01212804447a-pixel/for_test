@@ -162,7 +162,7 @@ export class HUD {
       for (const s of m.squadGroup.members) {
         const hpf = s.alive ? s.health / s.maxHealth : 0;
         const br = s.brain;
-        let stt = !s.alive ? 'выбыл' : s.vehicle ? 'в машине' : br.healTarget ? 'помогает раненому' : s.reloadT > 0 ? 'перезаряжается' : br.fire.mode === 'suppress' ? 'подавляет' : br.fire.mode === 'aimed' ? 'ведёт огонь' : br.cover ? 'в укрытии' : br.state === 'combat' ? 'в бою' : (br.order ? { follow: 'следует', hold: 'держит', move: 'выдвигается', suppress: 'подавляет' }[br.order.type] : '');
+        let stt = !s.alive ? 'выбыл' : !br ? (s.vehicle ? 'в машине' : s.reloadT > 0 ? 'перезаряжается' : 'в строю') : s.vehicle ? 'в машине' : br.healTarget ? 'помогает раненому' : s.reloadT > 0 ? 'перезаряжается' : br.fire.mode === 'suppress' ? 'подавляет' : br.fire.mode === 'aimed' ? 'ведёт огонь' : br.cover ? 'в укрытии' : br.state === 'combat' ? 'в бою' : (br.order ? { follow: 'следует', hold: 'держит', move: 'выдвигается', suppress: 'подавляет' }[br.order.type] : '');
         qh += `<div class="sq ${s.alive ? '' : 'dead'}"><b>${s.callsign}</b> <span>${stt}</span><div class="bar thin"><i style="width:${(hpf * 100).toFixed(0)}%;background:${hpf > 0.6 ? '#9fc79a' : '#e0b050'}"></i></div></div>`;
       }
       if (this._qh !== qh) { this.squad.innerHTML = qh; this._qh = qh; }
@@ -260,6 +260,16 @@ export class HUD {
     }
     g.fillStyle = '#c02020';
     for (const t of seen) { const [x, y] = toPx(t.pos.x, t.pos.z); g.beginPath(); g.arc(x, y, t.isVehicle ? 6 : 4, 0, 6.3); g.fill(); }
+    // отметки разведки (своя команда)
+    if (m.teamMarks) for (const mk of m.teamMarks()) {
+      const [x, y] = toPx(mk.x, mk.z);
+      const age = m.time - mk.t;
+      g.globalAlpha = Math.max(0.35, 1 - age / mk.ttl);
+      g.fillStyle = mk.kind === 'mark' ? '#d06000' : '#c01010'; g.strokeStyle = '#300';
+      g.beginPath(); g.moveTo(x, y - 8); g.lineTo(x + 7, y + 5); g.lineTo(x - 7, y + 5); g.closePath(); g.fill(); g.stroke();
+      g.font = 'bold 11px Arial'; g.fillText(String(mk.num), x + 8, y - 4);
+      g.globalAlpha = 1;
+    }
     // своё отделение
     if (m.squadGroup) for (const s of m.squadGroup.members) {
       if (!s.alive) continue;

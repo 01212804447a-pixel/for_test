@@ -62,10 +62,9 @@ export class Soldier {
     this.setWeapon(opts.weapon || 'ak74m', opts.mags);
     if (opts.secondary) { this.secondary = { id: opts.secondary, def: WEAPONS[opts.secondary], mag: 1, mags: WEAPONS[opts.secondary].mags }; }
     this.faction = opts.faction || (this.team === 'negs' ? 'negs' : 'denter');
+    this._modelOpts = { scale: opts.scale || 1, seed: this.id * 7 + (opts.x | 0) };
     if (!this.isPlayer) {
-      this.model = characterAvailable()
-        ? new CharacterModel(this.faction, this.weaponId, { scale: opts.scale || 1, seed: this.id * 7 + (opts.x | 0) })
-        : new SoldierModel(this.faction, VM_KIND[this.weaponId] || 'ak', { scale: opts.scale || 1 });
+      this.model = this._makeModel();
       game.scene.add(this.model.root);
       this.blob = blobShadow(0.9, 0.9, 0.45); game.scene.add(this.blob);
     }
@@ -78,6 +77,28 @@ export class Soldier {
     this.fireFlash = 0;
     this.shotsFired = 0;
     this.footT = 0;
+    this.updateEye();
+  }
+
+  _makeModel() {
+    const o = this._modelOpts;
+    return characterAvailable()
+      ? new CharacterModel(this.faction, this.weaponId, { scale: o.scale, seed: o.seed })
+      : new SoldierModel(this.faction, VM_KIND[this.weaponId] || 'ak', { scale: o.scale });
+  }
+
+  // Возвращение в строй (сетевая игра: отделение возрождается вместе с командиром)
+  revive(x, y, z, yaw = this.yaw) {
+    this.alive = true; this.health = this.maxHealth; this.bleeding = 0; this.shockT = 0; this.suppression = 0; this.morale = 1;
+    this.stance = 'stand'; this.hidden = false; this.vehicle = null; this._countedKill = false; this._deadSent = 0; this._skinFrozen = false;
+    this.pos.set(x, y, z); this.vel.set(0, 0, 0); this.yaw = this.aimYaw = yaw; this.aimPitch = 0;
+    this.setWeapon(this.weaponId);
+    if (this.model) {
+      this.game.scene.remove(this.model.root);
+      this.model = this._makeModel();
+      this.game.scene.add(this.model.root);
+    }
+    if (this.brain && this.brain.reset) this.brain.reset();
     this.updateEye();
   }
 

@@ -77,7 +77,8 @@ export class Brain {
     this.aiming = false;
     this.grenadeCD = rand(5, 12);
     this.flankTask = null;
-    this.order = opts.order || (s.team === 'negs' ? { type: 'follow' } : null);
+    this.order = opts.order || (s.team === 'negs' || this.mode === 'squad' ? { type: 'follow' } : null);
+    this.leaderId = opts.leaderId ?? null; // сетевая игра: командир-игрок этого бойца
     this.prevOrder = null;
     this.slot = opts.slot ?? 0;
     this.investigate = null;
@@ -90,6 +91,21 @@ export class Brain {
     this.speech = 0;
     this.forced = null;
     this.lastHeard = game.time;
+  }
+
+  // командир отделения: свой игрок или (сеть) удалённый игрок
+  get leader() {
+    const g = this.game;
+    if (this.leaderId == null || !g.net || this.leaderId === g.net.net.id) return g.player.body;
+    const p = g.net.peers.get(this.leaderId);
+    return p && p.soldier ? p.soldier : null;
+  }
+
+  // после возрождения
+  reset() {
+    this.memory.clear(); this.state = 'idle'; this.path = null; this.dest = null;
+    this.releaseCover(); this.fire.mode = null; this.fire.target = null; this.fire.burst = 0;
+    this.healTarget = null; this.atTarget = null; this.order = { type: 'follow' }; this.prevOrder = null; this.forced = null;
   }
 
   // ----- знания -----
@@ -248,7 +264,7 @@ export class Brain {
     if (known) { if (this.state !== 'combat') this.enterCombat(); }
     else if (this.state === 'combat') { this.state = 'search'; this.searchT = rand(15, 25); this.investigate = th ? th.m.pos.clone() : null; this.fire.mode = null; }
 
-    if (s.team === 'negs') { this.thinkSquad(th, known); return; }
+    if (s.team === 'negs' || this.mode === 'squad') { this.thinkSquad(th, known); return; }
 
     if (this.state === 'combat') this.thinkCombat(th);
     else if (this.state === 'search') {
@@ -483,13 +499,18 @@ export class Brain {
   // ----- отделение игрока -----
   thinkSquad(th, known) {
     const s = this.s, g = this.game, now = g.time;
-    const p = g.player;
+    const lead = this.leader;
     const o = this.order || { type: 'follow' };
+    // командир погиб или ещё не появился — держать позицию и отбиваться
+    if (!lead || !lead.alive) { if (o.type === 'follow') this.order = { type: 'hold', pos: s.pos.clone() }; }
+    else if (this._leadDead) this.order = { type: 'follow' };
+    this._leadDead = !lead || !lead.alive;
+    const lv = lead && lead.alive ? lead.vehicle : null;
     // медик
     if (s.role === 'medic' && s.medkits > 0 && !this.healTarget) {
       let best = null, bh = 60;
       for (const a of g.soldiers) {
-        if (a === s || !a.alive || a.team !== 'negs' || a.hidden) continue;
+        if (a === s || !a.alive || a.team !== s.team || a.hidden) continue;
         if (a.health < bh && a.pos.distanceTo(s.pos) < 45) { bh = a.health; best = a; }
       }
       if (best && (!th || th.m.pos.distanceTo(best.pos) > 15 || s.suppression < 0.5)) {
@@ -540,8 +561,8 @@ export class Brain {
     } else { f.mode = null; this.atTarget = null; if (s.mag < s.weapon.mag * 0.6 && s.reloadT <= 0) s.startReload(); }
 
     // посадка в технику
-    if (p.vehicle && o.type === 'follow') {
-      const v = p.vehicle;
+    if (lv && o.type === 'follow') {
+      const v = lv;
       if (!s.vehicle && (v.hasFreeSeat() || (v.gunWeapon && !v.seats[1]))) {
         const d = s.pos.distanceTo(v.pos);
         if (d < 4.5) { if (v.gunWeapon && !v.seats[1] && v.type.turret) v.board(s, 1); else v.board(s); this.path = null; return; }
@@ -550,16 +571,17 @@ export class Brain {
       }
       if (s.vehicle) return;
     }
-    if (s.vehicle && (!p.vehicle || p.vehicle !== s.vehicle)) s.vehicle.unboard(s);
+    if (s.vehicle && (!lv || lv !== s.vehicle)) s.vehicle.unboard(s);
     if (s.vehicle) return;
 
     // позиция
     let anchor;
     if (o.type === 'follow') {
       const offs = [[-3, 4], [3, 4], [-6, 8], [6, 8], [-9, 11], [9, 11]][this.slot % 6];
-      const py = p.body.yaw;
+      const ld = lead && lead.alive ? lead : s;
+      const py = ld.yaw;
       const c = Math.cos(py), sn = Math.sin(py);
-      anchor = { x: p.body.pos.x + c * offs[0] + sn * offs[1], z: p.body.pos.z - sn * offs[0] + c * offs[1] };
+      anchor = { x: ld.pos.x + c * offs[0] + sn * offs[1], z: ld.pos.z - sn * offs[0] + c * offs[1] };
       const nf = g.world.nav ? g.world.nav.nearestFree(anchor.x, anchor.z) : anchor;
       anchor = nf;
     } else {

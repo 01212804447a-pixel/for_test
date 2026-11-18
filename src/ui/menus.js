@@ -12,6 +12,7 @@ import { ACTIONS, DEFAULT_BINDS, keyName } from '../core/input.js';
 import { CHARGES, MIL, firingTable, sightFor, fmtDiv, fmtSigned } from '../artillery/d30.js';
 import { PVP_MAPS, PVP_WEAPONS, TEAM_NAMES, pvpMap } from '../data/pvp.js';
 import { defaultServer } from '../net/net.js';
+import { lethalityTable } from '../data/lethality.js';
 
 const escH = (t) => String(t ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 
@@ -170,7 +171,8 @@ export class UI {
     const names = { f1: 'Ф-1' };
     this.show(`<h1>Таблицы стрельбы и траектории</h1>
       <div class="tabs">${tabs.map((id, i) => `<button class="tab ${i ? '' : 'on'}" data-id="${id}">${names[id] || WEAPONS[id].name}</button>`).join('')}</div>
-      <div id="ft"></div><div class="row"><button class="btn" id="b">Закрыть</button></div>`, { wide: true });
+      <div id="ft"></div><div class="row"><button class="btn" id="b">Закрыть</button><button class="btn sec" id="leth">Поражающее действие боеприпасов</button></div>`, { wide: true });
+    this.bind('#leth', () => this.lethality(() => this.firingTables(back)));
     const render = (id) => {
       const box = this.panel.querySelector('#ft');
       if (id === 'f1') {
@@ -194,6 +196,28 @@ export class UI {
       b.classList.add('on'); render(b.dataset.id);
     }));
     render(tabs[0]);
+    this.bind('#b', () => (back ? back() : this.close()));
+  }
+
+
+  // ---------------- поражающее действие боеприпасов ----------------
+  lethality(back = null) {
+    const T = lethalityTable();
+    const f = (x) => (x < 0.3 ? '—' : x.toFixed(x < 10 ? 1 : 0).replace('.', ','));
+    const exRows = T.ex.map((e) => `<tr><td><b>${e.name}</b><br><small>${e.kind}</small></td>
+      <td>${f(e.none.r100)} / ${f(e.negs.r100)}</td><td>${f(e.none.r50)} / ${f(e.negs.r50)}</td><td>${f(e.none.rInc)} / ${f(e.negs.rInc)}</td>
+      <td>${f(e.none.rHurt)} / ${f(e.negs.rHurt)}</td><td>${f(e.prone.r50)} / ${f(e.prone.rHurt)}</td><td>${f(e.none.rMax)}</td><td>${e.X.pen ? e.X.pen + ' мм' : '—'}</td></tr>`).join('');
+    const bRows = T.bullets.map((b) => `<tr><td><b>${b.short}</b><br><small>${b.w}</small></td>
+      <td>${b.E.map((x) => Math.round(x)).join(' · ')}</td><td>${b.torso.map((x) => Math.round(x)).join(' · ')}</td><td>${b.hits.join(' · ')}</td>
+      <td>${b.plateDenter ? (b.plateDenter >= 1500 ? '> 1500' : b.plateDenter) + ' м' : 'не пробивает'}</td><td>${b.plateNegs ? (b.plateNegs >= 1500 ? '> 1500' : b.plateNegs) + ' м' : 'не пробивает'}</td></tr>`).join('');
+    this.show(`<h1>Поражающее действие боеприпасов</h1><div class="opc">Рассчитано по модели урона игры: фугасное действие, осколки с учётом бронежилета и шлема, энергия пуль на дальности</div>
+      <h2 class="nh">Взрывчатые боеприпасы — радиусы при разрыве на грунте, м</h2>
+      <div class="tblwrap"><table class="ft leth"><tr><th>Боеприпас</th><th>Сплошное поражение (≥ 99 % убит)<br>без защиты / в броне</th><th>50 % убит</th><th>50 % выведен из строя<br>(тяжёлое ранение)</th><th>50 % ранен</th><th>Лёжа: 50 % убит / ранен</th><th>Предельный разлёт осколков</th><th>Пробитие брони</th></tr>${exRows}</table></div>
+      <p class="note">«Без защиты / в броне» — боец стоит, грудь на высоте 1,26 м; броня — бронежилет и шлем бойца N.E.G.S. Лёжа поражение резко меньше: осколки идут над землёй, поэтому при разрывах — ложись. Кровотечение после ранения здесь не учтено: раненый без перевязки (K) со временем теряет силы. Взрыватель «Ф» у ОФ-462 даёт меньше осколков, но сильнее бьёт по укрытиям и технике.</p>
+      <h2 class="nh">Пули — энергия и действие по дальности 0 · 100 · 300 · 500 · 800 м</h2>
+      <div class="tblwrap"><table class="ft leth"><tr><th>Патрон</th><th>Энергия, Дж</th><th>Урон при попадании в корпус (без брони), ед. здоровья из 100</th><th>Попаданий в корпус для поражения</th><th>Пробивает бронеплиту боевика «Дентера» до</th><th>Пробивает бронеплиту бойца N.E.G.S до</th></tr>${bRows}</table></div>
+      <p class="note">Бронеплита закрывает ~72 % попаданий в корпус; непробитая плита — запреградная травма (6 ед. + доля энергии). Попадание в голову — урон ×4, в шлем — может срикошетить. Попадание в ногу ×0,6, в руку ×0,45. Сквозное ранение: пуля летит дальше с потерей скорости.</p>
+      <div class="row"><button class="btn" id="b">${back ? 'Назад' : 'Закрыть'}</button></div>`, { wide: true, cls: 'fttable' });
     this.bind('#b', () => (back ? back() : this.close()));
   }
 
@@ -284,6 +308,17 @@ export class UI {
       <table><tr><td><b>Заряд</b></td><td><b>V₀</b></td><td><b>Наиб. дальность</b></td><td><b>В таблице</b></td></tr>${charges}</table>
       <p>Чем меньше заряд, тем круче траектория (удобно бить за укрытия и высоты) и меньше рассеивание по дальности на ближних дистанциях; дальние цели — только полным и уменьшенным.</p>
 
+      <h2>1а. Походное положение и буксировка</h2>
+      <p>Д-30 буксируется любой машиной («Тигр», «Нива», МТ-ЛБ) за буксирную проушину на дульном тормозе: в походном положении ствол развёрнут над сведёнными станинами, лафет поднят на колёса. Масса орудия 3,2 т — тягач разгоняется медленнее, максимальная скорость ниже («Ниве» особенно тяжело).</p>
+      <ol>
+        <li><b>Отцепить:</b> остановите тягач, подойдите к проушине у машины — <b>E</b> (удерживать).</li>
+        <li><b>Боевое положение:</b> снова <b>E</b> у проушины — расчёт разводит станины, опускает орудие на опорную плиту и снимает ствол с походного крепления (≈16 с). Ствол смотрит туда, куда смотрел на прицепе, — разворачивайтесь к цели заранее.</li>
+        <li><b>Огонь:</b> место наводчика — слева у маховиков (<b>E</b>).</li>
+        <li><b>Свернуться:</b> <b>E</b> справа у колеса — расчёт приводит орудие в походное положение (≈16 с).</li>
+        <li><b>Прицепить:</b> подгоните тягач задом так, чтобы фаркоп оказался у проушины (до 2,8 м), остановитесь — <b>E</b> у проушины.</li>
+      </ol>
+      <p>Орудие есть: в штабе (автопарк — «Д-30 на прицепе у первой машины»), в сетевом кооперативе и PvP (настройка комнаты; в PvP — у каждой команды свой тягач с Д-30). Цели для карты огня передаёт разведчик отделения (раздел 9).</p>
+
       <h2>2. Деления угломера (тысячные)</h2>
       <p>Все углы — в <b>тысячных</b>: полная окружность = 60-00 (6000 тыс.), 1 тыс. ≈ 0,06°, 15-00 = 90°. Записываются через дефис: <b>12-35</b> = 1235 тыс., <b>0-07</b> = 7 тыс. <b>Формула тысячной:</b> отклонение 1 тыс. на дальности Д равно Д/1000 м. Пример: разрыв левее цели на 40 м при Д = 5 000 м → 40 / 5 = 8 тыс. = 0-08.</p>
 
@@ -345,7 +380,10 @@ export class UI {
       <h2>8. Стрельба прямой наводкой (ОП4М-45)</h2>
       <p>Для целей в прямой видимости (до ~3–4 км): V → ОП4М-45, выберите заряд (шкала дальностей перестроится под него), поворотным механизмом выведите угольник на цель по направлению, затем подъёмным — совместите с целью штрих нужной дальности (цифры — сотни метров). Боковой ветер и движение цели выносите по боковой шкале (0-05 на деление). Уровень и барабан прицела при этом не используются.</p>
 
-      <h2>9. Советы</h2>
+      <h2>9. Цели от разведчика</h2>
+      <p>Разведчик (снайпер) отделения сам докладывает о замеченном противнике: «Цель 201: пехота противника (3). X 61 091, Y 33 943». Такие цели появляются на карте (<b>M</b>) и в списке карты огня Д-30 с координатами — щёлкните по ним на карте огня, чтобы получить дальность, дирекционный угол и уровень. Ориентир можно указать и самому: бинокль (<b>B</b>), навести, <b>ЛКМ</b> — разведчик передаст его координаты. Отметки живут 2–5 минут; в сетевой игре они общие для всей команды. Наблюдатель докладывает разрывы относительно ближайшей такой цели.</p>
+
+      <h2>10. Советы</h2>
       <ul>
         <li>В мороз −20…−25 °C поправка на температуру даёт сотни метров — без неё первые разрывы лягут с большим недолётом.</li>
         <li>Не забывайте менять уровень при стрельбе по высотам: 40 м превышения на 5 км — это 0-08, то есть ~100 м по дальности.</li>
@@ -460,7 +498,10 @@ export class UI {
       ${pvp ? `<div class="netform"><label>Команда <span><button class="btn ${me.team === 'negs' ? '' : 'sec'}" id="tn">${TEAM_NAMES.negs}</button> <button class="btn ${me.team === 'denter' ? '' : 'sec'}" id="td">${TEAM_NAMES.denter}</button></span></label>
         <label>Оружие <select id="wp">${PVP_WEAPONS.map((w) => `<option value="${w}" ${me.weapon === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></label></div>`
         : `<p class="note">Оружие и РПГ — как выбрано в оружейной штаба (${escH(WEAPONS[this.app.save.primary].name)}${this.app.save.launcher ? ' + РПГ-7В' : ''}). На старте — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}. Хост (создатель комнаты) считает противника и задачи.</p>`}
-      ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
+      ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label>
+        <label>Бойцов ИИ в отделении у каждого <select id="sq">${[0, 1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}" ${n === (r.squad ?? 3) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label><input type="checkbox" id="hw" ${r.howitzer !== false ? 'checked' : ''}> Д-30 на прицепе ${pvp ? 'у каждой команды' : 'у «Тигра»'}</label></div>`
+        : `<p class="note">Отделение ИИ у каждого игрока: ${r.squad ?? 3} · Д-30: ${r.howitzer !== false ? 'есть' : 'нет'}</p>`}
       <div class="row">${owner ? `<button class="btn" id="go">Начать${r.state === 'play' ? ' (идёт бой)' : ''}</button>` : `<span class="note">${r.state === 'play' ? 'Идёт бой' : 'Ждём, когда создатель комнаты начнёт'}</span>`}${pvp && r.state === 'play' && !owner ? '' : ''}<button class="btn sec" id="lv">Покинуть комнату</button></div>`, { wide: true });
     const draw = () => {
       const rr = net.room; const el = this.panel.querySelector('#pl');
@@ -468,7 +509,7 @@ export class UI {
       el.innerHTML = `<table class="ctl"><tr><th>Боец</th>${pvp ? '<th>Команда</th><th>Оружие</th>' : ''}<th>Пинг</th><th></th></tr>${rr.players.map((p) => `<tr class="${p.id === net.id ? 'me' : ''}"><td>${escH(p.name)}</td>${pvp ? `<td>${TEAM_NAMES[p.team] || ''}</td><td>${escH((WEAPONS[p.weapon] || {}).name || '')}</td>` : ''}<td>${p.ping || '—'}</td><td>${p.id === rr.owner ? (pvp ? 'создатель' : 'хост') : ''}</td></tr>`).join('')}</table>`;
     };
     draw();
-    this._netOn('room', (m) => { const was = r; if (m.room.owner !== was.owner || m.room.mission !== was.mission || m.room.mode !== was.mode || m.room.state !== was.state || (m.room.players.find((p) => p.id === net.id) || {}).team !== me.team) this.netRoom(); else draw(); });
+    this._netOn('room', (m) => { const was = r; if (m.room.owner !== was.owner || m.room.mission !== was.mission || m.room.mode !== was.mode || m.room.state !== was.state || m.room.squad !== was.squad || m.room.howitzer !== was.howitzer || (m.room.players.find((p) => p.id === net.id) || {}).team !== me.team) this.netRoom(); else draw(); });
     this._netOn('err', (m) => { const e = this.panel.querySelector('#nerr'); if (e) e.textContent = m.msg; });
     this._netOn('close', () => this.netMenu('Соединение с сервером потеряно'));
     if (pvp) {
@@ -478,6 +519,8 @@ export class UI {
       const wp = this.panel.querySelector('#wp'); if (wp) wp.addEventListener('change', () => net.send({ t: 'set', weapon: wp.value }));
     } else net.send({ t: 'set', weapon: this.app.save.primary });
     const ms = this.panel.querySelector('#ms'); if (ms) ms.addEventListener('change', () => net.send({ t: 'set', mission: ms.value }));
+    const sq = this.panel.querySelector('#sq'); if (sq) sq.addEventListener('change', () => net.send({ t: 'set', squad: +sq.value }));
+    const hw = this.panel.querySelector('#hw'); if (hw) hw.addEventListener('change', () => net.send({ t: 'set', howitzer: hw.checked }));
     this.bind('#go', () => net.send({ t: 'start' }));
     this.bind('#lv', () => { net.send({ t: 'leave' }); net.room = null; this.netLobby(); });
   }
@@ -522,7 +565,7 @@ export class UI {
             <div class="cx">Операций: ${s.xp[r.id] || 0}${hosp ? ' · <b class="bad">в госпитале</b>' : ''}</div>
           </div>`;
         }).join('')}</div><div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
-      this.bind('.card', (e) => {
+      this.bind('.card[data-id]', (e) => {
         const id = e.dataset.id;
         if (s.hospital[id] > 0) return;
         if (sel.has(id)) sel.delete(id); else if (sel.size < 6) sel.add(id);
@@ -556,14 +599,18 @@ export class UI {
       const seats = (s.vehicles || []).reduce((a, v) => a + VEHICLE_TYPES[v].seats, 0);
       this.show(`<h1>Автопарк</h1><p class="note">Выберите до двух машин для выдвижения (мест: ${seats}, нужно ${s.squad.length + 1}). На задании: подойдите к машине и нажмите E. Отделение по команде «за мной» (F) рассаживается само; в МТ-ЛБ один из бойцов садится за ПКТ.</p>
         <div class="arm">${Object.values(VEHICLE_TYPES).map((v) => `<div class="card ${s.vehicles.includes(v.id) ? 'on' : ''}" data-id="${v.id}"><div class="ct">${v.name}</div><div class="cr">${v.cls}</div>
-          <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч · мест ${v.seats} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}</div>
+          <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч · мест ${v.seats} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}
+          <div class="card ${s.howitzer ? 'on' : ''}" id="d30"><div class="ct">122-мм гаубица Д-30</div><div class="cr">Буксируемое орудие</div>
+          <div class="cn">Масса 3,2 т · дальность до 15,2 км · ${s.vehicles.length ? 'на прицепе у ' + VEHICLE_TYPES[s.vehicles[0]].name : 'нужен тягач — выберите машину'}</div>
+          <div class="cb">Выезжает в походном положении на прицепе у первой машины. На огневой позиции: отцепить (E у проушины), привести в боевое положение (≈16 с), затем E слева — место наводчика.</div></div></div>
         <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
-      this.bind('.card', (e) => {
+      this.bind('.card[data-id]', (e) => {
         const id = e.dataset.id;
         const i = s.vehicles.indexOf(id);
         if (i >= 0) s.vehicles.splice(i, 1); else { s.vehicles.push(id); if (s.vehicles.length > 2) s.vehicles.shift(); }
         this.app.persist(); render();
       });
+      this.bind('#d30', () => { s.howitzer = !s.howitzer; this.app.persist(); render(); });
       this.bind('#b', () => this.close());
     };
     render();

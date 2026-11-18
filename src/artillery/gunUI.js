@@ -114,7 +114,7 @@ export class GunUI {
     const m = this.m, h = this.h, ui = m.app.ui;
     const range = Math.min(m.terrain.half - 100, 7600);
     if (!this.mapImg) this.mapImg = m.terrain.makeMapImage(640, range);
-    const targets = m.artTargets || [];
+    const targets = [...(m.artTargets || []), ...(m.teamMarks ? m.teamMarks() : [])];
     const tg = (t) => { const q = toGrid(t.pos.x, t.pos.z); return `X ${q.X.toLocaleString('ru')} · Y ${q.Y.toLocaleString('ru')} · h ${Math.round(m.terrain.heightAt(t.pos.x, t.pos.z))} м`; };
     const gp = toGrid(h.pos.x, h.pos.z);
     const e = m.def.env;
@@ -122,7 +122,7 @@ export class GunUI {
       <div class="fm"><canvas id="fmc" width="720" height="720"></canvas>
       <div class="fmi">
         <p><b>Огневая позиция (${h.name}):</b><br>X ${gp.X.toLocaleString('ru')} · Y ${gp.Y.toLocaleString('ru')} · h ${Math.round(h.pos.y)} м<br>основное направление ${fmtDiv(m.def.gunDir || 0)}</p>
-        <p><b>Цели:</b></p>${targets.map((t) => `<p class="${t.alive ? '' : 'dead'}">${t.name}${t.alive ? '' : ' — подавлена'}<br><small>${tg(t)}<br>${t.desc || ''}</small></p>`).join('')}
+        <p><b>Цели:</b></p>${targets.map((t) => `<p class="${t.alive ? '' : 'dead'}">${t.name}${t.alive ? '' : ' — подавлена'}<br><small>${tg(t)}<br>${t.desc || ''}${t.by ? ` · доложил ${t.by}, ${Math.round(m.time - t.t)} с назад` : ''}</small></p>`).join('') || '<p class="note">Целей нет. Разведчик отделения докладывает о замеченном противнике сам; ориентир можно указать биноклем (B, ЛКМ).</p>'}
         <p><b>Метео:</b> t ${e.tempC} °C, ветер ${CARD[Math.round(e.windFrom / 45) % 8]} (${fmtDiv(e.windFrom / 360 * 6000)}) ${e.wind} м/с, давление 750 мм рт. ст.</p>
         <div id="fmm" class="fmm">Щёлкните по карте: дальность, дирекционный угол, превышение и угол места от огневой позиции.</div>
       </div></div>

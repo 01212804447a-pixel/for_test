@@ -12,6 +12,8 @@ export const D30 = {
   muzzle: -4.55,                              // дульный срез по оси ствола (от цапф)
   breech: 1.12,                               // казённый срез (от цапф)
   recoil: 0.85,                               // длина отката, м
+  lunette: new THREE.Vector3(0, -0.3, -4.35),  // буксирная проушина (в системе ствола)
+  lift: 0.29,                                 // подъём лафета на колёса в походном положении
   pano: new THREE.Vector3(-0.42, 1.52, 0.2),  // глаз у панорамы (верхний станок)
   op4m: new THREE.Vector3(-0.33, 1.2, 0.62),  // глаз у ОП4М-45 (качается со стволом, система люльки)
 };
@@ -46,6 +48,10 @@ export function shellGeometry(P) {
 export function buildD30() {
   const M = mats();
   const root = new THREE.Group();
+  // лафет (поднимается на колёса в походном положении)
+  const body = new THREE.Group();
+  root.add(body);
+  const trails = [], wheels = [];
   // ---------- нижний станок: опорная плита, станины, колёса ----------
   const L = new Parts();
   L.add('dark', lathe([[0, -0.45], [0.42, -0.45], [0.46, -0.4], [0.46, 0.4], [0.42, 0.45], [0, 0.45]].map(([r, z]) => [r, z * 0.12]), { seg: 28 }).rotateX(-Math.PI / 2).translate(0, 0.06, 0));
@@ -63,8 +69,10 @@ export function buildD30() {
     T.add('metal', torus(0.06, 0.015, { x: 0, y: 0.32, z: -2.9, axis: 'x' }));
     for (let i = 0; i < 4; i++) T.add('dark', rbox(0.2, 0.02, 0.05, 0, 0.37 - i * 0.02, -0.7 - i * 0.6, 0.006));
     const g = T.build(M);
+    g.rotation.order = 'YXZ';
     g.rotation.y = a;
-    root.add(g);
+    body.add(g);
+    trails.push({ g, a });
   }
   for (const s of [-1, 1]) {
     // колёса вывешены над грунтом
@@ -74,15 +82,16 @@ export function buildD30() {
     for (let i = 0; i < 18; i++) { const a = (i / 18) * Math.PI * 2; wP.add('rubber', rbox(0.27, 0.025, 0.06, 0, 0, 0, 0.006).translate(0, 0.575, 0).applyMatrix4(new THREE.Matrix4().makeRotationX(a))); }
     const w = wP.build(M);
     w.position.set(s * 0.95, 0.66, 0.15);
-    root.add(w);
+    body.add(w);
+    wheels.push(w);
     L.add('dark', rbox(0.6, 0.12, 0.14, s * 0.55, 0.62, 0.15, 0.03));
   }
-  root.add(L.build(M));
+  body.add(L.build(M));
 
   // ---------- верхний станок (поворот по азимуту) ----------
   const yaw = new THREE.Group();
   yaw.position.y = 0;
-  root.add(yaw);
+  body.add(yaw);
   const U = new Parts();
   U.add('paint', cylY(0.42, 0.45, 0.62, { seg: 28 }));
   for (const s of [-1, 1]) U.add('paint', side([[-0.45, 0.55], [0.55, 0.55, 0.04], [0.5, 1.22, 0.06], [0.05, 1.28, 0.06], [-0.3, 0.95, 0.04]], 0.05, { x: s * 0.27, bevel: 0.012 }));
@@ -191,5 +200,5 @@ export function buildD30() {
   casing.visible = false;
   root.add(casing);
   root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { root, yaw, pitch, recoil, wedge, round, casing };
+  return { root, body, trails, wheels, yaw, pitch, recoil, wedge, round, casing };
 }

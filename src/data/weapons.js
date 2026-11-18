@@ -53,7 +53,7 @@ export const AMMO = {
   'vog25': {
     id: 'vog25', name: 'ВОГ-25 (осколочная)', kind: 'grenade', model: 'const', cd: 0.32,
     mass: 0.25, caliber: 0.04, v0: 76, armDist: 10,
-    explosive: { pen: 0, radius: 3.5, frag: 9, dmg: 160 },
+    explosive: { pen: 0, radius: 3.8, frag: 10, dmg: 200 },
   },
   'f1': {
     id: 'f1', name: 'Ф-1 (ручная)', kind: 'hand', model: 'const', cd: 0.5,

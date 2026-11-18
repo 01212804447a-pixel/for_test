@@ -433,7 +433,7 @@ export const MISSIONS = [
       let t = 0;
       ctx.onUpdate((dt) => {
         t += dt;
-        if (!fleeing && krandi.alive && ctx.player.body.pos.distanceTo(krandi.pos) < 90) fleeing = true;
+        if (!fleeing && krandi.alive && ctx.anyPlayerNear(krandi.pos, 90)) fleeing = true;
         if (fleeing && krandi.alive) {
           krandi.brain.forced = { x: escape.x, z: escape.z, speed: 2.8 };
           guards.forEach((gd, i) => { if (gd.alive && gd.brain) gd.brain.forced = { x: krandi.pos.x + (i - 1.5) * 2.5, z: krandi.pos.z + 3, speed: 3.2 }; });

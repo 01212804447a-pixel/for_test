@@ -47,10 +47,23 @@ export class Mission {
     this._targetsCache = new Map(); this._targetsFrame = -1; this.frame = 0;
     this.shoutT = new Map();
     this.mapVisible = false;
+    // сетевая игра
+    this.net = setup.net || null;
+    this.netAI = []; this.netItems = []; this.netVisual = false;
+    if (this.net) this.net.attach(this);
   }
+
+  get pvp() { return !!(this.net && this.net.pvp); }
 
   // ===================== загрузка =====================
   build() {
+    if (!this.net) { this._build(); return; }
+    const orig = Math.random;
+    Math.random = mulberry32(this.net.seed >>> 0);
+    try { this._build(); } finally { Math.random = orig; }
+  }
+
+  _build() {
     const def = this.def, e = def.env;
     const q = QUALITY[this.settings.quality] || QUALITY.medium;
     // окружающая среда
@@ -113,16 +126,32 @@ export class Mission {
     }
     // игрок
     const st = def.start;
-    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: !!this.setup.launcher, x: st.x, z: st.z, yaw: st.yaw });
+    const sp = this.net ? this.net.spawnPoint(def) : st;
+    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: !!this.setup.launcher, x: sp.x, z: sp.z, yaw: sp.yaw });
+    if (this.pvp) this.player.setTeam(this.net.team);
     this.soldiers.push(this.player.body);
     // скрипт миссии
     const ctx = this.makeCtx();
+    if (this.pvp) {
+      // противостояние: карта без ИИ и сценария
+      const dummy = (o) => ({ alive: false, pos: new THREE.Vector3(o.x || 0, 0, o.z || 0), brain: null, members: [], hp: 0 });
+      ctx.enemy = dummy;
+      const addV = ctx.vehicle;
+      ctx.vehicle = (type, o) => addV(type, { x: o.x, z: o.z, yaw: o.yaw, team: 'negs' });
+      ctx.radio = () => {};
+      ctx.stage = () => {};
+    }
     def.build(ctx);
+    if (this.pvp) {
+      this.updaters = [];
+      const lim = this.net.room.scoreLimit;
+      this.stages = [{ objs: [{ text: `Командный бой до ${lim} побед. Tab — таблица счёта`, check: () => false, marker: () => null }] }];
+    }
     // вешки вдоль дорог, таблички
     for (const f of def.terrain.features) if (f.type === 'road') POI.roadPoles(this.world, this.mats, { pts: f.pts });
     for (const sg of this.world.signs) ST.sign(this.world, this.mats, sg);
     // техника на старте
-    const vlist = def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
+    const vlist = this.pvp ? [] : def.vehicles || (this.setup.vehicles || []).map((t, i) => ({ type: t, x: st.x + 9 + i * 8 * Math.cos(st.yaw), z: st.z + 8 + i * 8 * Math.sin(st.yaw), yaw: st.yaw }));
     for (const v of vlist) this.addVehicle(v.type, { x: v.x, z: v.z, yaw: v.yaw, team: 'negs' });
     // отделение
     if (!def.noSquad) {
@@ -175,6 +204,18 @@ export class Mission {
     this.player.computePose(0.016);
     this.updateCamera(0);
     this.cover.update(this.camPos);
+    if (this.net) this.net.onBuilt();
+  }
+
+  // все свои бойцы-игроки (сеть: и удалённые)
+  playerBodies() {
+    const r = [this.player.body];
+    for (const s of this.soldiers) if (s.isRemote && (!this.pvp || s.team === this.player.body.team)) r.push(s);
+    return r;
+  }
+  anyPlayerNear(x, z, r) {
+    for (const b of this.playerBodies()) if (b.alive && Math.hypot(b.pos.x - x, b.pos.z - z) < r) return true;
+    return false;
   }
 
   makeCtx() {
@@ -195,7 +236,8 @@ export class Mission {
       onUpdate: (fn) => self.updaters.push(fn),
       fail: (r) => self.fail(r),
       stage: (objs, onStart, onDone) => self.stages.push({ objs, onStart, onDone }),
-      objReach: (text, x, z, r) => ({ text, marker: () => new THREE.Vector3(x, self.terrain.heightAt(x, z), z), check: () => { const b = self.player.body.pos; return Math.hypot(b.x - x, b.z - z) < r; } }),
+      objReach: (text, x, z, r) => ({ text, marker: () => new THREE.Vector3(x, self.terrain.heightAt(x, z), z), check: () => self.anyPlayerNear(x, z, r) }),
+      anyPlayerNear: (pos, r) => self.anyPlayerNear(pos.x, pos.z, r),
       objEliminate: (text, groups, frac = 1) => ({ text, check: () => { let tot = 0, dead = 0; for (const g of groups) for (const s of g.members) { tot++; if (!s.alive) dead++; } return tot > 0 && dead / tot >= frac - 1e-6; }, marker: () => { for (const g of groups) for (const s of g.members) if (s.alive && s.brain && s.brain.state === 'combat') return null; return null; }, progress: () => { let tot = 0, dead = 0; for (const g of groups) for (const s of g.members) { tot++; if (!s.alive) dead++; } return tot ? `${dead}/${Math.ceil(tot * frac)}` : ''; } }),
       objInteract: (text, item) => ({ text, check: () => { const it = typeof item === 'function' ? item() : item; return !!(it && it.done); }, marker: () => { const it = typeof item === 'function' ? item() : item; return it && !it.done ? it.pos : null; } }),
       objDestroy: (text, targets) => ({ text, check: () => targets.every((t) => !t.alive), marker: () => { const t = targets.find((x) => x.alive); return t ? t.pos : null; }, progress: () => `${targets.filter((t) => !t.alive).length}/${targets.length}` }),
@@ -230,6 +272,11 @@ export class Mission {
     const b = new Brain(s, this, { mode: o.mode || 'guard', route: o.route, post: { x: o.x, z: o.z, yaw: o.yaw || 0 } });
     if (o.group) o.group.add(s);
     this.soldiers.push(s);
+    s.netIdx = this.netAI.length; this.netAI.push(s);
+    if (this.net && !this.net.isHost) {
+      s.brain = null;
+      s.damage = (amount, zone, source, dir, opts) => this.net.aiDamage(s, amount, zone, source, dir, opts);
+    }
     return s;
   }
 
@@ -259,7 +306,9 @@ export class Mission {
     mesh.add(c, l); mesh.position.set(x, gy + 0.85, z);
     this.scene.add(mesh);
     const it = { pos: new THREE.Vector3(x, gy + 0.9, z), label, hold, done: false, mesh };
-    this.interactables.push({ pos: it.pos, r: 2.2, label, hold, enabled: () => !it.done, action: () => { it.done = true; this.scene.remove(mesh); this.hud.message('Получено: ' + label.replace(/^[^:]*:\s*/, ''), 2.5); this.audio.mech('switch'); } });
+    it.localTake = () => { if (it.done) return; it.done = true; this.scene.remove(mesh); this.hud.message('Получено: ' + label.replace(/^[^:]*:\s*/, ''), 2.5); this.audio.mech('switch'); };
+    const idx = this.netItems.length; this.netItems.push(it);
+    this.interactables.push({ pos: it.pos, r: 2.2, label, hold, enabled: () => !it.done, action: () => { if (this.net && !this.net.isHost) { this.net.interactItem(idx); this.hud.message('Передано хосту…', 1); } else it.localTake(); } });
     // небольшая подставка-стол
     this.world.addBox({ x, z, y0: gy, w: 1.2, d: 0.7, h: 0.78, material: this.mats.wood, mat: 'wood', pen: 20 });
     return it;
@@ -365,6 +414,7 @@ export class Mission {
 
   success() {
     if (this.finished) return;
+    if (this.net) { if (this.net.isHost && !this.pvp) this.net.net.send({ t: 'end', ok: true, reason: '' }); return; }
     this.finished = true;
     this.hud.message('ЗАДАНИЕ ВЫПОЛНЕНО', 4, true);
     this.after(3.5, () => this.app.endMission(true, null, this));
@@ -372,14 +422,24 @@ export class Mission {
 
   fail(reason) {
     if (this.finished) return;
+    if (this.net) { if (this.net.isHost && !this.pvp) this.net.net.send({ t: 'end', ok: false, reason }); return; }
     this.finished = true; this.failed = reason;
     this.hud.message('ЗАДАНИЕ ПРОВАЛЕНО: ' + reason, 4, true);
     this.after(3.5, () => this.app.endMission(false, reason, this));
   }
 
+  // конец сетевого задания (по сообщению сервера)
+  netEnd(ok, reason, lost) {
+    if (this.finished) return;
+    this.finished = true; this.failed = ok ? null : reason;
+    this.hud.message(this.pvp ? reason || 'Матч окончен' : ok ? 'ЗАДАНИЕ ВЫПОЛНЕНО' : 'ЗАДАНИЕ ПРОВАЛЕНО: ' + reason, 4, true);
+    this.after(lost ? 1.5 : 4, () => this.app.endNetMission(ok, reason, this, lost));
+  }
+
   // ===================== интерфейс для сущностей =====================
   fireProjectile(o) {
-    this.projectiles.spawn(o);
+    const pr = this.projectiles.spawn(o);
+    if (this.net && !o.visual) this.net.onLocalShot(o, pr);
     const w = o.weapon;
     this.audio.shot(o.pos, w.sound, !!o.own);
     const d = o.dir.clone().normalize();
@@ -398,7 +458,11 @@ export class Mission {
     }
   }
 
-  throwGrenade(owner, pos, vel, type) { return this.projectiles.throwGrenade(owner, pos, vel, type); }
+  throwGrenade(owner, pos, vel, type) {
+    const gr = this.projectiles.throwGrenade(owner, pos, vel, type);
+    if (this.net) this.net.onLocalGrenade(owner, gr, type || 'f1');
+    return gr;
+  }
 
   noise(pos, radius, team, src) {
     this.noises.push({ pos: pos.clone(), radius, team, src, time: this.time });
@@ -426,7 +490,11 @@ export class Mission {
 
   onSoldierDeath(s, src) {
     if (s.brain) s.brain.releaseCover();
-    if (s.isPlayer) { this.hud.message('Вы погибли', 3, true); this.after(2.5, () => this.fail('Сержант Кей погиб')); return; }
+    if (s.isPlayer) {
+      if (this.net) { this.net.onLocalDeath(src); return; }
+      this.hud.message('Вы погибли', 3, true); this.after(2.5, () => this.fail('Сержант Кей погиб')); return;
+    }
+    if (s.isRemote) return;
     if (s.team === 'negs') {
       this.stats.lost.push(s.rosterId);
       this.hud.radio('Отделение', `«${s.callsign}» тяжело ранен, выбыл!`, true);
@@ -658,11 +726,13 @@ export class Mission {
     this.time += dt;
     this.stats.time += dt;
     const inp = this.input;
+    const net = this.net, host = !net || net.isHost;
+    if (net) net.preUpdate(dt);
     if (inp.bh('map') && !this.player.gun) this.mapVisible = !this.mapVisible;
-    this.squadVisible = inp.bd('squad');
-    this.player.update(dt);
+    this.squadVisible = inp.bd('squad') && !net;
+    if (!net || inp.active) this.player.update(dt);
     for (const s of this.soldiers) s.update(dt);
-    for (const g of this.groups) g.update(dt);
+    if (host) for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
     for (const h of this.guns) h.update(dt);
     this.projectiles.update(dt);
@@ -680,10 +750,10 @@ export class Mission {
       a.needsUpdate = true;
     }
     // скрипты
-    for (const fn of this.updaters) fn(dt);
+    if (host) for (const fn of this.updaters) fn(dt);
     for (let i = this.timers.length - 1; i >= 0; i--) if (this.timers[i].t <= this.time) { const t = this.timers[i]; this.timers.splice(i, 1); t.fn(); }
     const st = this.stages[this.stageIdx];
-    if (st && !this.finished) {
+    if (st && !this.finished && host) {
       let all = true;
       for (const o of st.objs) { if (!o.done && o.check()) { o.done = true; this.hud.setObjectives(this); } if (!o.done) all = false; }
       if (all) this.nextStage();
@@ -704,6 +774,7 @@ export class Mission {
     this.audio.setListener(this.camPos.x, this.camPos.y, this.camPos.z, this.player.vehicle ? this.player.yaw : this.player.yaw);
     this.audio.setWind(this.wind.length() + (this.def.env.snow || 0) * 6);
     this.hud.update(this, dt);
+    if (net) net.postUpdate(dt);
   }
 
   updateCamera(dt) {
@@ -856,6 +927,7 @@ export class Mission {
   }
 
   dispose() {
+    if (this.net) this.net.dispose();
     if (this.hitcam) this.hitcam.box.remove();
     for (const h of this.guns || []) if (h.ui) { h.ui.panel.remove(); h.ui.ret.remove(); }
     this.hud.root.classList.remove('gunner');

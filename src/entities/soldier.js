@@ -186,7 +186,7 @@ export class Soldier {
         if (!this.alive && m.deadT > 1.2) this._skinFrozen = true;
         m.update(dt, {
           speed: sp, mx: sp > 0.05 ? lx / sp : 0, mz: sp > 0.05 ? lz / sp : 0,
-          stance: this.stance, aimPitch: this.aimPitch, aimYaw: this.aimYaw, aiming: this.brain ? this.brain.aiming : false, dead: !this.alive,
+          stance: this.stance, aimPitch: this.aimPitch, aimYaw: this.aimYaw, aiming: this.brain ? this.brain.aiming : !!this.netAiming, dead: !this.alive,
           reload: this.reloadT > 0 ? 1 - this.reloadT / (this.reloadTotal || 2.5) : -1, groundY: this.pos.y,
         });
         m.root.updateMatrixWorld(true);

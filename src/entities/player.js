@@ -422,7 +422,7 @@ export class Player {
     const block = g.world.raycast(eye, mp, { mask: 'bullet', vehicles: true, ignore: this.vehicle });
     if (block) mp.copy(eye).lerp(mp, Math.max(0, block.t - 0.05));
     b.shotsFired++;
-    g.fireProjectile({ weapon: def, pos: mp, dir: md, owner: b, team: 'negs', own: true, ammoId });
+    g.fireProjectile({ weapon: def, pos: mp, dir: md, owner: b, team: b.team, own: true, ammoId });
     b.lastShotTime = g.time; b.fireFlash = 0.06;
     this.flashT = 0.045;
     this.shotAge = 0;
@@ -452,6 +452,7 @@ export class Player {
       const pos = g.lookCam.position.clone().add(new THREE.Vector3(Math.cos(this.yaw) * 0.25, -0.1, -Math.sin(this.yaw) * 0.25));
       const gr = g.projectiles.throwGrenade(b, pos, dir.multiplyScalar(v).add(b.vel), 'f1');
       gr.fuse -= Math.min(2.2, this.cook || 0);
+      if (g.net) g.net.onLocalGrenade(b, gr, 'f1');
       ws.count--; b.grenades = ws.count;
       this.switchT = 0.8; this.cook = 0;
       g.hud.message(long ? 'Граната — бросок' : 'Граната — катнул', 1);
@@ -605,6 +606,31 @@ export class Player {
     this.updateHitboxes();
     this.shake = Math.max(0, this.shake - dt * 2.5);
     this.suppression = Math.max(0, this.suppression - dt * 0.3);
+  }
+
+  // Сетевая игра: команда (PvP) и возрождение
+  setTeam(team) {
+    const b = this.body;
+    b.team = team; b.faction = team;
+  }
+
+  respawn(x, z, yaw) {
+    const g = this.game, b = this.body;
+    if (this.gun) this.gun.dismount(this);
+    if (this.vehicle) { this.vehicle.removeOccupant(b); this.vehicle = null; this.seat = -1; }
+    b.vehicle = null; b.hidden = false;
+    b.alive = true; b.health = b.maxHealth; b.bleeding = 0; b.shockT = 0; b.suppression = 0; b.stance = 'stand';
+    b.pos.set(x, g.world.groundAt(x, z, 50), z); b.vel.set(0, 0, 0);
+    this.yaw = yaw; this.pitch = 0; b.yaw = yaw; b.aimYaw = yaw; b.aimPitch = 0;
+    this.stamina = 1; this.breath = 1; this.breathLock = 0; this.medT = 0; this.reloadT = 0; this.switchT = 0.5;
+    this.aim = false; this.aimT = 0; this.suppression = 0; this.shake = 0; this.vy = 0; this.fallStart = null; this.uglMode = false;
+    const loads = (g.app && g.app.save && g.app.save.loads) || null;
+    const prim = this.slots[0] ? this.slots[0].id : 'ak74m';
+    this.slots[0] = makeState(prim, loads);
+    if (this.slots[1]) this.slots[1] = makeState('rpg7');
+    this.slots[2].count = 3; b.grenades = 3; b.medkits = 2;
+    this.cur = 0;
+    this.updateHitboxes();
   }
 
   resupply() {

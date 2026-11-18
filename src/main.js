@@ -13,6 +13,9 @@ import { makeLighting } from './world/sky.js';
 import { Snowfall } from './world/weather.js';
 import { PostFX } from './fx/post.js';
 import { preload, hasAssets } from './core/assets.js';
+import { NetClient } from './net/net.js';
+import { NetSession } from './net/session.js';
+import { WEAPONS } from './data/weapons.js';
 
 class MenuScene {
   constructor(app) {
@@ -180,6 +183,72 @@ class App {
 
   abortMission() { this.toHQ(); }
 
+  // ================================================================ сетевая игра
+  async netConnect(addr, name) {
+    if (!this.net) {
+      this.net = new NetClient();
+      this.net.on('start', (m) => this.startNetMission(m));
+    }
+    await this.net.connect(addr, name);
+  }
+
+  startNetMission(start) {
+    const room = start.room;
+    const def = missionById(room.mission);
+    if (!def) return;
+    this.disposeMission();
+    this.hq = null;
+    this.ui._netClear && this.ui._netClear();
+    this.ui.loading(`${def.title} — ${room.mode === 'pvp' ? 'противостояние' : 'кооператив'}`);
+    this.mode = 'loading';
+    setTimeout(() => {
+      try {
+        const session = new NetSession(this, this.net, start);
+        const pvp = room.mode === 'pvp';
+        const me = room.players.find((p) => p.id === this.net.id) || {};
+        const primary = pvp ? (WEAPONS[me.weapon] ? me.weapon : 'ak74m') : this.save.primary;
+        const n = room.players.length;
+        const m = new Mission(this, def, { squad: [], primary, launcher: pvp ? false : this.save.launcher, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], net: session });
+        this.hud.reset();
+        m.build();
+        this.mission = m;
+        this.ui.close();
+        this.hud.show();
+        this.mode = 'mission';
+        this.paused = false;
+        this.ui.clickToPlay(`<b>${def.title}</b> · ${pvp ? 'противостояние' : 'кооператив'}: нажмите на экран<br><span style="font-size:12px;color:#9aa8b2">Tab — таблица игроков · Esc — меню (игра не останавливается)</span>`);
+        this.hud.message(pvp ? 'Противостояние' : def.code, 4, true);
+      } catch (e) {
+        console.error(e);
+        this.mode = 'menu';
+        this.ui.show(`<h1>Ошибка загрузки</h1><pre>${e.stack || e}</pre><button class="btn" data-close>OK</button>`, { onClose: () => { this.net.send({ t: 'leave' }); this.ui.netLobby(); } });
+      }
+    }, 60);
+  }
+
+  endNetMission(ok, reason, m, lost) {
+    if (this.mission !== m) return;
+    m.netStopped = true;
+    this.input.releaseLock();
+    this.paused = true;
+    this.ui.netDebrief(ok, reason, m, lost);
+  }
+
+  leaveNetMatch() {
+    if (this.net) { this.net.send({ t: 'leave' }); this.net.room = null; }
+    this.backToRoom(true);
+  }
+
+  backToRoom(lobby = false, menu = false) {
+    this.disposeMission();
+    this.hud.hide();
+    this.mode = 'menu';
+    this.paused = false;
+    if (menu || !this.net || !this.net.connected) this.ui.netMenu(menu ? 'Соединение с сервером потеряно' : '');
+    else if (lobby || !this.net.room) this.ui.netLobby();
+    else this.ui.netRoom();
+  }
+
   endMission(ok, reason, m) {
     if (this.mission !== m) return;
     // госпиталь и опыт
@@ -217,7 +286,8 @@ class App {
       if (this.input.active || this.ui.isOpen()) this.hq.update(dt);
       this.hq.render();
     } else if (this.mode === 'mission' && this.mission) {
-      if (!this.paused && this.input.active) this.mission.update(dt);
+      const mp = !!this.mission.net;
+      if (mp ? !this.mission.netStopped : (!this.paused && this.input.active)) this.mission.update(dt);
       else if (!this.paused && !this.mission.started) { this.mission.updateCamera(0); }
       if (this.input.active) this.mission.started = true;
       this.mission.render();

@@ -58,7 +58,7 @@ export class Howitzer {
     // взаимодействие
     m.interactables.push({
       pos: new THREE.Vector3(x, y0 + 1.0, z), r: 2.6, label: `Занять место наводчика: ${name}`, hold: 0.25,
-      enabled: () => !m.player.gun, action: () => this.mount(m.player),
+      enabled: () => !m.player.gun && !this.netUser && m.player.body.alive, action: () => this.mount(m.player),
     });
     this.ui = null;
     this._place();
@@ -184,6 +184,7 @@ export class Howitzer {
     // фугасное действие (замедление): снаряд углубляется — меньше осколков, сильнее по укрытиям
     if (L.fuze === 'Ф') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
     p.onLand = (pp) => this.report(pp);
+    if (m.net) m.net.onLocalShot({ weapon: WEAPONS.d30, owner: m.player.body, ammoId: 'of462_' + CHARGES[L.ci].id, gun: this }, p);
     this.recoilT = 0;
     // дульное пламя, ударная волна, пыль и снег с грунта
     m.fx.muzzleBlast(pos, dir);
@@ -198,6 +199,19 @@ export class Howitzer {
     const T = firingTable(L.ci);
     m.hud.radio('Наводчик', `Выстрел! Заряд ${CHARGES[L.ci].name}, угломер ${fmtDiv(this.az)}, возвышение ${fmtDiv(this.elM)}.`);
     void T;
+  }
+
+  // Выстрел этого орудия другим игроком (сеть): откат, дульная волна, звук
+  remoteFire(p) {
+    const m = this.m;
+    this.recoilT = 0; this.shots++; this.loaded = null; this.breech = 0;
+    const pos = this.muzzleWorld(), dir = this.boreDir();
+    m.fx.muzzleBlast(pos, dir);
+    m.fx.flashLight(pos, 90, 0.07, 0xffb050, 40);
+    m.audio.explosion(pos, 1.6);
+    m.audio.shot(pos, 'rpg', false);
+    m.noise(pos, 3000, 'negs', null);
+    void p;
   }
 
   // Доклад наблюдателя о разрыве

@@ -58,9 +58,22 @@ export class Projectiles {
     return this._shellProto.clone();
   }
 
-  spawn({ weapon, pos, dir, owner, team, ammoId }) {
+  spawn({ weapon, pos, dir, owner, team, ammoId, visual = false, vel = null }) {
     const ammo = AMMO[ammoId || weapon.ammo];
     const d = _d.copy(dir).normalize();
+    if (visual && vel) {
+      const hl0 = Math.hypot(vel.x, vel.z) || 1;
+      const p = {
+        ammo, owner, team, weapon, visual: true,
+        p: pos.clone(), v: vel.clone(), t: 0, rx: -vel.z / hl0, rz: vel.x / hl0,
+        tracer: ammo.tracer || (ammo.tracerEvery ? Math.random() < 1 / ammo.tracerEvery : false),
+        alive: true, dist: 0, supp: new Set(), mesh: null, origin: pos.clone(),
+        thrustErr: null, ownerVehicle: owner && owner.vehicle ? owner.vehicle : null, byPlayer: false,
+      };
+      this._addMesh(p, pos);
+      this.list.push(p);
+      return p;
+    }
     // механическое рассеивание оружия
     const disp = (weapon.disp || 0.3) * 0.001;
     const up = Math.abs(d.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
@@ -81,18 +94,18 @@ export class Projectiles {
       byPlayer: owner && owner.isPlayer,
     };
     if (owner && owner.vehicle && owner.vehicle.vel) p.v.add(owner.vehicle.vel);
-    if (ammo.kind === 'shell') {
-      p.mesh = this.shellMesh();
-      p.mesh.position.copy(pos);
-      this.game.scene.add(p.mesh);
-    } else if (ammo.kind === 'rocket' || ammo.kind === 'grenade') {
-      p.mesh = ammo.kind === 'rocket' ? this.rocketProto.clone() : new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
-      p.mesh.position.copy(pos);
-      this.game.scene.add(p.mesh);
-    }
+    this._addMesh(p, pos);
     this.list.push(p);
     if (p.byPlayer) { this.game.stats.shots++; if (this.game.onPlayerShot) this.game.onPlayerShot(p); }
     return p;
+  }
+
+  _addMesh(p, pos) {
+    const kind = p.ammo.kind;
+    if (kind === 'shell') p.mesh = this.shellMesh();
+    else if (kind === 'rocket') p.mesh = this.rocketProto.clone();
+    else if (kind === 'grenade') p.mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
+    if (p.mesh) { p.mesh.position.copy(pos); this.game.scene.add(p.mesh); }
   }
 
   update(dt) {
@@ -178,6 +191,13 @@ export class Projectiles {
     const pt = new THREE.Vector3().lerpVectors(a, b, best.t);
     if (p.byPlayer) p.impact = { pos: pt.clone(), normal: best.hit && best.hit.normal ? best.hit.normal.clone() : (best.ph ? best.ph.normal.clone() : null), target: best.hit && best.hit.obstacle && best.hit.obstacle.owner && best.hit.obstacle.owner.kind === 'target' ? best.hit.obstacle.owner : null, kind: best.kind };
     if (best.kind === 'prop') { this._hitProp(p, best.ph, pt); return; }
+    if (p.visual && best.kind !== 'static') {
+      // чужой выстрел: только картинка, урон считает стрелок
+      const dir = p.v.clone().normalize();
+      if (p.ammo.explosive) { this.explode(pt, p.ammo.explosive, p.owner, null, null, { visual: true }); }
+      else g.fx.impact(pt, dir.negate(), best.kind === 'soldier' ? 'blood' : 'metal');
+      p.alive = false; return;
+    }
     if (best.kind === 'soldier') this._hitSoldier(p, best.s, best.zone, pt, best.idx);
     else if (best.kind === 'vehicle') this._hitVehicle(p, best.hit.vehicle, best.hit, pt);
     else this._hitStatic(p, best.hit, pt, a);
@@ -189,7 +209,7 @@ export class Projectiles {
   _hitProp(p, ph, pt) {
     const g = this.game, b = ph.prop;
     if (p.ammo.explosive) {
-      if (p.dist >= (p.ammo.armDist || 0)) this.explode(pt, p.ammo.explosive, p.owner);
+      if (p.dist >= (p.ammo.armDist || 0)) this.explode(pt, p.ammo.explosive, p.owner, null, null, { visual: !!p.visual });
       p.alive = false; return;
     }
     const dir = p.v.clone().normalize();
@@ -296,13 +316,13 @@ export class Projectiles {
     const o = hit.obstacle;
     const camD = pt.distanceTo(g.camPos);
     if (p.ammo.explosive) {
-      if (p.dist >= (p.ammo.armDist || 0) && mat !== 'water') this.explode(pt.clone().addScaledVector(hit.normal, 0.1), p.ammo.explosive, p.owner, null, o && o.owner);
+      if (p.dist >= (p.ammo.armDist || 0) && mat !== 'water') this.explode(pt.clone().addScaledVector(hit.normal, 0.1), p.ammo.explosive, p.owner, null, o && o.owner, { visual: !!p.visual });
       else { g.fx.impact(pt, hit.normal, mat === 'water' ? 'snow' : mat, 1.5); }
       p.alive = false; return;
     }
     const n = hit.normal;
     // мишень полигона
-    if (o && o.owner && o.owner.kind === 'target') {
+    if (o && o.owner && o.owner.kind === 'target' && !p.visual) {
       const t = o.owner;
       g.fx.addDecal(pt, n.dot(dir) < 0 ? n : n.clone().negate(), 0.012, 0x050505);
       t.hits.push({ x: pt.x, y: pt.y, z: pt.z, t: g.time });
@@ -310,9 +330,10 @@ export class Projectiles {
       if (g.onTargetHit) g.onTargetHit(t, pt, p);
       p.alive = false; return;
     }
-    if (o && o.owner && o.owner.hp !== undefined && o.owner.kind !== 'target') {
-      o.owner.hp -= this.energy(p) / 1400 * 2;
-      if (o.owner.hp <= 0 && g.onDestructible) g.onDestructible(o.owner, p.owner);
+    if (o && o.owner && o.owner.hp !== undefined && o.owner.kind !== 'target' && !p.visual && o.owner.alive !== false) {
+      const dmg = this.energy(p) / 1400 * 2;
+      if (g.net && !g.net.isHost) g.net.fwdDestructible(o.owner, dmg, p.owner);
+      else { o.owner.hp -= dmg; if (o.owner.hp <= 0 && g.onDestructible) g.onDestructible(o.owner, p.owner); }
     }
     const cosI = Math.abs(dir.dot(n));
     // рикошет от твёрдых поверхностей по касательной
@@ -342,22 +363,30 @@ export class Projectiles {
   }
 
   // Взрыв: фугасное действие + осколки (с учётом укрытий)
-  explode(pos, ex, owner, directVehicle = null, directDestructible = null) {
+  // opts: visual — чужой взрыв (только картинка и подавление); net — пришёл от клиента
+  // хосту (только техника и объекты). Клиент кооператива отправляет хосту урон технике/объектам.
+  explode(pos, ex, owner, directVehicle = null, directDestructible = null, opts = {}) {
     const g = this.game;
+    const visual = opts.visual || g.netVisual;
+    const fx = opts.fx !== false, doSoldiers = opts.soldiers !== false && !visual, doProps = opts.props !== false;
+    let doWorld = opts.world !== false && !visual;
+    if (doWorld && g.net && !g.net.isHost && !opts.net) { g.net.fwdExplosion(pos, ex, owner, directVehicle, directDestructible); doWorld = false; }
     const size = ex.fxSize || clamp(ex.radius / 4, 0.6, 2.2);
     const ground = g.world.terrain.heightAt(pos.x, pos.z);
-    if (size >= 3) g.fx.shellBurst(pos, pos.y - ground < 2); else g.fx.explosion(pos, size, pos.y - ground < 2);
-    g.audio.explosion(pos, size);
-    g.noise(pos, 800, owner ? owner.team : null, owner);
-    if (pos.y - ground < 0.6) g.fx.addDecal(new THREE.Vector3(pos.x, ground, pos.z), g.world.terrain.normalAt(pos.x, pos.z), ex.radius * 0.9, 0x202020);
+    if (fx) {
+      if (size >= 3) g.fx.shellBurst(pos, pos.y - ground < 2); else g.fx.explosion(pos, size, pos.y - ground < 2);
+      g.audio.explosion(pos, size);
+      g.noise(pos, 800, owner ? owner.team : null, owner);
+      if (pos.y - ground < 0.6) g.fx.addDecal(new THREE.Vector3(pos.x, ground, pos.z), g.world.terrain.normalAt(pos.x, pos.z), ex.radius * 0.9, 0x202020);
+    }
     const src = new THREE.Vector3(pos.x, pos.y + 0.25, pos.z);
-    for (const s of g.soldiers) {
+    if (fx || doSoldiers) for (const s of g.soldiers) {
       if (!s.alive || s.hidden) continue;
       const d = s.chest.distanceTo(pos);
       if (d > ex.frag * 1.6) continue;
       if (s.brain) s.brain.onSuppress(1 - d / (ex.frag * 1.6), owner);
-      if (s.isPlayer) g.onPlayerBlast(1 - d / (ex.frag * 1.6));
-      if (d > ex.frag) continue;
+      if (s.isPlayer && fx) g.onPlayerBlast(1 - d / (ex.frag * 1.6));
+      if (d > ex.frag || !doSoldiers) continue;
       const blocked = !!g.world.raycast(src, s.chest, { mask: 'bullet' });
       let dmg = 0;
       if (d < ex.radius) dmg += ex.dmg * Math.pow(1 - d / ex.radius, 1.3) * (blocked ? 0.15 : 1);
@@ -378,7 +407,8 @@ export class Projectiles {
       if (dmg > 0 && s.alive) s.damage(dmg, 'torso', owner, null);
       if (owner && owner.isPlayer && !s.alive && s.team !== 'negs' && !s._countedKill) { s._countedKill = true; g.stats.kills++; }
     }
-    if (g.props) g.props.explosion(pos, ex.dmg * 2.2, ex.frag * 1.4);
+    if (g.props && doProps) g.props.explosion(pos, ex.dmg * 2.2, ex.frag * 1.4);
+    if (!doWorld) return;
     for (const v of g.vehicles) {
       if (!v.alive || v === directVehicle) continue;
       const d = v.pos.distanceTo(pos);
@@ -394,14 +424,14 @@ export class Projectiles {
   }
 
   // ----- ручные гранаты -----
-  throwGrenade(owner, pos, vel, type = 'f1') {
+  throwGrenade(owner, pos, vel, type = 'f1', { visual = false, fuse = null } = {}) {
     const def = HAND_GRENADES[type];
     const mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
     mesh.scale.setScalar(1.3);
     mesh.position.copy(pos);
     mesh.castShadow = true;
     this.game.scene.add(mesh);
-    const gr = { owner, pos: pos.clone(), vel: vel.clone(), fuse: rand(def.fuse[0], def.fuse[1]), mesh, ammo: AMMO[def.ammo], rest: false, warned: false, spin: new THREE.Vector3(rand(-10, 10), rand(-10, 10), rand(-10, 10)) };
+    const gr = { owner, pos: pos.clone(), vel: vel.clone(), fuse: fuse ?? rand(def.fuse[0], def.fuse[1]), mesh, ammo: AMMO[def.ammo], visual, rest: false, warned: false, spin: new THREE.Vector3(rand(-10, 10), rand(-10, 10), rand(-10, 10)) };
     this.grenades.push(gr);
     this.game.audio.pin();
     return gr;
@@ -440,7 +470,7 @@ export class Projectiles {
       }
       if (gr.fuse <= 0) {
         g.scene.remove(gr.mesh);
-        this.explode(gr.pos.clone().add(new THREE.Vector3(0, 0.1, 0)), gr.ammo.explosive, gr.owner);
+        this.explode(gr.pos.clone().add(new THREE.Vector3(0, 0.1, 0)), gr.ammo.explosive, gr.owner, null, null, { visual: !!gr.visual });
         gr.done = true;
       }
     }

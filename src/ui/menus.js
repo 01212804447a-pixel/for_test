@@ -10,6 +10,10 @@ import { drawChart } from './charts.js';
 import { CARDINALS } from '../core/math.js';
 import { ACTIONS, DEFAULT_BINDS, keyName } from '../core/input.js';
 import { CHARGES, MIL, firingTable, sightFor, fmtDiv, fmtSigned } from '../artillery/d30.js';
+import { PVP_MAPS, PVP_WEAPONS, TEAM_NAMES, pvpMap } from '../data/pvp.js';
+import { defaultServer } from '../net/net.js';
+
+const escH = (t) => String(t ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 
 const CONTROLS_STATIC = [
   ['W A S D', 'движение'], ['Shift', 'бег / задержка дыхания при прицеливании'], ['Space', 'прыжок'], ['C', 'присесть'], ['Z', 'лечь'],
@@ -77,6 +81,7 @@ export class UI {
         ${s.started ? '<button class="btn" id="cont">Продолжить (штаб)</button>' : ''}
         <button class="btn" id="new">${s.started ? 'Новая кампания' : 'Начать кампанию'}</button>
         <button class="btn" id="range">Полигон «Норд» (стрельбы)</button>
+        <button class="btn" id="net">Сетевая игра (кооператив / PvP)</button>
         <button class="btn" id="tables">Таблицы стрельбы</button>
         <button class="btn" id="set">Настройки</button>
         <button class="btn" id="ctl">Управление</button>
@@ -85,6 +90,7 @@ export class UI {
     this.bind('#cont', () => { this.close(); this.app.toHQ(); });
     this.bind('#new', () => { this.app.newCampaign(); this.intro(); });
     this.bind('#range', () => { this.close(); this.app.startMission('range'); });
+    this.bind('#net', () => this.netMenu());
     this.bind('#tables', () => this.firingTables(() => this.mainMenu()));
     this.bind('#set', () => this.settings(() => this.mainMenu()));
     this.bind('#ctl', () => this.controls(() => this.mainMenu()));
@@ -350,6 +356,155 @@ export class UI {
     this.bind('#gb', () => (back ? back() : this.close()));
   }
 
+
+  // ================================================================ сетевая игра
+  _netClear() { for (const f of this._netOff || []) f(); this._netOff = []; clearInterval(this._netTimer); }
+  _netOn(type, fn) { (this._netOff || (this._netOff = [])).push(this.app.net.on(type, fn)); }
+
+  netMenu(err = '') {
+    this._netClear();
+    const st = this.app.settings;
+    const def = st.netServer || defaultServer();
+    this.show(`<h1>Сетевая игра</h1><div class="opc">Кооператив до 4 игроков по операциям и противостояние N.E.G.S против «Дентера» до 16 игроков</div>
+      <label>Позывной <input id="nn" maxlength="20" value="${escH(st.netName || '')}" placeholder="например, Кей"></label>
+      <label>Сервер <input id="ns" value="${escH(def)}" placeholder="72.56.236.95 или 192.168.1.10:8080"></label>
+      <p class="note">Если игра открыта с игрового сервера, адрес уже подставлен. Для игры по локальной сети укажите адрес компьютера, на котором запущен сервер (он печатается при запуске).</p>
+      <div id="nerr" class="bad">${escH(err)}</div>
+      <div class="row"><button class="btn" id="conn">Подключиться</button><button class="btn sec" id="lan">Локальная сеть: инструкция</button><button class="btn sec" id="b">Назад</button></div>`, { wide: true });
+    this.bind('#b', () => { if (this.app.net) this.app.net.close(); this.mainMenu(); });
+    this.bind('#lan', () => this.lanHelp(() => this.netMenu()));
+    this.bind('#conn', async () => {
+      const name = this.panel.querySelector('#nn').value.trim() || 'Боец';
+      const addr = this.panel.querySelector('#ns').value.trim();
+      st.netName = name; st.netServer = addr; this.app.persist();
+      this.panel.querySelector('#nerr').textContent = 'Подключение…';
+      try { await this.app.netConnect(addr, name); this.netLobby(); }
+      catch (e) {
+        const el = this.panel.querySelector('#nerr');
+        const https = location.protocol === 'https:' && !/^wss:/.test(addr);
+        if (el) el.textContent = ((e && e.message) || 'Не удалось подключиться') + (https ? '. Страница открыта по https, а сервер без сертификата — откройте игру прямо с сервера: http://' + addr.replace(/^https?:\/\//, '') : '');
+      }
+    });
+  }
+
+  lanHelp(back) {
+    this.show(`<h1>Игра по локальной сети</h1>
+      <div class="brief">
+      <p><b>1. Один компьютер — сервер.</b> На нём должен быть установлен <b>Node.js</b> (версия 18 или новее, nodejs.org) и папка с игрой (скачать с GitHub: «Code» → «Download ZIP», ветка с игрой).</p>
+      <p><b>2. Запуск сервера.</b> В папке игры откройте терминал (Windows: в адресной строке проводника наберите <code>cmd</code>) и выполните:<br><code>npm install</code> (один раз), затем <code>npm run server</code>.<br>Сервер напишет адреса, например <code>http://192.168.1.10:8080</code>.</p>
+      <p><b>3. Все игроки</b> (и на самом сервере тоже) открывают в браузере этот адрес. Адрес сервера в меню «Сетевая игра» подставится сам.</p>
+      <p><b>4. Брандмауэр.</b> Если другие компьютеры не открывают страницу — разрешите Node.js в брандмауэре Windows для частной сети (окно появляется при первом запуске) или откройте порт 8080.</p>
+      <p><b>5.</b> Один игрок создаёт комнату, остальные входят. В кооперативе создатель комнаты — хост: у него считаются противник и задачи, поэтому лучше создавать комнату на самом мощном компьютере.</p>
+      <p class="note">Другой порт: <code>PORT=9000 npm run server</code> (Linux/macOS) или <code>set PORT=9000 &amp;&amp; npm run server</code> (Windows).</p>
+      </div><div class="row"><button class="btn" id="b">Назад</button></div>`, { wide: true });
+    this.bind('#b', () => back());
+  }
+
+  netLobby(msg = '') {
+    this._netClear();
+    const net = this.app.net;
+    const mTitle = (r) => (r.mode === 'pvp' ? pvpMap(r.mission).title : (MISSIONS.find((q) => q.id === r.mission) || {}).title || r.mission);
+    this.show(`<h1>Комнаты</h1><div class="opc">Сервер: ${escH(this.app.settings.netServer || location.host)} · пинг <span id="png">—</span> мс</div>
+      <div id="nerr" class="bad">${escH(msg)}</div>
+      <div id="rl" class="netrooms"></div>
+      <h2 class="nh">Создать комнату</h2>
+      <div class="netform">
+        <label>Режим <select id="md"><option value="coop">Кооператив (операции, до 4)</option><option value="pvp">Противостояние PvP (до 16)</option></select></label>
+        <label>Карта <select id="ms"></select></label>
+        <label class="pv">Побед до <input id="sl" type="number" min="5" max="200" value="30"></label>
+        <label class="pv">Минут <input id="tl" type="number" min="3" max="60" value="15"></label>
+      </div>
+      <div class="row"><button class="btn" id="cr">Создать</button><button class="btn sec" id="rf">Обновить</button><button class="btn sec" id="dc">Отключиться</button></div>`, { wide: true });
+    const fillMaps = () => {
+      const mode = this.panel.querySelector('#md').value;
+      const opts = mode === 'pvp' ? PVP_MAPS.map((m) => `<option value="${m.id}">${m.title} — ${m.note}</option>`) : MISSIONS.map((m) => `<option value="${m.id}">${m.training ? '◆ ' : ''}${m.title}</option>`);
+      this.panel.querySelector('#ms').innerHTML = opts.join('');
+      this.panel.querySelectorAll('.pv').forEach((e) => { e.style.display = mode === 'pvp' ? '' : 'none'; });
+    };
+    fillMaps();
+    this.panel.querySelector('#md').addEventListener('change', fillMaps);
+    const draw = () => {
+      const el = this.panel.querySelector('#rl');
+      if (!el) return;
+      const list = net.rooms || [];
+      el.innerHTML = list.length ? `<table class="ctl"><tr><th>Комната</th><th>Режим</th><th>Карта</th><th>Игроки</th><th></th></tr>${list.map((r) => `<tr><td>${escH(r.name)}</td><td>${r.mode === 'pvp' ? 'PvP' : 'кооп'}</td><td>${escH(mTitle(r))}</td><td>${r.n}/${r.max}${r.state === 'play' ? ' · идёт бой' : ''}</td><td><button class="btn" data-j="${r.id}" ${r.n >= r.max || (r.state === 'play' && r.mode === 'coop') ? 'disabled' : ''}>Войти</button></td></tr>`).join('')}</table>` : '<p class="note">Комнат пока нет — создайте свою.</p>';
+      el.querySelectorAll('[data-j]').forEach((b) => b.addEventListener('click', () => { this.app.audio.click(); net.send({ t: 'join', room: b.dataset.j }); }));
+      const pg = this.panel.querySelector('#png'); if (pg) pg.textContent = net.rtt ? Math.round(net.rtt) : '—';
+    };
+    draw();
+    this._netOn('rooms', draw);
+    this._netOn('room', () => this.netRoom());
+    this._netOn('err', (m) => { const e = this.panel.querySelector('#nerr'); if (e) e.textContent = m.msg; });
+    this._netOn('close', () => this.netMenu('Соединение с сервером потеряно'));
+    this._netTimer = setInterval(() => net.send({ t: 'list' }), 2500);
+    net.send({ t: 'list' });
+    this.bind('#rf', () => net.send({ t: 'list' }));
+    this.bind('#dc', () => { this._netClear(); net.close(); this.netMenu(); });
+    this.bind('#cr', () => {
+      const q = (id) => this.panel.querySelector(id).value;
+      net.send({ t: 'create', mode: q('#md'), mission: q('#ms'), scoreLimit: +q('#sl'), timeLimit: +q('#tl') });
+    });
+  }
+
+  netRoom() {
+    this._netClear();
+    const net = this.app.net;
+    const r = net.room;
+    if (!r) { this.netLobby(); return; }
+    const me = r.players.find((p) => p.id === net.id) || {};
+    const owner = r.owner === net.id, pvp = r.mode === 'pvp';
+    const title = pvp ? pvpMap(r.mission).title : (MISSIONS.find((q) => q.id === r.mission) || {}).title || r.mission;
+    this.show(`<h1>${escH(r.name)}</h1><div class="opc">${pvp ? `Противостояние · ${escH(title)} · до ${r.scoreLimit} побед или ${r.timeLimit} мин` : `Кооператив · ${escH(title)}`}</div>
+      <div id="nerr" class="bad"></div>
+      <div id="pl" class="netrooms"></div>
+      ${pvp ? `<div class="netform"><label>Команда <span><button class="btn ${me.team === 'negs' ? '' : 'sec'}" id="tn">${TEAM_NAMES.negs}</button> <button class="btn ${me.team === 'denter' ? '' : 'sec'}" id="td">${TEAM_NAMES.denter}</button></span></label>
+        <label>Оружие <select id="wp">${PVP_WEAPONS.map((w) => `<option value="${w}" ${me.weapon === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></label></div>`
+        : `<p class="note">Оружие и РПГ — как выбрано в оружейной штаба (${escH(WEAPONS[this.app.save.primary].name)}${this.app.save.launcher ? ' + РПГ-7В' : ''}). На старте — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}. Хост (создатель комнаты) считает противника и задачи.</p>`}
+      ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
+      <div class="row">${owner ? `<button class="btn" id="go">Начать${r.state === 'play' ? ' (идёт бой)' : ''}</button>` : `<span class="note">${r.state === 'play' ? 'Идёт бой' : 'Ждём, когда создатель комнаты начнёт'}</span>`}${pvp && r.state === 'play' && !owner ? '' : ''}<button class="btn sec" id="lv">Покинуть комнату</button></div>`, { wide: true });
+    const draw = () => {
+      const rr = net.room; const el = this.panel.querySelector('#pl');
+      if (!rr || !el) return;
+      el.innerHTML = `<table class="ctl"><tr><th>Боец</th>${pvp ? '<th>Команда</th><th>Оружие</th>' : ''}<th>Пинг</th><th></th></tr>${rr.players.map((p) => `<tr class="${p.id === net.id ? 'me' : ''}"><td>${escH(p.name)}</td>${pvp ? `<td>${TEAM_NAMES[p.team] || ''}</td><td>${escH((WEAPONS[p.weapon] || {}).name || '')}</td>` : ''}<td>${p.ping || '—'}</td><td>${p.id === rr.owner ? (pvp ? 'создатель' : 'хост') : ''}</td></tr>`).join('')}</table>`;
+    };
+    draw();
+    this._netOn('room', (m) => { const was = r; if (m.room.owner !== was.owner || m.room.mission !== was.mission || m.room.mode !== was.mode || m.room.state !== was.state || (m.room.players.find((p) => p.id === net.id) || {}).team !== me.team) this.netRoom(); else draw(); });
+    this._netOn('err', (m) => { const e = this.panel.querySelector('#nerr'); if (e) e.textContent = m.msg; });
+    this._netOn('close', () => this.netMenu('Соединение с сервером потеряно'));
+    if (pvp) {
+      if (!me.weapon || !PVP_WEAPONS.includes(me.weapon)) net.send({ t: 'set', weapon: PVP_WEAPONS.includes(this.app.save.primary) ? this.app.save.primary : 'ak74m' });
+      this.bind('#tn', () => net.send({ t: 'set', team: 'negs' }));
+      this.bind('#td', () => net.send({ t: 'set', team: 'denter' }));
+      const wp = this.panel.querySelector('#wp'); if (wp) wp.addEventListener('change', () => net.send({ t: 'set', weapon: wp.value }));
+    } else net.send({ t: 'set', weapon: this.app.save.primary });
+    const ms = this.panel.querySelector('#ms'); if (ms) ms.addEventListener('change', () => net.send({ t: 'set', mission: ms.value }));
+    this.bind('#go', () => net.send({ t: 'start' }));
+    this.bind('#lv', () => { net.send({ t: 'leave' }); net.room = null; this.netLobby(); });
+  }
+
+  netDebrief(ok, reason, m, lost) {
+    const net = this.app.net, s = m.net;
+    let h = '';
+    if (m.pvp && s) {
+      const rows = [[net.id, s.me.name, s.team]].concat([...s.peers.values()].map((p) => [p.id, p.name, p.team]));
+      for (const t of ['negs', 'denter']) {
+        h += `<h2 class="nh">${TEAM_NAMES[t]} — ${s.score[t]}</h2><table class="ctl"><tr><th>Боец</th><th>Убито</th><th>Гибель</th></tr>`;
+        for (const r of rows.filter((x) => x[2] === t).sort((a, b) => (s.stats.get(b[0]) || [0])[0] - (s.stats.get(a[0]) || [0])[0])) { const k = s.stats.get(r[0]) || [0, 0]; h += `<tr class="${r[0] === net.id ? 'me' : ''}"><td>${escH(r[1])}</td><td>${k[0]}</td><td>${k[1]}</td></tr>`; }
+        h += '</table>';
+      }
+    } else {
+      const st = m.stats;
+      const min = Math.floor(st.time / 60), sec = Math.floor(st.time % 60);
+      h = `<table class="ctl"><tr><td>Время</td><td>${min} мин ${sec} с</td></tr><tr><td>Выстрелов</td><td>${st.shots}</td></tr><tr><td>Попаданий</td><td>${st.hits}</td></tr><tr><td>Уничтожено противников (лично)</td><td>${st.kills}</td></tr></table>`;
+    }
+    this.show(`<h1>${m.pvp ? 'Матч окончен' : ok ? 'Задание выполнено' : 'Задание провалено'}</h1><div class="opc">${m.def.title} — ${m.pvp ? 'противостояние' : 'кооператив'}</div>
+      ${reason ? `<p class="story ${ok ? '' : 'bad'}">${escH(reason)}</p>` : ''}${h}
+      <div class="row">${lost ? '<button class="btn" id="mn">В меню</button>' : '<button class="btn" id="rm">В комнату</button><button class="btn sec" id="lv">Выйти</button>'}</div>`, { wide: true });
+    this.bind('#rm', () => { this.app.backToRoom(); });
+    this.bind('#lv', () => { net.send({ t: 'leave' }); net.room = null; this.app.backToRoom(true); });
+    this.bind('#mn', () => { this.app.backToRoom(true, true); });
+  }
+
   // ---------------- личный состав ----------------
   roster() {
     const s = this.app.save;
@@ -481,6 +636,18 @@ export class UI {
 
   // ---------------- пауза и итоги ----------------
   pause(m) {
+    if (m.net) {
+      const owner = this.app.net && this.app.net.room && this.app.net.room.owner === this.app.net.id;
+      this.show(`<h1>Меню</h1><div class="opc">${m.def.title} · ${m.pvp ? 'противостояние' : 'кооператив'} — игра продолжается</div><div class="menu">
+        <button class="btn" id="r">Продолжить</button><button class="btn" id="c">Управление</button><button class="btn" id="s">Настройки</button>
+        ${owner ? '<button class="btn sec" id="ab">Остановить матч для всех</button>' : ''}<button class="btn sec" id="q">Покинуть матч</button></div>`, { onClose: () => this.app.resume() });
+      this.bind('#r', () => this.close());
+      this.bind('#c', () => this.controls(() => this.pause(m)));
+      this.bind('#s', () => this.settings(() => this.pause(m)));
+      this.bind('#ab', () => { this.app.net.send({ t: 'abort' }); this.close(); });
+      this.bind('#q', () => { this.onClose = null; this.close(); this.app.leaveNetMatch(); });
+      return;
+    }
     this.show(`<h1>Пауза</h1><div class="opc">${m.def.title}</div><div class="menu">
       <button class="btn" id="r">Продолжить</button><button class="btn" id="t">Таблицы стрельбы</button><button class="btn" id="c">Управление</button>
       <button class="btn" id="s">Настройки</button><button class="btn" id="re">Начать заново</button><button class="btn sec" id="q">${m.def.training ? 'Вернуться в штаб' : 'Прервать задание (в штаб)'}</button></div>`, { onClose: () => this.app.resume() });

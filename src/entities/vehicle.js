@@ -120,9 +120,10 @@ export class Vehicle {
     return this.type.armor.side;
   }
 
-  damageHit(pen, pt, owner, heat, ex) {
+  damageHit(pen, pt, owner, heat, ex, fromNet = false) {
     if (!this.alive) return;
     const g = this.game;
+    if (g.net && !g.net.isHost && !fromNet) { g.net.fwdVehicleHit(this, pen, pt, owner, heat, ex); return; }
     if (heat) {
       const armor = this.type.armor.side;
       if (pen > armor * 3) {
@@ -140,6 +141,7 @@ export class Vehicle {
 
   damageBlast(ex, d, owner) {
     if (!this.alive) return;
+    if (this.game.net && !this.game.net.isHost) return;
     const k = Math.max(0, 1 - d / (ex.radius * 2.2));
     const vuln = this.typeId === 'niva' ? 1 : 0.15;
     this.hp -= ex.dmg * k * vuln;
@@ -157,6 +159,7 @@ export class Vehicle {
     g.fx.addFire(new THREE.Vector3(this.pos.x, this.pos.y + this.type.height * 0.7, this.pos.z), this.typeId === 'niva' ? 0.8 : 1.2, 120);
     for (const s of [...this.seats]) {
       if (!s) continue;
+      if (g.netVisual) { if (s.alive) this.unboard(s); continue; } // клиент: урон экипажу пришлёт хост
       if (s.alive && Math.random() < 0.55) { s.damage(rand(60, 140), 'torso', by, null); }
       if (s.alive) { this.unboard(s); s.damage(rand(10, 30), 'leg', by, null); }
       else { this.removeOccupant(s); s.vehicle = null; s.hidden = false; s.pos.copy(this.pos); s.pos.x += rand(-2, 2); s.pos.z += rand(-2, 2); s.pos.y = g.world.groundAt(s.pos.x, s.pos.z); }
@@ -188,6 +191,7 @@ export class Vehicle {
   update(dt) {
     const g = this.game, T = this.type, w = g.world;
     if (!this.alive) { this.vel.multiplyScalar(Math.exp(-3 * dt)); this.speed = 0; this._place(dt); return; }
+    if (this.netPuppet) { this._puppet(dt); return; }
     if (this.ai) this._aiDrive(dt);
     const ctl = this.driver && this.driver.alive ? this.controls : { throttle: 0, steer: 0, brake: 1 };
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
@@ -231,6 +235,12 @@ export class Vehicle {
     this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
     this._collide(dt);
     this._place(dt);
+    this._tail(dt, vF, th);
+  }
+
+  // колёса, двигатель, экипаж, турель — общее для своей физики и сетевой куклы
+  _tail(dt, vF, th) {
+    const g = this.game, T = this.type;
     // колёса
     // колёса: качение вокруг своей оси, руль — отдельной группой
     this.wheelRot += vF * dt;
@@ -267,6 +277,21 @@ export class Vehicle {
     this.gunCooldown -= dt;
     this.fireFlash = Math.max(0, this.fireFlash - dt);
     if (this.gunReload > 0) { this.gunReload -= dt; if (this.gunReload <= 0 && this.gunMags > 0) { this.gunMags--; this.gunAmmo = this.gunWeapon.mag; } }
+  }
+
+  // Сетевая кукла: положение от водителя-игрока или хоста, интерполяция
+  _puppet(dt) {
+    const v = this.netPuppet.sample(this._ns || (this._ns = []));
+    if (v) {
+      const ox = this.pos.x, oz = this.pos.z;
+      this.pos.x = v[0]; this.pos.z = v[2]; this.yaw = v[3]; this.speed = v[4]; this.steer = v[5];
+      if (!this.netLocalGunner && !this.netTurret) { this.turretYaw = v[6]; this.gunPitch = v[7]; }
+      if (dt > 0) this.vel.set((this.pos.x - ox) / dt, 0, (this.pos.z - oz) / dt);
+      if (this.vel.lengthSq() > 900) this.vel.set(-Math.sin(this.yaw) * this.speed, 0, -Math.cos(this.yaw) * this.speed);
+    }
+    this.accF = 0; this.accLat = 0;
+    this._place(dt);
+    this._tail(dt, this.speed, Math.abs(this.speed) > 0.5 ? 0.5 : 0);
   }
 
   _place(dt) {

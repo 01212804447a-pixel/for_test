@@ -744,8 +744,8 @@ export class Mission {
       // солнце в системе камеры
       const sd = this.lights.sunDir.clone().applyQuaternion(look.quaternion.clone().invert());
       this.vmSun.position.copy(sd);
-      this.vmFlash.position.set(0.1, -0.05, -0.6);
-      this.vmFlash.intensity = p.flashT > 0 ? 3 : 0;
+      this.vmFlash.position.set(0.1, -0.02, -0.85);
+      this.vmFlash.intensity = p.flashT > 0 ? 0.55 : 0;
     } else if (this.viewmodel.cur) this.viewmodel.cur.root.visible = false;
     this.fx.setView(cam, H, this.scene.fog);
   }

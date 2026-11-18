@@ -9,7 +9,8 @@ import * as THREE from 'three';
 import { buildD30, D30, shellGeometry } from './d30model.js';
 import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid } from './d30.js';
 import { WEAPONS } from '../data/weapons.js';
-import { ClipActor, charAvailable } from '../entities/charRig.js';
+import { charAvailable } from '../entities/charRig.js';
+import { CrewMan } from './crew.js';
 import { Parts } from '../weapons/gunkit.js';
 import { GunUI } from './gunUI.js';
 
@@ -50,13 +51,14 @@ export class Howitzer {
     this.collider = null;
     if (this.tr === 0) this._makeCollider();
     // расчёт
+    // расчёт: в боевом положении стоят у орудия, при переводе — работают со станинами,
+    // креплением ствола и колёсами; в походном едут в тягаче
     this.crew = [];
     if (charAvailable('negs')) {
-      for (const [clip, lx, lz, ry] of [['Standing_Idle', 0.9, 1.9, 0.4], ['Idle_Crouching', -1.3, 2.2, -0.3], ['Looking_Around', 1.8, 0.9, 1.2]]) {
-        const a = new ClipActor('negs', clip);
-        a.local = new THREE.Vector3(lx, 0, lz); a.ry = ry;
-        a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-        m.scene.add(a.root);
+      for (const [pose, lx, lz, ry] of [['stand', 0.9, 1.9, 0.4], ['crouch', -1.3, 2.2, -0.3], ['look', 1.8, 0.9, 1.2]]) {
+        const a = new CrewMan(m);
+        a.idle = { pose, local: new THREE.Vector3(lx, 0, lz), ry };
+        a.visible = false;
         this.crew.push(a);
       }
     }
@@ -272,17 +274,6 @@ export class Howitzer {
     // клин: открывается в конце наката, закрывается после заряжания
     g.wedge.position.y = -0.02 - this.breech * 0.16;
     g.root.updateMatrixWorld(true);
-    // расчёт у орудия только в боевом положении
-    const show = this.tr === 0 && !this.towBy;
-    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.az * MIL);
-    for (const a of this.crew) {
-      a.root.visible = show;
-      if (!show) continue;
-      const p = a.local.clone().applyQuaternion(yawQ).add(this.pos);
-      p.y = this.m.terrain.heightAt(p.x, p.z);
-      a.root.position.copy(p);
-      a.root.rotation.y = -this.az * MIL + a.ry;
-    }
     // точки взаимодействия: наводчик — слева у маховиков, расчёт — справа у колеса или у проушины
     if (this.gunIt) {
       this.gunIt.pos.copy(this.seatWorld()); this.gunIt.pos.y += 1.0;
@@ -290,6 +281,71 @@ export class Howitzer {
       this.lunetteWorld(this.towIt.pos);
       this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
     }
+  }
+
+  // ---------- расчёт ----------
+  // точка на станине k в мире (сошник — ручка у конца станины)
+  _trailPt(k, x, y, z, out = new THREE.Vector3()) { return out.set(x, y, z).applyMatrix4(this.model.trails[k].g.matrixWorld); }
+
+  _crew(dt) {
+    if (!this.crew.length) return;
+    const T = this.m.terrain, g = this.model, e = ease(this.tr);
+    const moving = this.tr !== this.trTarget;
+    const show = !this.towBy && (this.tr < 1 || moving);
+    for (const a of this.crew) a.visible = show;
+    if (!show) return;
+    const P = this.pos;
+    const ground = (v) => { v.y = T.heightAt(v.x, v.z); return v; };
+    const faceTo = (from, to) => Math.atan2(-(to.x - from.x), -(to.z - from.z));
+    const tasks = [];
+    if (!moving && this.tr === 0) {
+      // боевое положение: у орудия, по местам
+      const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.az * MIL);
+      for (const a of this.crew) {
+        const p = ground(a.idle.local.clone().applyQuaternion(yawQ).add(P));
+        tasks.push({ p, yaw: -this.az * MIL + a.idle.ry, pose: a.idle.pose });
+      }
+    } else {
+      const t = this.m.time;
+      // номера 1 и 2 — у сошников крайних станин: несут их по дуге, в боевом — забивают сошники
+      for (const k of [0, 2]) {
+        const H = this._trailPt(k, 0, 0.32, -2.9);
+        const piv = this._trailPt(k, 0, 0.32, -0.4);
+        const out = new THREE.Vector3(H.x - piv.x, 0, H.z - piv.z).normalize();
+        const p = ground(H.clone().addScaledVector(out, 0.62));
+        const hy = H.y - p.y;
+        const side = new THREE.Vector3(-out.z, 0, out.x).multiplyScalar(0.13);
+        let hands = [H.clone().add(side), H.clone().sub(side)], pose, carry = false;
+        if (e < 0.25) {
+          // сошник в грунт: удары кувалдой/ногой — руки ходят вверх-вниз
+          pose = 'kneel';
+          const bob = Math.max(0, Math.sin(t * 7 + k)) * 0.12;
+          hands = hands.map((h) => h.clone().setY(h.y - 0.1 + bob));
+        } else if (e <= 0.75) { pose = hy < 0.62 ? 'crouch' : 'stand'; carry = true; }
+        else pose = hy < 0.62 ? 'crouch' : 'stand';
+        tasks.push({ p, yaw: faceTo(p, piv), pose, hands, carry, from: p.clone().addScaledVector(out, 2.5) });
+      }
+      // номер 3 — сначала у походного крепления ствола (снимает/кладёт ствол), затем у колеса (вывешивание)
+      if (e > 0.3) {
+        const L = new THREE.Vector3(0, -0.12, -2.35).applyMatrix4(g.recoil.matrixWorld);
+        const L2 = new THREE.Vector3(0, -0.12, -2.0).applyMatrix4(g.recoil.matrixWorld);
+        const ax = new THREE.Vector3(L.x - L2.x, 0, L.z - L2.z).normalize();
+        const sideV = new THREE.Vector3(-ax.z, 0, ax.x);
+        const p = ground(L.clone().addScaledVector(sideV, 0.62));
+        const hands = [L.clone().addScaledVector(ax, 0.16), L.clone().addScaledVector(ax, -0.16)];
+        tasks.push({ p, yaw: faceTo(p, L), pose: L.y - p.y < 0.75 ? 'crouch' : 'stand', hands, from: p.clone().addScaledVector(sideV, 2) });
+      } else {
+        const W = new THREE.Vector3(); g.wheels[1].getWorldPosition(W);
+        const out = new THREE.Vector3(W.x - P.x, 0, W.z - P.z).normalize();
+        const p = ground(W.clone().addScaledVector(out, 0.75));
+        const pump = Math.sin(this.m.time * 5) * 0.09;
+        const hub = W.clone().addScaledVector(out, 0.15);
+        const fwd = new THREE.Vector3(-out.z, 0, out.x);
+        const hands = [hub.clone().addScaledVector(fwd, 0.18).setY(hub.y + 0.05 + pump), hub.clone().addScaledVector(fwd, -0.12).setY(hub.y + 0.05 + pump)];
+        tasks.push({ p, yaw: faceTo(p, W), pose: 'work', hands });
+      }
+    }
+    this.crew.forEach((a, i) => a.update(dt, tasks[i]));
   }
 
   // ---------- место наводчика ----------
@@ -513,8 +569,8 @@ export class Howitzer {
       cm.position.copy(c.p).applyMatrix4(inv);
       cm.rotation.set(c.t * 4, 0, c.t * 2);
     } else cm.visible = false;
-    for (const a of this.crew) a.update(dt);
     this._place();
+    this._crew(dt);
     if (this.ui && this.m.player.gun === this) this.ui.update(dt);
   }
 

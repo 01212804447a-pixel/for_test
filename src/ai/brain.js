@@ -199,12 +199,15 @@ export class Brain {
     for (const t of g.targetsFor(s.team)) {
       let m = this.memory.get(t);
       const dx = t.pos.x - s.pos.x, dz = t.pos.z - s.pos.z;
-      const d = Math.hypot(dx, dz);
+      // дрон в небе: считаем полное расстояние; слышно его метров за 200, глазом — маленькая точка
+      const d = t.isDrone ? t.pos.distanceTo(s.eye) : Math.hypot(dx, dz);
       const flashBoost = t.fireFlash > 0 || (g.time - (t.lastShotTime || -9) < 0.8) ? (g.isNight ? 3.5 : 1.8) : 1;
-      const range = vr * (flashBoost > 1 ? 1.6 : 1) * (t.isVehicle ? 1.5 : 1);
+      const range = t.isDrone ? Math.min(270, vr) : vr * (flashBoost > 1 ? 1.6 : 1) * (t.isVehicle ? 1.5 : 1);
       if (d > range) { if (m) { m.seen = false; m.detect = Math.max(0, m.detect - tdt * 0.1); } continue; }
-      const cosA = d > 0.1 ? (dx * fwdX + dz * fwdZ) / d : 1;
+      const hd = Math.hypot(dx, dz);
+      const cosA = hd > 0.1 ? (dx * fwdX + dz * fwdZ) / hd : 1;
       let fov = cosA > 0.55 ? 1 : cosA > -0.1 ? 0.35 : (d < 7 ? 0.4 : 0);
+      if (t.isDrone) fov = Math.max(fov, d < 220 ? 0.5 : 0); // жужжание винтов — поднимают голову
       if (this.state === 'combat' && fov < 0.35) fov = 0.2;
       if (fov === 0) { if (m) m.seen = false; continue; }
       const head = t.eye || t.pos, chest = t.chest || t.pos;
@@ -218,7 +221,7 @@ export class Brain {
       const camoF = t.team === 'negs' && !t.isVehicle ? (g.isNight ? 0.85 : 0.7) : 1;
       const distF = Math.pow(clamp(1 - d / range, 0, 1), 2) * 2.2 + (d < 40 ? 1.5 : 0);
       const alertF = this.state === 'combat' ? 2.8 : this.state === 'alert' || this.state === 'search' ? 1.7 : 1;
-      const rate = distF * stanceF * moveF * camoF * fov * flashBoost * alertF * (t.isVehicle ? 2 : 1) * (0.55 + s.skill.reaction * 0.8) * (1 - s.suppression * 0.5);
+      const rate = distF * stanceF * moveF * camoF * fov * flashBoost * alertF * (t.isVehicle ? 2 : t.isDrone ? 0.6 : 1) * (0.55 + s.skill.reaction * 0.8) * (1 - s.suppression * 0.5);
       m.detect = Math.min(1.5, m.detect + rate * tdt);
       if (d < 5) m.detect = 1.5;
       if (m.detect >= 1) {
@@ -245,11 +248,13 @@ export class Brain {
     let best = null, bestScore = -1e9, bestT = null;
     for (const [t, m] of this.memory) {
       if (!t.alive || (t.isVehicle && !t.crewTeam)) { this.memory.delete(t); continue; }
-      if (now - m.time > 60) { this.memory.delete(t); continue; }
+      // дрон замечают постепенно (маленький): накопленное обнаружение не сбрасываем
+      if (now - m.time > 60 && !(t.isDrone && m.detect > 0)) { this.memory.delete(t); continue; }
       if (m.detect < 0.5 && !m.seen) continue;
       const d = m.pos.distanceTo(s.pos);
       let sc = (m.seen ? 200 : 0) - d * 0.3 - (now - m.time) * 3;
       if (t.isPlayer) sc += 5;
+      if (t.isDrone) sc -= 150; // по дрону — когда нет целей на земле
       if (t.isVehicle) sc += this.s.secondary && this.s.secondary.mag + this.s.secondary.mags > 0 ? 60 : -40;
       if (sc > bestScore) { bestScore = sc; best = m; bestT = t; }
     }
@@ -731,16 +736,20 @@ export class Brain {
     f.rangeErrT -= dt;
     if (f.rangeErrT <= 0) { f.rangeErrT = rand(2.5, 5); f.rangeErr = 1 + randn() * lerp(0.16, 0.05, s.skill.aim); }
     const solver = s.solver;
-    const De = Math.max(5, D * f.rangeErr);
+    const air = f.mode === 'aimed' && tgt && tgt.isDrone;
+    // по дрону: наклонная дальность, упреждение по полной скорости, превышение — «правило стрелка» (cos угла места)
+    const Dr = air ? Math.hypot(D, aimP.y - org.y) : D;
+    const De = Math.max(5, Dr * f.rangeErr);
     // упреждение
     if (f.mode === 'aimed' && tgt.vel) {
       const tof = solver.tofFor(De);
-      const lead = lerp(0.55, 1.0, s.skill.aim);
+      const lead = air ? lerp(0.85, 1.0, s.skill.aim) : lerp(0.55, 1.0, s.skill.aim);
       aimP.x += tgt.vel.x * tof * lead; aimP.z += tgt.vel.z * tof * lead;
+      if (air) aimP.y += tgt.vel.y * tof * lead;
     }
     const yawD = yawTo(aimP.x - org.x, aimP.z - org.z);
     const losPitch = Math.atan2(aimP.y - org.y, D);
-    const pitchD = losPitch + solver.angleFor(De) - (solver.h || 0) / Math.max(De, 5);
+    const pitchD = losPitch + solver.angleFor(De) * (air ? Math.cos(losPitch) : 1) - (solver.h || 0) / Math.max(De, 5);
     const err = s.turnTowards(yawD, pitchD, dt, 2.5 + s.skill.reaction * 4.5);
     if (err < 0.05) f.aimT += dt; else f.aimT = Math.max(0, f.aimT - dt * 2);
     f.pause -= dt;

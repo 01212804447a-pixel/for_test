@@ -23,6 +23,7 @@ export function solverFor(weaponId, env) {
 const VM_KIND = { ak74m: 'ak', ak74m_gp: 'ak', ak74m_1p78: 'ak', akm: 'akm', svd: 'svd', pkm: 'pkm', rpg7: 'rpg' };
 
 let _id = 1;
+const _mR = new THREE.Vector3(), _mL = new THREE.Vector3();
 export class Soldier {
   constructor(game, opts) {
     this.game = game;
@@ -196,8 +197,11 @@ export class Soldier {
         m.root.rotation.y = this.yaw;
         // направление движения в локальной системе тела
         const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
-        const vx = this.vel.x, vz = this.vel.z;
+        // в машине скорость — машины, ногами боец не идёт
+        const vx = this.vehicle ? 0 : this.vel.x, vz = this.vehicle ? 0 : this.vel.z;
         const sp = Math.hypot(vx, vz);
+        // стрелок открытой турели («Тигр»): держит ПКП обеими руками, свой автомат за спиной
+        const V = this.vehicle, mountGun = V && V.seats[1] === this && V.type.gunExposed && V.model.gun;
         const lx = c * vx - s * vz, lz = s * vx + c * vz;
         // скелет: вблизи каждый кадр, вдали — реже; тела после падения не трогаем
         const camD2 = this.game.camPos ? this.pos.distanceToSquared(this.game.camPos) : 0;
@@ -207,10 +211,16 @@ export class Soldier {
         if (!this.alive && m.deadT > 1.2) this._skinFrozen = true;
         m.update(dt, {
           speed: sp, mx: sp > 0.05 ? lx / sp : 0, mz: sp > 0.05 ? lz / sp : 0,
-          stance: this.stance, aimPitch: this.aimPitch, aimYaw: this.aimYaw, aiming: this.brain ? this.brain.aiming : !!this.netAiming, dead: !this.alive,
+          stance: this.stance, aimPitch: mountGun ? V.gunPitch + V.pitch * Math.cos(V.turretYaw) : this.aimPitch, aimYaw: this.aimYaw, aiming: mountGun ? true : this.brain ? this.brain.aiming : !!this.netAiming, dead: !this.alive,
           reload: this.reloadT > 0 ? 1 - this.reloadT / (this.reloadTotal || 2.5) : -1, groundY: this.pos.y,
         });
         m.root.updateMatrixWorld(true);
+        if (m.anim) {
+          if (mountGun && this.alive) {
+            mountGun.updateWorldMatrix(true, false);
+            m.anim.holdMount(_mR.set(0, -0.08, 0.13).applyMatrix4(mountGun.matrixWorld), _mL.set(-0.07, 0.0, -0.24).applyMatrix4(mountGun.matrixWorld));
+          } else if (m.anim.mountHidden) m.anim.releaseMount();
+        }
         if (this.game.camPos) m.setDetail(this.pos.distanceToSquared(this.game.camPos) < 3600);
         if (this.alive) m.hitboxes(this.hitboxes);
         // шаги

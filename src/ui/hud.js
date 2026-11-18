@@ -270,6 +270,19 @@ export class HUD {
       const [x, y] = toPx(v.pos.x, v.pos.z);
       g.fillStyle = '#2a5ab0'; g.fillRect(x - 4, y - 4, 8, 8);
     }
+    // свой БПЛА и круг облёта
+    const dr = m.myDrone;
+    if (dr) {
+      const [cx, cy] = toPx(dr.center.x, dr.center.z), rr = (dr.orbit.r / (2 * R)) * S;
+      g.strokeStyle = 'rgba(20,110,70,0.7)'; g.setLineDash([4, 4]); g.lineWidth = 1.5;
+      g.beginPath(); g.arc(cx, cy, Math.max(4, rr), 0, 6.3); g.stroke(); g.setLineDash([]);
+      if (dr.alive) {
+        const [x, y] = toPx(dr.pos.x, dr.pos.z);
+        g.strokeStyle = '#0d6b40'; g.lineWidth = 2;
+        g.beginPath(); g.moveTo(x - 5, y - 5); g.lineTo(x + 5, y + 5); g.moveTo(x + 5, y - 5); g.lineTo(x - 5, y + 5); g.stroke();
+        g.fillStyle = '#0d6b40'; g.font = 'bold 10px Arial'; g.fillText('БПЛА', x + 7, y + 4);
+      }
+    }
     // орудия Д-30
     for (const h of m.guns || []) {
       const [x, y] = toPx(h.pos.x, h.pos.z);

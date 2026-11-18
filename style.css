@@ -190,3 +190,12 @@ table.ft tr:nth-child(odd) td { background: #ebe5d5; }
 #hud .netboard tr.dead td { opacity: 0.5; }
 #hud .nettags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 #hud .nettag { position: absolute; left: 0; top: 0; font-size: 12px; color: #bfe6a8; text-shadow: 0 1px 2px #000, 0 0 3px #000; white-space: nowrap; }
+
+/* ---------- окно камеры БПЛА ---------- */
+#hud .dronebox { position: fixed; display: none; border: 2px solid #6ec8a0; box-shadow: 0 0 0 1px #000; pointer-events: none; z-index: 3; }
+#hud .dronebox canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#hud .dronebox .dvx { position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; opacity: 0.75;
+  background: linear-gradient(#e8f4ea, #e8f4ea) center / 1px 100% no-repeat, linear-gradient(#e8f4ea, #e8f4ea) center / 100% 1px no-repeat; }
+#hud .dronebox .dvtop { position: absolute; left: 0; right: 0; top: 0; font: 600 11px Arial, sans-serif; color: #c8f0d8; background: rgba(6, 10, 12, 0.55); padding: 2px 6px; letter-spacing: 0.5px; }
+#hud .dronebox .dvbot { position: absolute; left: 0; right: 0; bottom: -21px; font-size: 11px; background: rgba(8, 12, 16, 0.8); padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .dronebox .dvlost { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #ff5a48; font-weight: 700; letter-spacing: 3px; text-shadow: 0 0 6px #000; }

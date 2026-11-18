@@ -77,6 +77,18 @@ export class Player {
     return s;
   }
 
+  // все виды оружия от первого лица, которые могут понадобиться в миссии (для прогрева)
+  allVmKinds() {
+    const k = new Set(['pkm', 'grenade', 'b8']);
+    for (const s of this.slots) {
+      if (!s || s.grenade || s.binocular) continue;
+      if (s.id === 'rpg7') { k.add('rpg7'); k.add('rpg7iron'); continue; }
+      k.add(VM_KIND[s.id] || 'ak74');
+      if (s.ugl) k.add('gp25');
+    }
+    return [...k];
+  }
+
   vmKind() {
     if (this.vehicle && this.seat === 1 && this.vehicle.type.gunExposed) return 'pkm';
     const s = this.state;
@@ -565,6 +577,14 @@ export class Player {
   updateVehicle(dt, mdx, mdy) {
     const g = this.game, inp = g.input, v = this.vehicle, b = this.body;
     if (!v.alive) { this.vehicle = null; this.seat = -1; b.vehicle = null; b.hidden = false; return; }
+    // таймеры, которые пешком тикают в handleWeapons/handleMove: без них оружие стрелка
+    // застывает в позе выстрела (вспышка и отдача «залипают»), а выносливость не восстанавливается
+    this.flashT -= dt; this.shotAge = (this.shotAge ?? 9) + dt;
+    this.sprintT = lerp(this.sprintT, 0, 1 - Math.exp(-8 * dt));
+    this.switchT = Math.max(0, this.switchT - dt);
+    this.stamina = Math.min(1, this.stamina + dt * 0.09);
+    if (this.winded && this.stamina > 0.35) this.winded = false;
+    if (!(this.aim && inp.bd('sprint'))) { this.breath = Math.min(1, this.breath + dt * 0.22); this.breathLock = Math.max(0, this.breathLock - dt); }
     // водитель сдал задом к орудию в походном положении: E — прицепить
     const towGun = this.seat === 0 && g.guns && g.guns.find((h) => h.canHitch(v));
     this.towHint = towGun ? `<b>E</b> — прицепить ${towGun.name} (не выходя из машины)` : null;

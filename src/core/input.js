@@ -11,6 +11,7 @@ export const ACTIONS = [
   ['binoc', 'Бинокль: достать и смотреть', 'KeyB'], ['medkit', 'Перевязка', 'KeyK'], ['use', 'Взаимодействие / техника', 'KeyE'],
   ['cmdFollow', 'Отделению: за мной', 'KeyF'], ['cmdHold', 'Отделению: стоять', 'KeyH'], ['cmdMove', 'Отделению: в точку', 'KeyT'], ['cmdSuppress', 'Отделению: подавить точку', 'KeyV'],
   ['squad', 'Состояние отделения', 'Tab'], ['map', 'Карта', 'KeyM'], ['hitcam', 'Камера попаданий', 'KeyJ'],
+  ['drone', 'БПЛА: окно камеры', 'KeyY'], ['droneGo', 'БПЛА: облёт точки взгляда', 'KeyU'],
 ];
 export const DEFAULT_BINDS = Object.fromEntries(ACTIONS.map(([a, , k]) => [a, k]));
 export function keyName(code) {

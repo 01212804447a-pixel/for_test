@@ -162,7 +162,7 @@ class App {
         this.hud.show();
         this.mode = 'mission';
         this.paused = false;
-        this.ui.clickToPlay(`<b>${def.title}</b>: нажмите на экран, чтобы начать<br><span style="font-size:12px;color:#9aa8b2">ЛКМ — огонь · ПКМ — прицел (целик/мушка, оптика) · колесо при прицеливании — установка прицела · Shift — задержать дыхание · F/H/T/V — приказы · Tab — отделение · M — карта · Esc — меню</span>`);
+        this.ui.clickToPlay(`<b>${def.title}</b>: нажмите на экран, чтобы начать<br><span style="font-size:12px;color:#9aa8b2">ЛКМ — огонь · ПКМ — прицел (целик/мушка, оптика) · колесо при прицеливании — установка прицела · Shift — задержать дыхание · F/H/T/V — приказы · Tab — отделение · M — карта · Y — камера БПЛА, U — облёт точки взгляда · Esc — меню</span>`);
         this.hud.message(def.code, 4, true);
       } catch (e) {
         console.error(e);

@@ -257,6 +257,8 @@ export class NetSession {
         vi.buf.push([v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[12] || 0, v[13] || 0]);
       }
     }
+    // БПЛА
+    if (w.dr) w.dr.forEach((a, i) => { const d = m.drones && m.drones[i]; if (d) d.applyNet(a); });
     // разрушаемые объекты
     if (w.dd) for (let i = 0; i < w.dd.length; i++) {
       const d = m.world.destructibles[i];
@@ -339,6 +341,16 @@ export class NetSession {
       case 'i': {
         const it = m.netItems[e[1]];
         if (it && !it.done) it.localTake();
+        break;
+      }
+      case 'dg': {
+        const d = m.drones && m.drones[e[1]];
+        if (d) d.setCenter(e[2], e[3], e[4] === undefined || e[4] < 0 ? null : !!e[4]);
+        break;
+      }
+      case 'dh': {
+        const d = m.drones && m.drones[e[1]];
+        if (d && d.alive) d.damage(e[2], src);
         break;
       }
       case 'o': {
@@ -524,6 +536,7 @@ export class NetSession {
     this.net.send({
       t: 'ws', st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',
       ai, vh, dd: m.world.destructibles.map((d) => (d.alive === false ? '0' : '1')).join(''), it: m.netItems.map((it) => (it.done ? '1' : '0')).join(''),
+      dr: (m.drones || []).map((d) => d.netState()),
     });
   }
 

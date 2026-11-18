@@ -188,8 +188,20 @@ export class Projectiles {
         }
       }
     }
+    // БПЛА
+    for (const d of g.drones || []) {
+      if (!d.alive) continue;
+      const r = segSeg(a, b, d.pos, d.pos);
+      if (r.d2 < 0.3 && (!best || r.s < best.t)) best = { t: r.s, kind: 'drone', d }; // корпус с лучами ~1,1 м
+    }
     if (!best) return;
     const pt = new THREE.Vector3().lerpVectors(a, b, best.t);
+    if (best.kind === 'drone') {
+      g.fx.impact(pt, p.v.clone().normalize().negate(), 'metal', 0.7);
+      if (p.ammo.explosive) { if (p.dist >= (p.ammo.armDist || 0)) this.explode(pt, p.ammo.explosive, p.owner, null, null, { visual: !!p.visual }); }
+      else if (!p.visual) g.hitDrone(best.d, clamp(this.energy(p) * 0.02, 8, 80), p.owner);
+      p.alive = false; return;
+    }
     if (p.byPlayer) p.impact = { pos: pt.clone(), normal: best.hit && best.hit.normal ? best.hit.normal.clone() : (best.ph ? best.ph.normal.clone() : null), target: best.hit && best.hit.obstacle && best.hit.obstacle.owner && best.hit.obstacle.owner.kind === 'target' ? best.hit.obstacle.owner : null, kind: best.kind };
     if (best.kind === 'prop') { this._hitProp(p, best.ph, pt); return; }
     if (p.visual && best.kind !== 'static') {
@@ -381,6 +393,8 @@ export class Projectiles {
       if (pos.y - ground < 0.6) g.fx.addDecal(new THREE.Vector3(pos.x, ground, pos.z), g.world.terrain.normalAt(pos.x, pos.z), ex.radius * 0.9, 0x202020);
     }
     const src = new THREE.Vector3(pos.x, pos.y + 0.25, pos.z);
+    // осколки по дрону рядом с разрывом
+    if (!visual) for (const d of g.drones || []) if (d.alive && d.pos.distanceTo(pos) < ex.frag * 0.8) g.hitDrone(d, 999, owner);
     if (fx || doSoldiers) for (const s of g.soldiers) {
       if (!s.alive || s.hidden) continue;
       const d = s.chest.distanceTo(pos);

@@ -276,6 +276,8 @@ export class Vehicle {
       if (i === 1 && this.gunWeapon) {
         const tp = this.toWorld(this.model.turret.position.x, this.model.turret.position.y, this.model.turret.position.z);
         s.pos.set(tp.x, tp.y - (T.gunExposed ? 1.0 : 0.3), tp.z);
+        // открытая турель: стрелок стоит в люке за пулемётом
+        if (T.gunExposed) { const a = this.yaw + this.turretYaw; s.pos.x += Math.sin(a) * 0.4; s.pos.z += Math.cos(a) * 0.4; }
         if (T.gunExposed) s.stance = 'stand';
         s.yaw = this.yaw + this.turretYaw; s.aimYaw = s.yaw;
       } else {
@@ -542,6 +544,7 @@ export class Vehicle {
     this.shotsFired++;
     this.game.fireProjectile({ weapon: this.gunWeapon, pos: p, dir: d, owner: shooter, team: shooter.team, vehicleShot: this });
     shooter.lastShotTime = this.game.time;
+    if (shooter.model && shooter.model.shot && this.type.gunExposed) shooter.model.shot();
     this.lastShotTime = this.game.time;
     this.fireFlash = 0.06;
     return true;

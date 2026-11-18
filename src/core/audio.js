@@ -258,14 +258,15 @@ export class AudioSys {
     o1.connect(f); o2.connect(f); f.connect(g);
     if (p) { g.connect(p); p.connect(this.master); } else g.connect(this.master);
     o1.start(); o2.start();
-    const base = kind === 'tracked' ? 28 : kind === 'diesel' ? 34 : 45;
+    const base = kind === 'tracked' ? 28 : kind === 'diesel' ? 34 : kind === 'drone' ? 118 : 45;
+    const fb = kind === 'drone' ? 1600 : 300;
     const eng = {
       set: (rpm01, gain, pos) => {
         const t = ctx.currentTime;
         const fr = base * (1 + rpm01 * 2.2);
         o1.frequency.setTargetAtTime(fr, t, 0.1);
         o2.frequency.setTargetAtTime(fr * 0.5, t, 0.1);
-        f.frequency.setTargetAtTime(300 + rpm01 * 900, t, 0.1);
+        f.frequency.setTargetAtTime(fb + rpm01 * 900, t, 0.1);
         let gg = gain;
         if (pos) { const sp = this._spatial(pos); gg *= sp.gain * 2; if (p) p.pan.setTargetAtTime(sp.pan, t, 0.1); }
         g.gain.setTargetAtTime(Math.min(0.25, gg), t, 0.15);

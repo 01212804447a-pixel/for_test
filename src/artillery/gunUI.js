@@ -143,6 +143,14 @@ export class GunUI {
         const x = Y - GRID.Y0; const [px] = toPx(x, 0);
         g.beginPath(); g.moveTo(px, 0); g.lineTo(px, S); g.stroke(); g.fillText(String(Y / 1000), px + 2, S - 3);
       }
+      // свой БПЛА: круг облёта и борт
+      const dr = m.myDrone;
+      if (dr) {
+        const [cx, cy] = toPx(dr.center.x, dr.center.z);
+        g.strokeStyle = 'rgba(20,110,70,0.75)'; g.setLineDash([4, 4]); g.lineWidth = 1.5;
+        g.beginPath(); g.arc(cx, cy, Math.max(4, dr.orbit.r * k), 0, 6.3); g.stroke(); g.setLineDash([]);
+        if (dr.alive) { const [x, y] = toPx(dr.pos.x, dr.pos.z); g.fillStyle = '#0d6b40'; g.font = 'bold 10px Arial'; g.fillText('✕ БПЛА', x - 4, y + 4); }
+      }
       // ориентиры
       g.font = 'italic 11px Arial'; g.fillStyle = 'rgba(30,30,30,0.85)';
       for (const l of m.landmarks || []) { const [px, py] = toPx(l.x, l.z); g.fillRect(px - 2, py - 2, 4, 4); g.fillText(l.name, px + 5, py - 3); }
@@ -185,7 +193,10 @@ export class GunUI {
       document.getElementById('fmm').innerHTML = `<b>Точка:</b> X ${q.X.toLocaleString('ru')} · Y ${q.Y.toLocaleString('ru')} · h ${Math.round(hh)} м<br>
         <b>Дальность:</b> ${Math.round(D).toLocaleString('ru')} м<br>
         <b>Дирекционный угол:</b> ${fmtDiv(dirAngle(dx, dz))}<br>
-        <b>Превышение:</b> ${dh >= 0 ? '+' : '−'}${Math.abs(Math.round(dh))} м · <b>угол места:</b> ${fmtSigned(eps)} → уровень ${fmtDiv(3000 + eps)}`;
+        <b>Превышение:</b> ${dh >= 0 ? '+' : '−'}${Math.abs(Math.round(dh))} м · <b>угол места:</b> ${fmtSigned(eps)} → уровень ${fmtDiv(3000 + eps)}
+        ${m.myDrone && m.myDrone.alive ? '<br><button class="btn sec" id="fmdrone">БПЛА: облёт этой точки</button>' : ''}`;
+      const b = document.getElementById('fmdrone');
+      if (b) b.onclick = () => { m.droneGo(m.myDrone, x, z); m.droneView = true; b.textContent = 'БПЛА направлен — окно камеры: Y'; b.disabled = true; };
     });
   }
 

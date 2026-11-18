@@ -24,6 +24,8 @@ import { ROSTER, toSkill } from '../data/squad.js';
 import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/math.js';
 import { Howitzer } from '../artillery/howitzer.js';
 import { pvpMap } from '../data/pvp.js';
+import { grenadeModel } from '../weapons/guns.js';
+import { Drone, DRONE_RESPAWN } from '../entities/drone.js';
 
 const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5, wseg: 416 }, medium: { seg: 384, shadow: 2048, snow: 1, wseg: 576 }, high: { seg: 480, shadow: 4096, snow: 1.4, wseg: 704 } };
 // Расширенная карта для миссий без собственного размера местности: район задачи (±1,2 км)
@@ -130,10 +132,77 @@ export class Mission {
 
   // ===================== загрузка =====================
   build() {
-    if (!this.net) { this._build(); return; }
-    const orig = Math.random;
-    Math.random = mulberry32(this.net.seed >>> 0);
-    try { this._build(); } finally { Math.random = orig; }
+    if (!this.net) this._build();
+    else {
+      const orig = Math.random;
+      Math.random = mulberry32(this.net.seed >>> 0);
+      try { this._build(); } finally { Math.random = orig; }
+    }
+    if (!window.__noWarmup) try { this.warmup(); } catch (e) { console.warn('warmup', e); }
+  }
+
+  // Прогрев при загрузке: шейдеры всех материалов компилируются, модели оружия от первого лица,
+  // снарядов и эффекты собираются и один раз рисуются — тем же конвейером, что и в игре
+  // (с постобработкой и тенями), и напрямую без тумана (окно камеры попаданий/снаряда/дрона).
+  // Иначе это происходит в момент первого выстрела, взрыва или смены оружия — и кадр «подвисает».
+  warmup() {
+    const r = this.renderer, fx = this.fx, vm = this.viewmodel, cam = this.camera;
+    // баллистические таблицы всех стволов миссии (иначе первый выстрел каждого бойца ИИ
+    // с новым оружием считает таблицу ~0,1 с прямо в кадре)
+    const ids = new Set(['ak74m', 'rpg7', 'pkm']);
+    for (const so of this.soldiers) if (so.weaponId) ids.add(so.weaponId);
+    for (const v of this.vehicles) if (v.type.gun) ids.add(v.type.gun);
+    for (const id of ids) if (WEAPONS[id]) solverFor(id, this.zeroEnv);
+    const pl = this.player;
+    for (const ws of pl.slots) {
+      if (!ws || ws.grenade || ws.binocular) continue;
+      try { pl.theta(ws); pl.scopeMarks(ws); if (ws.ugl) pl.theta(ws.ugl); } catch (e) { /* нет прицела */ }
+    }
+    cam.updateMatrixWorld(true);
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const P = cam.position.clone().addScaledVector(fwd, 12), UP = new THREE.Vector3(0, 1, 0);
+    // оружие от первого лица: всё снаряжение, ГП-25, гранаты, бинокль, ПКП на турели
+    const vmTemp = [];
+    for (const k of this.player.allVmKinds()) {
+      if (!vm.models.has(k)) vm.models.set(k, vm._build(k));
+      const c = vm.models.get(k);
+      if (c !== vm.cur) { vm.scene.add(c.root); vmTemp.push(c); }
+      c.root.visible = true; c.flash.visible = true;
+      c.root.position.set(0, -0.1, -0.6); c.root.updateMatrixWorld(true);
+      try { const kind = vm.kind; vm.kind = k; vm._eject(c); vm.kind = kind; } catch (e) { /* у вида нет гильз */ }
+    }
+    // снаряды и эффекты — перед камерой
+    const temp = [];
+    const add = (o) => { o.position.copy(P); this.scene.add(o); temp.push(o); };
+    const PR = this.projectiles;
+    add(PR.shellMesh()); add(PR.rocketProto.clone()); add(new THREE.Mesh(PR.grenadeGeo, PR.grenadeMat));
+    if (!PR._f1Proto) { try { PR._f1Proto = grenadeModel(); } catch (e) { /* запасная модель */ } }
+    if (PR._f1Proto) add(PR._f1Proto.clone());
+    const snap = { smoke: fx.smoke.n, glow: fx.glow.n, tracers: fx.tracers.length, emitters: fx.emitters.slice(), di: fx._di, dc: fx.decals.count };
+    fx.muzzle(P, fwd); fx.impact(P, UP, 'snow'); fx.impact(P, UP, 'metal'); fx.impact(P, UP, 'concrete');
+    fx.explosion(P, 1); fx.muzzleBlast(P, fwd); fx.shellBurst(P); fx.rocketSmoke(P, fwd); fx.rocketFlame(P);
+    fx.pushTracer(P, fwd.clone().multiplyScalar(800), cam.position); fx.addDecal(P, UP, 0.1);
+    fx.update(0.016); fx.setView(cam, innerHeight, this.scene.fog);
+    // отрисовка: игровой конвейер, затем прямой вывод без тумана
+    this.app.post.render(this.scene, cam, vm.scene, this.vmCamera, 0);
+    const fog = this.scene.fog;
+    this.scene.fog = null;
+    r.setRenderTarget(null); r.render(this.scene, cam);
+    this.scene.fog = fog;
+    // окно камеры БПЛА: рендер в текстуру и вывод с эффектом видеокамеры
+    if (this.myDrone) {
+      const dvPrev = this.droneView;
+      this.myDrone._aim(); this._droneRT(1e9); this._droneBlit();
+      this.droneView = dvPrev; this.dv.ready = false;
+    }
+    // убрать временное
+    for (const o of temp) this.scene.remove(o);
+    for (const c of vmTemp) vm.scene.remove(c.root);
+    for (const c of vm.models.values()) c.flash.visible = false;
+    for (const cs of vm.cases) { cs.alive = false; cs.mesh.visible = false; }
+    fx.smoke.n = snap.smoke; fx.glow.n = snap.glow; fx.tracers.length = snap.tracers; fx.emitters = snap.emitters; fx._di = snap.di; fx.decals.count = snap.dc;
+    for (const l of fx.lights) l.intensity = 0;
+    fx.update(0);
   }
 
   _build() {
@@ -320,6 +389,8 @@ export class Mission {
     }
     // первый этап
     this.nextStage();
+    // БПЛА-корректировщик
+    this._makeDrones();
     // камера попаданий (картинка в картинке)
     const hb = document.createElement('div'); hb.className = 'hitcam';
     const hl = document.createElement('div'); hl.className = 'hclabel'; hb.appendChild(hl);
@@ -716,6 +787,7 @@ export class Mission {
     r = [];
     for (const s of this.soldiers) if (s.alive && !s.hidden && s.team !== team) r.push(s);
     for (const v of this.vehicles) { if (!v.alive) continue; const ct = v.crewTeam; if (ct && ct !== team) r.push(v); }
+    for (const d of this.drones || []) if (d.alive && d.team !== team) r.push(d);
     this._targetsCache.set(team, r);
     return r;
   }
@@ -923,6 +995,78 @@ export class Mission {
     return mk;
   }
 
+  // ---------- БПЛА ----------
+  _makeDrones() {
+    this.drones = [];
+    this.droneView = false;
+    if (this.def.noDrone) return;
+    const mk = (team, x, z, name) => { const d = new Drone(this, { team, x, z, name, index: this.drones.length }); this.drones.push(d); return d; };
+    if (this.pvp) {
+      const pm = pvpMap(this.def.id);
+      for (const team of ['negs', 'denter']) {
+        const sp = pm.spawns[team], en = pm.spawns[team === 'negs' ? 'denter' : 'negs'];
+        const d = mk(team, sp.x + 5, sp.z + 5, team === 'negs' ? 'БПЛА «Сова»' : 'БПЛА «Сыч»');
+        d.setCenter(sp.x + (en.x - sp.x) * 0.7, sp.z + (en.z - sp.z) * 0.7);
+      }
+    } else {
+      const st = this.def.start;
+      mk('negs', st.x + 4, st.z + 5, 'БПЛА «Сова»');
+    }
+  }
+
+  get myDrone() { return (this.drones || []).find((d) => d.team === this.myTeam) || null; }
+
+  // облёт точки, куда смотрит игрок (бинокль, прицел, наводчик орудия)
+  droneGoLook() {
+    const d = this.myDrone;
+    if (!d) return;
+    if (!d.alive) { this.hud.message('Дрон сбит — резервный ещё не готов', 2); return; }
+    const cam = this.camera;
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const far = Math.min(9000, this.terrain.half * 1.4);
+    const end = cam.position.clone().addScaledVector(dir, far);
+    const hit = this.world.raycast(cam.position, end, { mask: 'sight' });
+    let P = hit ? hit.point : null;
+    if (!P) { this.hud.message(`Не вижу точки: посмотрите на землю (до ${Math.round(far / 1000)} км) или щёлкните по карте огня`, 2.5); return; }
+    if (Math.hypot(P.x, P.z) > this.terrain.boundary) { this.hud.message('Точка за пределами района', 2); return; }
+    this.droneGo(d, P.x, P.z);
+    const gx = Math.round(61000 - P.z), gy = Math.round(34000 + P.x);
+    this.hud.radio(d.name, `Принял, иду в район X ${gx.toLocaleString('ru')}, Y ${gy.toLocaleString('ru')}. Дальность от вас ${Math.round(Math.hypot(P.x - this.player.body.pos.x, P.z - this.player.body.pos.z))} м`, true);
+  }
+
+  droneGo(d, x, z, low = null) {
+    if (this.net && !this.net.isHost) this.net.evHost(['dg', d.index, Math.round(x), Math.round(z), low === null ? -1 : low ? 1 : 0]);
+    d.setCenter(x, z, low);
+  }
+
+  // попадание по дрону: считает хост
+  hitDrone(d, dmg, src) {
+    if (!d.alive) return;
+    if (this.net && !this.net.isHost) { this.net.evHost(['dh', d.index, Math.round(dmg)]); this.fx.impact(d.pos, new THREE.Vector3(0, 1, 0), 'metal', 0.6); return; }
+    d.damage(dmg, src);
+  }
+
+  onDroneDown(d, src) {
+    const mine = d.team === this.myTeam;
+    if (mine) {
+      this.hud.message(`${d.name} сбит! Резервный дрон — через ${Math.round(DRONE_RESPAWN / 60)} мин`, 4, true);
+      this.hud.radio(d.name, 'Потеря связи с бортом!', true);
+    } else this.hud.message(src === this.player.body ? 'Вы сбили дрон противника' : 'Дрон противника сбит', 3);
+  }
+
+  _droneRespawn() {
+    for (const d of this.drones) {
+      if (d.alive || d.downAt < 0 || this.time - d.downAt < DRONE_RESPAWN) continue;
+      // резервный дрон взлетает рядом с командиром своей стороны
+      let base = null;
+      if (d.team === this.myTeam) base = this.player.body.pos;
+      else if (this.pvp && this.net) { for (const pr of this.net.peers.values()) if (pr.soldier && pr.soldier.team === d.team && pr.soldier.alive) { base = pr.soldier.pos; break; } }
+      if (!base) base = this.pvp ? pvpMap(this.def.id).spawns[d.team] : this.def.start;
+      d.revive(base.x + 3, base.z + 3);
+      if (d.team === this.myTeam) this.hud.radio(d.name, 'Резервный борт в воздухе, выхожу в район.', true);
+    }
+  }
+
   // Разведчики отделений докладывают замеченного противника (считает хост / одиночная игра)
   updateScouts(dt) {
     this.scoutT -= dt;
@@ -933,6 +1077,8 @@ export class Mission {
     const groups = this.netSquads ? [...this.netSquads.values()] : this.squadGroup ? [this.squadGroup] : [];
     for (const grp of groups) for (const sc of grp.members) {
       if (!sc.alive || sc.role !== 'sniper' || !sc.brain) continue;
+      // разведку ведёт БПЛА; разведчик докладывает сам, только пока дрона нет (сбит, ждём резервный)
+      if ((this.drones || []).some((d) => d.alive && d.team === sc.team)) continue;
       const seen = [];
       for (const [t, mm] of sc.brain.memory) if (t.alive && mm.seen && this.time - mm.lastSeen < 4 && (t.isVehicle ? t.crewTeam && t.crewTeam !== sc.team : t.team !== sc.team)) seen.push(t);
       // группы по 40 м
@@ -1038,6 +1184,19 @@ export class Mission {
     const net = this.net, host = !net || net.isHost;
     if (net) net.preUpdate(dt);
     if (inp.bh('map') && !this.player.gun) this.mapVisible = !this.mapVisible;
+    // БПЛА: Y — окно камеры, U — облёт точки, куда смотрит игрок (или прицел орудия)
+    const myDrone = this.myDrone;
+    if (inp.bh('drone')) {
+      if (!myDrone) this.hud.message('БПЛА в этой операции нет', 2);
+      else { this.droneView = !this.droneView; this.hud.message(this.droneView ? `${myDrone.name}: камера (Y — скрыть, U — облёт точки взгляда)` : 'Камера БПЛА скрыта', 2); }
+    }
+    if (inp.bh('droneGo') && myDrone) {
+      // Shift+U — сменить высоту облёта (низко: лучше видно, но слышно и могут сбить)
+      if (inp.bd('sprint')) {
+        if (!myDrone.alive) this.hud.message('Дрон сбит — резервный ещё не готов', 2);
+        else { this.droneGo(myDrone, myDrone.center.x, myDrone.center.z, !myDrone.low); this.hud.radio(myDrone.name, myDrone.low ? 'Снижаюсь до 90 м: вижу лучше, но меня слышно.' : 'Набираю 190 м, облёт с большим радиусом.', true); }
+      } else this.droneGoLook();
+    }
     if (this.mapVisible && this.mapWide) {
       // масштаб карты: колесо мыши или +/−; колесо не листает оружие, пока открыта карта
       if (inp.wheel > 0 || inp.hit('Minus') || inp.hit('NumpadSubtract')) this.mapZoom = 1;
@@ -1050,6 +1209,8 @@ export class Mission {
     if (host) for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
     for (const h of this.guns) h.update(dt);
+    for (const d of this.drones) d.update(dt, host);
+    if (host) this._droneRespawn();
     this.projectiles.update(dt);
     if (this.props) this.props.update(dt);
     // мишени РЛС крутятся
@@ -1196,6 +1357,138 @@ export class Mission {
     this.fx.setView(cam, H, this.scene.fog);
   }
 
+  // ---------- окно камеры БПЛА ----------
+  _droneViewOn() {
+    const d = this.myDrone;
+    if (!this.droneView || !d) return false;
+    // после потери борта — несколько секунд «нет сигнала», затем окно закрывается
+    if (!d.alive && this.time - d.downAt > 4) { this.droneView = false; return false; }
+    return true;
+  }
+
+  _dvLayout() {
+    const W = innerWidth, H = innerHeight;
+    const w = Math.round(Math.max(260, Math.min(460, W * 0.3))), h = Math.round(w / 1.5);
+    return { W, H, w, h, x: W - w - 16, top: 70 };
+  }
+
+  _dvInit() {
+    if (this.dv) return this.dv;
+    const L = this._dvLayout();
+    const pr = Math.min(1.5, this.renderer.getPixelRatio());
+    const rt = new THREE.WebGLRenderTarget(Math.round(L.w * pr), Math.round(L.h * pr), { type: THREE.HalfFloatType });
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: rt.texture }, uNight: { value: this.isNight ? 1 : 0 }, uTime: { value: 0 }, uLost: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float uNight, uTime, uLost; varying vec2 vUv;
+        float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime * 7.0) * 43758.5453); }
+        void main() {
+          vec3 c = texture2D(tDiffuse, vUv).rgb;
+          float l = dot(c, vec3(0.299, 0.587, 0.114));
+          vec3 day = mix(vec3(l), c, 0.72) * 1.05;                 // приглушённые цвета видеокамеры
+          vec3 nv = vec3(0.55, 1.0, 0.6) * pow(clamp(l * 6.0, 0.0, 1.0), 0.85) * 1.2; // ночью — канал низкой освещённости
+          c = mix(day, nv, uNight);
+          c += (rnd(vUv * 640.0) - 0.5) * 0.04;                    // шум матрицы
+          c *= mix(0.72, 1.0, smoothstep(0.85, 0.3, length(vUv - 0.5)));
+          c = mix(c, vec3(rnd(vUv * 300.0)) * 0.6, uLost);
+          gl_FragColor = vec4(c, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+    const box = document.createElement('div'); box.className = 'dronebox';
+    box.innerHTML = '<canvas></canvas><div class="dvx"></div><div class="dvtop"></div><div class="dvbot"></div><div class="dvlost">НЕТ СИГНАЛА</div>';
+    this.hud.root.appendChild(box);
+    this.dv = { rt, mat, scene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), box, cv: box.querySelector('canvas'), top: box.querySelector('.dvtop'), bot: box.querySelector('.dvbot'), lost: box.querySelector('.dvlost'), frame: 0, L };
+    return this.dv;
+  }
+
+  _droneRT(fogD) {
+    const dv = this._dvInit(), d = this.myDrone, r = this.renderer;
+    const L = this._dvLayout();
+    if (L.w !== dv.L.w) { const pr = Math.min(1.5, r.getPixelRatio()); dv.rt.setSize(Math.round(L.w * pr), Math.round(L.h * pr)); dv.L = L; }
+    dv.mat.uniforms.uTime.value = this.time % 100;
+    dv.mat.uniforms.uLost.value = d.alive ? 0 : 1;
+    if (!d.alive) return;
+    // кадр камеры — через раз (на высоком качестве каждый кадр)
+    if (dv.ready && this.settings.quality !== 'high' && (dv.frame++ & 1)) return;
+    const cam = d.cam;
+    cam.aspect = L.w / L.h; cam.updateProjectionMatrix();
+    this.world.cullStatic(cam.position, fogD);
+    const sky = this.lights.sky.mesh, skyPos = sky.position.clone();
+    sky.position.copy(cam.position);
+    const fxU = [this.fx.smoke.uniforms, this.fx.glow.uniforms].map((u) => [u, u.uScale.value]);
+    for (const [u] of fxU) u.uScale.value = (dv.rt.height / 2) / Math.tan((cam.fov * Math.PI) / 360);
+    d.mesh.visible = false;
+    r.shadowMap.autoUpdate = false;
+    r.setRenderTarget(dv.rt); r.clear(); r.render(this.scene, cam); r.setRenderTarget(null);
+    r.shadowMap.autoUpdate = true;
+    d.mesh.visible = true;
+    sky.position.copy(skyPos);
+    for (const [u, v] of fxU) u.uScale.value = v;
+    dv.ready = true;
+  }
+
+  _droneBlit() {
+    const dv = this.dv, r = this.renderer, L = this._dvLayout();
+    const y = L.H - L.top - L.h;
+    const ac = r.autoClear;
+    r.setRenderTarget(null);
+    r.autoClear = false;
+    r.setScissorTest(true); r.setScissor(L.x, y, L.w, L.h); r.setViewport(L.x, y, L.w, L.h);
+    r.render(dv.scene, dv.cam);
+    r.setScissorTest(false); r.setViewport(0, 0, L.W, L.H);
+    r.autoClear = ac;
+  }
+
+  // рамка, подписи, рамки на замеченных целях
+  _droneOverlay(on) {
+    const dv = this.dv;
+    const feed = this.net && this.net.el && this.net.el.feed;
+    if (!on) { if (dv && dv.box.style.display !== 'none') { dv.box.style.display = 'none'; if (feed) feed.style.top = ''; } return; }
+    const L = this._dvLayout(), d = this.myDrone, cam = d.cam;
+    dv.box.style.cssText = `display:block;left:${L.x - 2}px;top:${L.top - 2}px;width:${L.w}px;height:${L.h}px`;
+    if (feed) feed.style.top = `${L.top + L.h + 34}px`;
+    dv.lost.style.display = d.alive ? 'none' : 'flex';
+    const cv = dv.cv;
+    if (cv.width !== L.w || cv.height !== L.h) { cv.width = L.w; cv.height = L.h; }
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, L.w, L.h);
+    const P = this.player.body.pos;
+    const distC = Math.round(Math.hypot(d.center.x - P.x, d.center.z - P.z));
+    const agl = Math.round(d.pos.y - this.terrain.heightAt(d.pos.x, d.pos.z));
+    const gx = Math.round(61000 - d.center.z), gy = Math.round(34000 + d.center.x);
+    const top = `${d.name} · ВЫС ${agl} м · ${d.alive ? (d.low ? 'облёт низко' : 'облёт высоко') : 'потеря связи'}`;
+    const bot = `ЦЕНТР X ${gx.toLocaleString('ru')} Y ${gy.toLocaleString('ru')} · Д ${distC} м · <b>U</b> точка · <b>Shift+U</b> высота · <b>Y</b> скрыть`;
+    if (dv._t !== top) { dv.top.textContent = top; dv._t = top; }
+    if (dv._b !== bot) { dv.bot.innerHTML = bot; dv._b = bot; }
+    if (!d.alive) return;
+    // цели, замеченные камерой за последние 1,5 с
+    const v = new THREE.Vector3();
+    g.lineWidth = 1.5; g.font = 'bold 11px Arial';
+    for (const [t, ts] of d.seen) {
+      if (!t.alive || this.time - ts > 1.5) continue;
+      v.copy(t.isVehicle ? t.pos : (t.chest || t.pos)).project(cam);
+      if (v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+      const x = (v.x * 0.5 + 0.5) * L.w, y = (-v.y * 0.5 + 0.5) * L.h;
+      const s = t.isVehicle ? 12 : 7;
+      g.strokeStyle = '#ff3a2a';
+      g.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { g.moveTo(x + sx * s, y + sy * s * 0.4); g.lineTo(x + sx * s, y + sy * s); g.lineTo(x + sx * s * 0.4, y + sy * s); }
+      g.stroke();
+    }
+    // отметки целей своей стороны
+    g.fillStyle = '#ffb030';
+    for (const mk of this.teamMarks()) {
+      v.copy(mk.pos).project(cam);
+      if (v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+      g.fillText(mk.short, (v.x * 0.5 + 0.5) * L.w + 9, (-v.y * 0.5 + 0.5) * L.h - 6);
+    }
+  }
+
   scopeFov(sc) {
     // кружок окуляра занимает 92% высоты экрана = истинное поле зрения прицела
     const t = Math.tan((sc.fov * Math.PI) / 360) / 0.92;
@@ -1206,8 +1499,12 @@ export class Mission {
     this.renderer.shadowMap.autoUpdate = true;
     let fogD = this.scene.fog && this.scene.fog.density > 0 ? 2.0 / this.scene.fog.density : 1e9;
     if (this.wideMap) fogD = Math.min(fogD, this.settings.quality === 'low' ? 3500 : 6000);
+    const dvOn = this._droneViewOn();
+    if (dvOn) this._droneRT(fogD);
     this.world.cullStatic(this.camera.position, fogD);
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
+    this._droneOverlay(dvOn);
+    if (dvOn) this._droneBlit();
     const hc = this.hitcam;
     if (hc && hc.proj && (hc.on || (hc.shellCam && hc.proj.ammo.kind === 'shell'))) {
       const r = this.renderer;
@@ -1227,7 +1524,9 @@ export class Mission {
       r.setScissorTest(true); r.setScissor(x, y, w, h); r.setViewport(x, y, w, h);
       r.autoClear = true;
       this.world.cullStatic(hc.cam.position, 3000);
+      r.shadowMap.autoUpdate = false; // тени уже посчитаны основным кадром
       r.render(this.scene, hc.cam);
+      r.shadowMap.autoUpdate = true;
       r.setScissorTest(false); r.setViewport(0, 0, W, H);
       sky.position.copy(skyPos);
       for (const [u, sc, fd] of fxU) { u.uScale.value = sc; u.uFogDensity.value = fd; }
@@ -1247,6 +1546,8 @@ export class Mission {
   }
 
   dispose() {
+    for (const d of this.drones || []) d.dispose();
+    if (this.dv) { this.dv.rt.dispose(); this.dv.box.remove(); }
     if (this.net) this.net.dispose();
     if (this.hitcam) this.hitcam.box.remove();
     for (const h of this.guns || []) if (h.ui) { h.ui.panel.remove(); h.ui.ret.remove(); }

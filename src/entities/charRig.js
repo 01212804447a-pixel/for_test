@@ -650,6 +650,20 @@ export class CharAnimator {
     }
   }
 
+  // Руки на рукоятки турельного пулемёта (мировые точки); своё оружие убрано за спину
+  holdMount(rw, lw) {
+    const rig = this.rig, b = rig.b, k = rig.heightK * this.root.scale.x;
+    if (this.gun) this.gun.object.visible = false;
+    this.mountHidden = true;
+    for (const [side, t] of [['Right', rw], ['Left', lw]]) {
+      const arm = b[side + 'Arm'], fore = b[side + 'ForeArm'], hand = b[side + 'Hand'];
+      const sh = arm.getWorldPosition(_v3), el = fore.getWorldPosition(_v4);
+      const pole = el.sub(sh).normalize().add(_v.set(0, -0.7, 0)).normalize();
+      rig.ik(arm, fore, hand, t, pole.clone(), rig.len.upper * k, rig.len.fore * k);
+    }
+  }
+  releaseMount() { if (this.gun && !this.gunDrop) this.gun.object.visible = true; this.mountHidden = false; }
+
   // IK руки на точку хвата оружия
   _arm(side, gripLocal, handQ, w) {
     const rig = this.rig, b = rig.b;

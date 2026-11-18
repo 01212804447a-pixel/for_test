@@ -247,6 +247,60 @@ export class Effects {
     this.flashLight(new THREE.Vector3(pos.x, pos.y + 1.5, pos.z), 900 * S, 0.25, 0xffa040, 80 * S);
   }
 
+  // Разрыв артиллерийского снаряда: «султан» из снега и мёрзлого грунта, низовая волна, тёмный дым
+  shellBurst(pos, snow = true) {
+    const x = pos.x, y = pos.y, z = pos.z;
+    this.glow.emit(x, y + 0.6, z, 0, 0, 0, 0.12, 6, 16, 1, 0.82, 0.55, 1, 0, 0, 0);
+    for (let i = 0; i < 18; i++) {
+      const a = rand(0, 6.28), e = rand(0.3, 1.4), sp = rand(6, 18);
+      this.glow.emit(x, y + 0.4, z, Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp, Math.sin(a) * Math.cos(e) * sp, rand(0.18, 0.4), 2.5, 5, 1, rand(0.45, 0.62), 0.15, 1, 0, 4, -1);
+    }
+    // султан: выброс вверх узким конусом
+    for (let i = 0; i < 90; i++) {
+      const a = rand(0, 6.28), h = rand(0.5, 7), up = rand(12, 32);
+      const earth = !snow || Math.random() < 0.45;
+      const c = earth ? rand(0.13, 0.24) : rand(0.86, 0.95);
+      this.smoke.emit(x + rand(-1, 1), y + rand(0, 1), z + rand(-1, 1), Math.cos(a) * h, up, Math.sin(a) * h, rand(1.6, 3.4), rand(0.8, 1.6), rand(3.5, 6.5), c, c * (earth ? 0.92 : 1), c * (earth ? 0.85 : 1.03), 0.9, 0, 0.45, 9.8);
+    }
+    // низовая волна снега
+    if (snow) for (let i = 0; i < 30; i++) {
+      const a = rand(0, 6.28), sp = rand(8, 18);
+      this.smoke.emit(x, y + 0.5, z, Math.cos(a) * sp, rand(0.5, 2.5), Math.sin(a) * sp, rand(2, 4), 2, rand(7, 11), 0.9, 0.92, 0.95, 0.55, 0, 1.4, 0);
+    }
+    // тёмный дым разрыва: поднимается и расплывается
+    for (let i = 0; i < 36; i++) {
+      const c = rand(0.26, 0.42);
+      this.smoke.emit(x + rand(-2, 2), y + rand(1, 8), z + rand(-2, 2), rand(-2, 2), rand(2, 9), rand(-2, 2), rand(5, 10), rand(3, 5), rand(10, 16), c, c * 0.96, c * 0.9, 0.5, 0, 0.7, -0.12);
+    }
+    // осколки
+    for (let i = 0; i < 40; i++) {
+      const a = rand(0, 6.28), e = rand(-0.05, 0.9), sp = rand(60, 140);
+      this.glow.emit(x, y + 0.5, z, Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp, Math.sin(a) * Math.cos(e) * sp, rand(0.06, 0.16), 0.12, 0.05, 1, 0.8, 0.5, 1, 0.3, 0, 9.8);
+    }
+    this.flashLight(new THREE.Vector3(x, y + 2, z), 2600, 0.25, 0xffa040, 260);
+  }
+
+  // Выстрел гаубицы: струи газов из окон дульного тормоза в стороны-назад, облако перед стволом
+  muzzleBlast(pos, dir) {
+    const side = new THREE.Vector3(-dir.z, 0, dir.x).normalize();
+    this.glow.emit(pos.x, pos.y, pos.z, dir.x * 20, dir.y * 20, dir.z * 20, 0.08, 2.2, 5, 1, 0.75, 0.4, 1, 0, 0, 0);
+    for (const s of [-1, 1]) {
+      for (let i = 0; i < 6; i++) {
+        const sp = rand(25, 45);
+        const vx = side.x * s * sp - dir.x * sp * 0.35, vz = side.z * s * sp - dir.z * sp * 0.35;
+        this.glow.emit(pos.x, pos.y, pos.z, vx, rand(-1, 3), vz, rand(0.05, 0.1), 0.6, 1.8, 1, 0.65, 0.3, 1, 0, 6, 0);
+      }
+      for (let i = 0; i < 16; i++) {
+        const sp = rand(8, 22), c = rand(0.72, 0.86);
+        this.smoke.emit(pos.x, pos.y, pos.z, side.x * s * sp - dir.x * sp * 0.3, rand(0.5, 3), side.z * s * sp - dir.z * sp * 0.3, rand(2, 4.5), 0.6, rand(3.5, 6), c, c, c * 1.02, 0.65, 0, 1.6, -0.15);
+      }
+    }
+    for (let i = 0; i < 18; i++) {
+      const sp = rand(6, 28), c = rand(0.7, 0.85);
+      this.smoke.emit(pos.x, pos.y, pos.z, dir.x * sp + rand(-2, 2), dir.y * sp + rand(0, 2), dir.z * sp + rand(-2, 2), rand(2.5, 5), 0.8, rand(4, 7), c, c, c * 1.02, 0.6, 0, 1.3, -0.1);
+    }
+  }
+
   addFire(pos, scale = 1, duration = 60) {
     this.emitters.push({ pos: pos.clone(), scale, t: 0, duration, acc: 0 });
   }

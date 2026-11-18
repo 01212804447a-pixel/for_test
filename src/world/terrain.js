@@ -314,17 +314,21 @@ vec3 triRock(vec3 p, vec3 n){
     const c = document.createElement('canvas'); c.width = c.height = px;
     const g = c.getContext('2d');
     const img = g.createImageData(px, px);
+    // шаг для отмывки и сечение изолиний — по масштабу карты
+    const st = Math.max(4, (2 * range) / px), isoStep = range > 3000 ? 20 : 10;
     for (let y = 0; y < px; y++) {
       for (let x = 0; x < px; x++) {
         const wx = (x / px) * 2 * range - range, wz = (y / px) * 2 * range - range;
         const h = this.heightAt(wx, wz);
-        const hx = this.heightAt(wx + 4, wz) - h, hz = this.heightAt(wx, wz + 4) - h;
-        const shade = clamp(0.78 - (hx * 0.7 + hz * 0.45) * 0.25, 0.35, 1);
+        const h1 = this.heightAt(wx + st, wz), h2 = this.heightAt(wx, wz + st);
+        const hx = (h1 - h) * 4 / st, hz = (h2 - h) * 4 / st;
+        const shade = clamp(0.78 - (hx * 0.7 + hz * 0.45) * 0.25 * Math.min(1, 8 / st), 0.35, 1);
         let r = 228, gg = 232, b = 236;
         const m = this.maskAt(wx, wz);
         if (this.hasSea && h < 0) { r = 70; gg = 90; b = 110; } else if (m === 1) { r = 190; gg = 160; b = 120; } else if (m === 2) { r = 160; gg = 195; b = 220; }
         // изолинии через 10 м
-        const iso = Math.abs(((h % 10) + 10) % 10 - 5) > 4.6 ? 0.82 : 1;
+        // изолиния — там, где между соседними отсчётами меняется номер горизонтали
+        const k0 = Math.floor(h / isoStep), iso = k0 !== Math.floor(h1 / isoStep) || k0 !== Math.floor(h2 / isoStep) ? 0.8 : 1;
         const i = (y * px + x) * 4;
         img.data[i] = r * shade * iso; img.data[i + 1] = gg * shade * iso; img.data[i + 2] = b * shade * iso; img.data[i + 3] = 255;
       }

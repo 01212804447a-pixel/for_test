@@ -152,6 +152,7 @@ export class Player {
     // обзор мышью
     const fovK = this.scoped ? (g.camera.fov / g.settings.fov) : this.aimT > 0.5 ? 0.75 : 1;
     const mdx = inp.dx * sens * fovK, mdy = inp.dy * sens * fovK * (g.settings.invertY ? -1 : 1);
+    if (this.gun) { this.gun.control(dt); this.shake = Math.max(0, this.shake - dt * 2.5); this.interact = null; return; }
     if (this.vehicle) { this.updateVehicle(dt, mdx, mdy); return; }
     this.yaw -= mdx; this.pitch = clamp(this.pitch - mdy, -1.45, 1.45);
     // инерция оружия: ствол отстаёт от поворота головы
@@ -210,8 +211,8 @@ export class Player {
     const height = b.stance === 'prone' ? 0.5 : b.stance === 'crouch' ? 1.2 : 1.75;
     w.collideCircle(_v, 0.32, b.pos.y, height);
     // граница района
-    const R = Math.hypot(_v.x, _v.z);
-    if (R > 1120) { _v.x *= 1120 / R; _v.z *= 1120 / R; }
+    const R = Math.hypot(_v.x, _v.z), Rmax = w.terrain.boundary + 70;
+    if (R > Rmax) { _v.x *= Rmax / R; _v.z *= Rmax / R; }
     let gy = w.groundAt(_v.x, _v.z, b.pos.y);
     if (gy - b.pos.y > 0.6) { _v.x = b.pos.x; _v.z = b.pos.z; gy = w.groundAt(_v.x, _v.z, b.pos.y); }
     if (w.terrain.hasSea && gy < -0.9) { _v.x = b.pos.x; _v.z = b.pos.z; gy = w.groundAt(_v.x, _v.z, b.pos.y); } // вода

@@ -22,6 +22,7 @@ import { ZERO_ENV } from '../physics/firingTable.js';
 import { WEAPONS, SCOPES, PRIMARY_CHOICES } from '../data/weapons.js';
 import { ROSTER, toSkill } from '../data/squad.js';
 import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/math.js';
+import { Howitzer } from '../artillery/howitzer.js';
 
 const QUALITY = { low: { seg: 256, shadow: 1024, snow: 0.5 }, medium: { seg: 384, shadow: 2048, snow: 1 }, high: { seg: 480, shadow: 4096, snow: 1.4 } };
 
@@ -31,7 +32,8 @@ export class Mission {
     this.renderer = app.renderer; this.audio = app.audio; this.input = app.input; this.settings = app.settings; this.hud = app.hud;
     this.time = 0;
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(this.settings.fov, innerWidth / innerHeight, 0.1, 4200);
+    this.camera = new THREE.PerspectiveCamera(this.settings.fov, innerWidth / innerHeight, 0.1, def.far || 4200);
+    this.guns = []; this.artTargets = [];
     this.lookCam = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 10);
     this.vmScene = new THREE.Scene();
     this.vmCamera = new THREE.PerspectiveCamera(this.settings.fov, innerWidth / innerHeight, 0.01, 10);
@@ -59,7 +61,8 @@ export class Mission {
     this.visibility = e.visibility;
     this.isNight = e.time === 'night';
     // ландшафт
-    this.terrain = new Terrain({ seed: def.terrain.seed, amp: def.terrain.amp, features: def.terrain.features.map((f) => ({ ...f })), seg: q.seg });
+    const tdef = def.terrain;
+    this.terrain = new Terrain({ seed: tdef.seed, amp: tdef.amp, features: tdef.features.map((f) => ({ ...f })), seg: tdef.seg || q.seg, size: tdef.size || 2400, boundary: tdef.boundary || 1050, mountain: tdef.mountain || 150 });
     this.scene.add(this.terrain.buildMesh());
     const sea = this.terrain.buildSea();
     if (sea) this.scene.add(sea);
@@ -139,7 +142,7 @@ export class Mission {
     }
     this.world.finalize({ navCenter: def.navCenter || { x: 0, z: 0 }, navSize: def.navSize || 800 });
     const qk = this.settings.quality === 'low' ? 0.5 : this.settings.quality === 'high' ? 1.4 : 1;
-    scatterGround(this.scene, this.terrain, this.world, { seed: def.terrain.seed, wind: this.wind, grass: Math.floor(9000 * qk), shrubs: Math.floor(3000 * qk), stones: Math.floor(1500 * qk), drifts: Math.floor(500 * qk), radius: 950, avoid: [{ x: def.start.x, z: def.start.z, r: 12 }, ...(def.clearZones || [])] });
+    scatterGround(this.scene, this.terrain, this.world, { seed: def.terrain.seed, wind: this.wind, grass: Math.floor(9000 * qk), shrubs: Math.floor(3000 * qk), stones: Math.floor(1500 * qk), drifts: Math.floor(500 * qk), radius: 950, center: def.groundCenter || { x: 0, z: 0 }, avoid: [{ x: def.start.x, z: def.start.z, r: 12 }, ...(def.clearZones || [])] });
     for (const sp of this.world.smokes) this.fx.addSmoke(sp, 1);
     this.props = new Props(this);
     for (const r of this.world.propRequests) this.props.spawn(r.type, r.x, r.z, { yaw: r.yaw, y: r.y ?? null });
@@ -168,7 +171,7 @@ export class Mission {
     const hb = document.createElement('div'); hb.className = 'hitcam';
     const hl = document.createElement('div'); hl.className = 'hclabel'; hb.appendChild(hl);
     this.hud.root.appendChild(hb);
-    this.hitcam = { on: !!def.training, proj: null, hold: 0, t: 0, cam: new THREE.PerspectiveCamera(40, 3 / 2, 0.05, 3000), box: hb, label: hl };
+    this.hitcam = { on: !!def.training, shellCam: true, proj: null, hold: 0, t: 0, cam: new THREE.PerspectiveCamera(40, 3 / 2, 0.05, 3000), box: hb, label: hl };
     this.player.computePose(0.016);
     this.updateCamera(0);
     this.cover.update(this.camPos);
@@ -205,11 +208,22 @@ export class Mission {
       forest: (o) => self.scatter({ rocks: 0, ...o, forest: true }),
       weaponRack: (x, z) => self.addWeaponRack(x, z),
       ammoCrate: (x, z) => self.addAmmoCrate(x, z),
+      howitzer: (o) => { const h = new Howitzer(self, o); self.guns.push(h); return h; },
+      artTarget: (o) => self.addArtTarget(o),
     };
     return ctx;
   }
 
   addGroup(g) { this.groups.push(g); return g; }
+
+  // Цель для артиллерии: район с объектами; подавлена, когда разрушен её «центр»
+  addArtTarget({ name, short, desc, x, z, r = 18, hp = 520 }) {
+    const y0 = this.terrain.heightAt(x, z);
+    const t = { kind: 'art', name, short, desc, pos: new THREE.Vector3(x, y0 + 1, z), r, hp, maxHp: hp, alive: true, meshes: [] };
+    this.world.destructibles.push(t);
+    this.artTargets.push(t);
+    return t;
+  }
 
   addEnemy(o) {
     const s = new Soldier(this, { team: 'denter', faction: o.faction || 'denter', weapon: o.weapon || 'akm', role: o.role || 'rifleman', x: o.x, z: o.z, y: o.y, yaw: o.yaw || 0, static: o.static, skill: { aim: rand(0.38, 0.6), reaction: rand(0.35, 0.6), nerve: rand(0.35, 0.65), ...(o.skill || {}) }, secondary: o.secondary, name: o.name || 'Боевик «Дентера»', health: o.health, armor: o.armor ?? 0.45, helmet: o.helmet ?? 0.3, grenades: o.grenades ?? (Math.random() < 0.6 ? 1 : 0), scale: o.scale });
@@ -300,7 +314,7 @@ export class Mission {
   scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false }) {
     const rnd = mulberry32(seed + Math.floor(x * 3 + z * 7 + r));
     const ok = (px, pz) => {
-      if (Math.hypot(px, pz) > 1080) return false;
+      if (Math.hypot(px, pz) > this.terrain.boundary + 30) return false;
       for (const a of avoid) if (Math.hypot(px - a.x, pz - a.z) < (a.r || 60)) return false;
       const m = this.terrain.maskAt(px, pz);
       if (m === 1 || m === 2) return false;
@@ -427,25 +441,60 @@ export class Mission {
 
   // ---------- камера попаданий ----------
   onPlayerShot(p) {
-    if (!this.hitcam || !this.hitcam.on) return;
-    if (p.ammo.kind !== 'bullet' && p.ammo.kind !== 'rocket' && p.ammo.kind !== 'grenade') return;
+    const h = this.hitcam;
+    if (!h) return;
+    // камера снаряда артиллерии работает на любой миссии (J — выключить)
+    const shell = p.ammo.kind === 'shell';
+    if (!(h.on || (shell && h.shellCam))) return;
+    if (!shell && p.ammo.kind !== 'bullet' && p.ammo.kind !== 'rocket' && p.ammo.kind !== 'grenade') return;
     this.hitcam.proj = p; this.hitcam.hold = 0; this.hitcam.t = 0;
   }
 
   updateHitcam(dt) {
     const h = this.hitcam;
-    if (this.input.bh('hitcam')) { h.on = !h.on; this.hud.message(h.on ? 'Камера попаданий: вкл. (J)' : 'Камера попаданий: выкл.', 1.5); if (!h.on) h.proj = null; }
-    h.box.style.display = h.on && h.proj ? 'block' : 'none';
-    if (!h.on || !h.proj) return;
+    if (this.input.bh('hitcam')) { h.on = !(h.on || (h.proj && h.shellCam)); h.shellCam = h.on; this.hud.message(h.on ? 'Камера попаданий: вкл. (J)' : 'Камера попаданий: выкл.', 1.5); if (!h.on) h.proj = null; }
+    const vis = !!h.proj && (h.on || (h.shellCam && h.proj.ammo.kind === 'shell'));
+    h.box.style.display = vis ? 'block' : 'none';
+    if (!vis) return;
     const p = h.proj, cam = h.cam;
     h.t += dt;
+    if (p.ammo.kind === 'shell') {
+      // камера снаряда: за снарядом в полёте, затем — вид на место разрыва
+      if (p.alive) {
+        const d = p.v.clone().normalize();
+        const side = new THREE.Vector3(-d.z, 0, d.x).normalize();
+        // позади и чуть выше снаряда; взгляд немного вниз, чтобы в кадре была земля
+        cam.position.copy(p.p).addScaledVector(d, -7).addScaledVector(side, 1.6).add(new THREE.Vector3(0, 1.8, 0));
+        cam.lookAt(p.p.clone().addScaledVector(d, 30).add(new THREE.Vector3(0, -9, 0)));
+        cam.fov = 50; cam.far = 20000;
+        const D = Math.hypot(p.p.x - p.origin.x, p.p.z - p.origin.z);
+        h.label.textContent = `Выстрел ${p.shotNo || ''}: Д ${Math.round(D)} м · V ${p.v.length().toFixed(0)} м/с · ${p.t.toFixed(1)} с · высота ${Math.round(p.p.y - this.terrain.heightAt(p.p.x, p.p.z))} м`;
+      } else {
+        h.hold += dt;
+        if (h.hold > 6.5) { h.proj = null; return; }
+        const im = p.impact ? p.impact.pos : p.p;
+        const dh = new THREE.Vector3(p.v.x, 0, p.v.z).normalize();
+        const side = new THREE.Vector3(-dh.z, 0, dh.x);
+        // в кадре — разрыв и ближайшая цель (видно перелёт/недолёт)
+        const f = im.clone();
+        let back = 80, up = 24;
+        if (p.nearTgt) { const tp = p.nearTgt.pos; const sep = Math.hypot(tp.x - im.x, tp.z - im.z); if (sep < 230) { f.lerp(tp, 0.5); back = Math.max(80, sep * 1.35); up = Math.max(24, sep * 0.42); } }
+        cam.position.copy(f).addScaledVector(dh, -back).addScaledVector(side, back * 0.32);
+        cam.position.y = Math.max(f.y + up, this.terrain.heightAt(cam.position.x, cam.position.z) + 8);
+        cam.lookAt(f.x, f.y + 4, f.z);
+        cam.fov = 42; cam.far = 20000;
+        h.label.textContent = p.report || 'Разрыв';
+      }
+      cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+      return;
+    }
     if (p.alive) {
       // за пулей: чуть позади и сбоку, взгляд по скорости
       const d = p.v.clone().normalize();
       const side = new THREE.Vector3(-d.z, 0, d.x).normalize();
       cam.position.copy(p.p).addScaledVector(d, -1.6).addScaledVector(side, 0.35).add(new THREE.Vector3(0, 0.25, 0));
       cam.lookAt(p.p.clone().addScaledVector(d, 6));
-      cam.fov = 40;
+      cam.fov = 40; cam.far = 3000;
       h.label.textContent = `Пуля: ${(p.dist).toFixed(0)} м · ${p.v.length().toFixed(0)} м/с · ${p.t.toFixed(2)} с`;
     } else {
       h.hold += dt;
@@ -509,6 +558,12 @@ export class Mission {
   onDestructible(d, by) {
     if (!d.alive) return;
     d.alive = false;
+    if (d.kind === 'art') {
+      this.fx.addFire(d.pos.clone(), 1.6, 300);
+      this.fx.addSmoke(d.pos.clone().add(new THREE.Vector3(3, 0, 2)), 2);
+      this.after(2.5, () => this.hud.radio('Наблюдатель', `${d.name} — подавлена! Огонь перенести.`, true));
+      return;
+    }
     if (d.kind === 'fuel') {
       this.fx.explosion(d.pos.clone().add(new THREE.Vector3(0, 2, 0)), 3.2, false);
       this.audio.explosion(d.pos, 2.2);
@@ -603,12 +658,13 @@ export class Mission {
     this.time += dt;
     this.stats.time += dt;
     const inp = this.input;
-    if (inp.bh('map')) this.mapVisible = !this.mapVisible;
+    if (inp.bh('map') && !this.player.gun) this.mapVisible = !this.mapVisible;
     this.squadVisible = inp.bd('squad');
     this.player.update(dt);
     for (const s of this.soldiers) s.update(dt);
     for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
+    for (const h of this.guns) h.update(dt);
     this.projectiles.update(dt);
     if (this.props) this.props.update(dt);
     // мишени РЛС крутятся
@@ -657,7 +713,10 @@ export class Mission {
     let vmVisible = false;
     this.scopeDraw = null;
     const v = p.vehicle;
-    if (!v) {
+    if (p.gun) {
+      fov = p.gun.camera(cam);
+      look.position.copy(cam.position); look.quaternion.copy(cam.quaternion); look.updateMatrixWorld(true);
+    } else if (!v) {
       const bob = Math.sin(p.walkPhase * 2) * 0.025 * Math.min(1, b.speed / 3) * (1 - p.aimT * 0.8);
       look.position.set(b.pos.x, b.pos.y + p.eyeH + bob, b.pos.z);
       look.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
@@ -760,18 +819,27 @@ export class Mission {
     this.renderer.shadowMap.autoUpdate = true;
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
     const hc = this.hitcam;
-    if (hc && hc.on && hc.proj) {
+    if (hc && hc.proj && (hc.on || (hc.shellCam && hc.proj.ammo.kind === 'shell'))) {
       const r = this.renderer;
       const W = innerWidth, H = innerHeight;
-      const w = Math.round(Math.min(420, W * 0.3)), h = Math.round(w / 1.5);
-      const x = W - w - 18, y = H - h - 200;
+      const big = hc.proj.ammo.kind === 'shell';
+      const w = Math.round(big ? Math.min(620, W * 0.4) : Math.min(420, W * 0.3)), h = Math.round(w / 1.5);
+      const x = W - w - 18, y = big ? H - h - 96 : H - h - 200;
       hc.box.style.cssText = `display:block;left:${x - 2}px;top:${H - y - h - 2}px;width:${w}px;height:${h}px`;
       hc.cam.aspect = w / h; hc.cam.updateProjectionMatrix();
       const fog = this.scene.fog; this.scene.fog = null;
+      // небесная сфера — вокруг камеры врезки (снаряд может быть за километры от игрока)
+      const sky = this.lights.sky.mesh, skyPos = sky.position.clone();
+      sky.position.copy(hc.cam.position);
+      // размер частиц — по полю зрения врезки, а не основной камеры (в оптике она узкая)
+      const fxU = [this.fx.smoke.uniforms, this.fx.glow.uniforms].map((u) => [u, u.uScale.value, u.uFogDensity.value]);
+      for (const [u] of fxU) { u.uScale.value = h / 2 / Math.tan((hc.cam.fov * Math.PI) / 360); u.uFogDensity.value = 0; }
       r.setScissorTest(true); r.setScissor(x, y, w, h); r.setViewport(x, y, w, h);
       r.autoClear = true;
       r.render(this.scene, hc.cam);
       r.setScissorTest(false); r.setViewport(0, 0, W, H);
+      sky.position.copy(skyPos);
+      for (const [u, sc, fd] of fxU) { u.uScale.value = sc; u.uFogDensity.value = fd; }
       this.scene.fog = fog;
     }
     const sc = this.hud.scopeCanvas;
@@ -789,6 +857,8 @@ export class Mission {
 
   dispose() {
     if (this.hitcam) this.hitcam.box.remove();
+    for (const h of this.guns || []) if (h.ui) { h.ui.panel.remove(); h.ui.ret.remove(); }
+    this.hud.root.classList.remove('gunner');
     this.audio.stopAllEngines();
     this.projectiles.clear();
     this.scene.traverse((o) => {

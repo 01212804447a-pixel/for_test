@@ -67,11 +67,12 @@ function mapCanvas(progress) {
   const pts = [[820, 560, 'range'], [700, 470, 'm1'], [520, 380, 'm2'], [380, 300, 'm3'], [250, 190, 'm4'], [110, 140, 'm5']];
   g.strokeStyle = '#a01810'; g.lineWidth = 4; g.setLineDash([12, 8]);
   g.beginPath(); pts.slice(1).forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke(); g.setLineDash([]);
+  pts.push([440, 548, 'artillery']);
   g.font = 'bold 22px Arial';
   for (const [x, y, id] of pts) {
     const m = MISSIONS.find((q) => q.id === id);
     const done = progress[id];
-    g.fillStyle = done ? '#2e7d32' : id === 'range' ? '#1f5aa6' : '#a01810';
+    g.fillStyle = done ? '#2e7d32' : m.training ? '#1f5aa6' : '#a01810';
     g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2); g.fill();
     g.fillStyle = '#111'; g.fillText(m.title, x + 18, y + 8);
   }

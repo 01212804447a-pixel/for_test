@@ -135,3 +135,37 @@ table.ft tr:nth-child(odd) td { background: #ebe5d5; }
 .toast { position: fixed; left: 50%; top: 30%; transform: translateX(-50%); background: rgba(10,14,18,0.85); border: 1px solid var(--acc); padding: 10px 18px; font-size: 16px; z-index: 30; pointer-events: none; transition: opacity 0.4s; opacity: 0; }
 #hud .hitcam { position: fixed; border: 2px solid var(--acc); display: none; box-shadow: 0 0 0 1px #000; }
 #hud .hclabel { position: absolute; left: 0; right: 0; bottom: -22px; font-size: 12px; background: rgba(8,12,16,0.75); padding: 2px 6px; }
+
+/* ---------- Д-30: панель наводчика, сетки прицелов, карта огня, таблица, гайд ---------- */
+#hud .gunpanel { position: fixed; left: 14px; top: 120px; width: 300px; display: none; background: rgba(10,14,18,0.78); border: 1px solid rgba(160,190,140,0.35); padding: 10px 12px; font-size: 13px; line-height: 1.35; color: #dfe6d8; }
+#hud .gunpanel .gt { font-weight: bold; color: #c9e39a; margin-bottom: 6px; }
+#hud .gunpanel .gr { display: flex; justify-content: space-between; gap: 8px; }
+#hud .gunpanel .gr.big b { font-family: monospace; font-size: 17px; color: #fff; }
+#hud .gunpanel .gk { font-size: 11px; color: #a9b4a0; }
+#hud .gunpanel hr { border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 6px 0; }
+#hud .gunpanel .ok { color: #8fe06a; } #hud .gunpanel .warn { color: #ffb050; }
+#hud .gunpanel .vial { position: relative; height: 16px; margin: 6px 0 4px; border-radius: 8px; background: linear-gradient(#b8d48a, #8fae64); border: 1px solid #39472a; }
+#hud .gunpanel .vial-c { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 0; border-left: 2px solid #233; }
+#hud .gunpanel .vial-c::before, #hud .gunpanel .vial-c::after { content: ''; position: absolute; top: 0; bottom: 0; border-left: 1px solid #233; }
+#hud .gunpanel .vial-c::before { left: -14px; } #hud .gunpanel .vial-c::after { left: 12px; }
+#hud .gunpanel .vial-b { position: absolute; top: 2px; width: 22px; height: 10px; margin-left: -11px; border-radius: 6px; background: rgba(255,255,240,0.85); box-shadow: 0 0 3px #fff; }
+#hud .gunpanel .vial-b.ok { background: #f6ffd8; box-shadow: 0 0 6px #e8ff9a; }
+#hud .gunret { position: fixed; inset: 0; pointer-events: none; display: none; }
+.panel.firemap .fm { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.panel.firemap canvas { width: min(720px, 92vw, calc(100vh - 170px)); height: auto; border: 1px solid #556; cursor: crosshair; background: #dfe4e8; }
+.panel.firemap .fmi { flex: 1; min-width: 240px; font-size: 13px; }
+.panel.firemap .fmi p { margin: 4px 0 8px; } .panel.firemap .fmi .dead { opacity: 0.55; text-decoration: line-through; }
+.panel.firemap .fmm { margin-top: 8px; padding: 8px; background: rgba(255,255,255,0.06); border-left: 3px solid #d06000; }
+.panel.fttable .tblwrap { max-height: 56vh; overflow: auto; }
+.panel.fttable table.ft { border-collapse: collapse; font-size: 12px; width: 100%; }
+.panel.fttable table.ft th, .panel.fttable table.ft td { padding: 3px 6px; text-align: right; }
+.panel.fttable table.ft th { position: sticky; top: 0; background: #d6ceb8; color: #111; font-weight: normal; text-align: center; }
+.panel.fttable .chs .btn { padding: 4px 10px; font-size: 12px; }
+.panel.guide { max-width: 980px; }
+.panel.guide h2 { font-size: 16px; margin: 16px 0 6px; color: #c9e39a; }
+.panel.guide p, .panel.guide li { font-size: 13px; line-height: 1.5; }
+.panel.guide table { border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.panel.guide td { border: 1px solid rgba(255,255,255,0.15); padding: 3px 8px; }
+.panel.guide .ex { background: rgba(255,255,255,0.05); border-left: 3px solid #8fae64; padding: 8px 12px; margin: 8px 0; }
+#hud.gunner .weapon, #hud.gunner .status, #hud.gunner .prompt { display: none; }
+#hud.gunner .radio { top: auto; bottom: 18px; left: 16px; max-width: 520px; }

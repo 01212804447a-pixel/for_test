@@ -44,16 +44,16 @@ float vp_n(vec3 x){ vec3 i=floor(x); vec3 f=fract(x); f=f*f*(3.0-2.0*f);
              mix(mix(vp_h(i+vec3(0,0,1)),vp_h(i+vec3(1,0,1)),f.x),mix(vp_h(i+vec3(0,1,1)),vp_h(i+vec3(1,1,1)),f.x),f.y),f.z); }
 float vp_f(vec3 p){ return vp_n(p)*0.5+vp_n(p*2.07)*0.25+vp_n(p*4.13)*0.125+vp_n(p*8.4)*0.0625; }
 `;
-function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss = 0.5, metal = 0.25, camo = true } = {}) {
+export function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss = 0.5, metal = 0.25, camo = true, dirtAmt = 0.85 } = {}) {
   const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: gloss, metalness: metal, clearcoat: 0.25, clearcoatRoughness: 0.55 });
   const C = cols.map((c) => new THREE.Color(c));
   while (C.length < 3) C.push(C[C.length - 1]);
   m.onBeforeCompile = (sh) => {
     sh.uniforms.vpC0 = { value: C[0] }; sh.uniforms.vpC1 = { value: C[1] }; sh.uniforms.vpC2 = { value: C[2] };
-    sh.uniforms.vpScale = { value: scale }; sh.uniforms.vpDirt = { value: dirtTop }; sh.uniforms.vpSnow = { value: snow }; sh.uniforms.vpCamo = { value: camo ? 1 : 0 };
+    sh.uniforms.vpScale = { value: scale }; sh.uniforms.vpDirt = { value: dirtTop }; sh.uniforms.vpSnow = { value: snow }; sh.uniforms.vpCamo = { value: camo ? 1 : 0 }; sh.uniforms.vpDirtAmt = { value: dirtAmt };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvVpP = position;\nvVpN = normal;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;\nuniform vec3 vpC0, vpC1, vpC2;\nuniform float vpScale, vpDirt, vpSnow, vpCamo;\n${PAINT_GLSL}`)
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;\nuniform vec3 vpC0, vpC1, vpC2;\nuniform float vpScale, vpDirt, vpSnow, vpCamo, vpDirtAmt;\n${PAINT_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 P = vVpP;
         // камуфляж: пятна с чёткими краями
@@ -65,7 +65,7 @@ function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss =
         // мелкая неоднородность краски
         col *= 0.93 + 0.12 * vp_f(P * 9.0);
         // грязь и брызги снизу
-        float dirt = (1.0 - smoothstep(0.25, vpDirt, P.y + (vp_f(P * vec3(2.0, 6.0, 2.0)) - 0.5) * 0.35)) * 0.85;
+        float dirt = (1.0 - smoothstep(0.25, vpDirt, P.y + (vp_f(P * vec3(2.0, 6.0, 2.0)) - 0.5) * 0.35)) * vpDirtAmt;
         col = mix(col, vec3(0.30, 0.27, 0.22), dirt);
         // потёртости на рёбрах
         float edge = smoothstep(0.1, 0.35, length(fwidth(normalize(vVpN)))) * smoothstep(0.55, 0.8, vp_f(P * 14.0));
@@ -77,7 +77,7 @@ function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss =
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = clamp(roughnessFactor + dirt * 0.35 + snowK * 0.3, 0.05, 1.0);`);
   };
-  m.customProgramCacheKey = () => 'vpaint' + cols.join() + scale + dirtTop + snow + camo;
+  m.customProgramCacheKey = () => 'vpaint' + cols.join() + scale + dirtTop + snow + camo + dirtAmt;
   return m;
 }
 

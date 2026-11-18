@@ -2,6 +2,8 @@
 // Попадания по зонам тела, бронежилеты, пробитие преград, рикошеты, взрывы,
 // подавление (пролёт пуль рядом с головой).
 import * as THREE from 'three';
+import { Parts } from '../weapons/gunkit.js';
+import { shellGeometry } from '../artillery/d30model.js';
 import { stepProjectile, SIM_DT } from '../physics/ballistics.js';
 import { AMMO, HAND_GRENADES } from '../data/weapons.js';
 import { randn, rand, clamp } from '../core/math.js';
@@ -43,6 +45,19 @@ export class Projectiles {
     this.grenadeMat = new THREE.MeshStandardMaterial({ color: 0x4a5532, roughness: 0.7 });
   }
 
+  // Снаряд 122 мм (ось вдоль −Z группы, поэтому lookAt направляет носом вперёд)
+  shellMesh() {
+    if (!this._shellProto) {
+      const P = new Parts();
+      shellGeometry(P);
+      const inner = P.build({ shell: new THREE.MeshStandardMaterial({ color: 0x4e5a38, roughness: 0.55, metalness: 0.3 }), copper: new THREE.MeshStandardMaterial({ color: 0x9a6a3a, metalness: 1, roughness: 0.35 }), metal: new THREE.MeshStandardMaterial({ color: 0x5a5d61, metalness: 0.9, roughness: 0.35 }), red: new THREE.MeshStandardMaterial({ color: 0x8a1a12, roughness: 0.6 }) });
+      inner.rotation.y = Math.PI;
+      const g = new THREE.Group(); g.add(inner);
+      this._shellProto = g;
+    }
+    return this._shellProto.clone();
+  }
+
   spawn({ weapon, pos, dir, owner, team, ammoId }) {
     const ammo = AMMO[ammoId || weapon.ammo];
     const d = _d.copy(dir).normalize();
@@ -53,7 +68,7 @@ export class Projectiles {
     const r2 = new THREE.Vector3().crossVectors(r1, d).normalize();
     d.addScaledVector(r1, randn() * disp).addScaledVector(r2, randn() * disp).normalize();
     // разброс начальной скорости (партия патронов)
-    const v0 = ammo.v0 * (1 + randn() * 0.004);
+    const v0 = ammo.v0 * (1 + randn() * (ammo.v0sd ?? 0.004));
     const hl = Math.hypot(d.x, d.z) || 1;
     const p = {
       ammo, owner, team, weapon,
@@ -66,7 +81,11 @@ export class Projectiles {
       byPlayer: owner && owner.isPlayer,
     };
     if (owner && owner.vehicle && owner.vehicle.vel) p.v.add(owner.vehicle.vel);
-    if (ammo.kind === 'rocket' || ammo.kind === 'grenade') {
+    if (ammo.kind === 'shell') {
+      p.mesh = this.shellMesh();
+      p.mesh.position.copy(pos);
+      this.game.scene.add(p.mesh);
+    } else if (ammo.kind === 'rocket' || ammo.kind === 'grenade') {
       p.mesh = ammo.kind === 'rocket' ? this.rocketProto.clone() : new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
       p.mesh.position.copy(pos);
       this.game.scene.add(p.mesh);
@@ -90,7 +109,7 @@ export class Projectiles {
         this._collide(p, _p0, p.p);
         if (p.ammo.fuse && p.t > p.ammo.fuse && p.alive) { this.explode(p.p.clone(), p.ammo.explosive, p.owner); p.alive = false; }
         const sp = p.v.length();
-        if (p.alive && (p.t > 6 || sp < 60 && p.ammo.kind === 'bullet' || p.p.y < -50)) p.alive = false;
+        if (p.alive && (p.t > (p.ammo.maxT || 6) || sp < 60 && p.ammo.kind === 'bullet' || p.p.y < -50)) p.alive = false;
       }
       if (!p.alive) continue;
       if (p.tracer) g.fx.pushTracer(p.p, p.v, g.camPos, p.ammo.tracerColor);
@@ -109,6 +128,7 @@ export class Projectiles {
     }
     this.list = this.list.filter((p) => {
       if (!p.alive && p.mesh) g.scene.remove(p.mesh);
+      if (!p.alive && p.onLand && !p._landed) { p._landed = true; p.onLand(p); }
       return p.alive;
     });
     this.updateGrenades(dt);
@@ -324,9 +344,9 @@ export class Projectiles {
   // Взрыв: фугасное действие + осколки (с учётом укрытий)
   explode(pos, ex, owner, directVehicle = null, directDestructible = null) {
     const g = this.game;
-    const size = clamp(ex.radius / 4, 0.6, 2.2);
+    const size = ex.fxSize || clamp(ex.radius / 4, 0.6, 2.2);
     const ground = g.world.terrain.heightAt(pos.x, pos.z);
-    g.fx.explosion(pos, size, pos.y - ground < 2);
+    if (size >= 3) g.fx.shellBurst(pos, pos.y - ground < 2); else g.fx.explosion(pos, size, pos.y - ground < 2);
     g.audio.explosion(pos, size);
     g.noise(pos, 800, owner ? owner.team : null, owner);
     if (pos.y - ground < 0.6) g.fx.addDecal(new THREE.Vector3(pos.x, ground, pos.z), g.world.terrain.normalAt(pos.x, pos.z), ex.radius * 0.9, 0x202020);

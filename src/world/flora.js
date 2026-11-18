@@ -257,10 +257,10 @@ export function birchGeometry(h, seed) {
 }
 
 // Разброс мелочи по всей карте (инстансы)
-export function scatterGround(scene, terrain, world, { seed = 1, radius = 1050, grass = 5000, shrubs = 1600, stones = 900, drifts = 260, wind = new THREE.Vector3(1, 0, 0), avoid = [] } = {}) {
+export function scatterGround(scene, terrain, world, { seed = 1, radius = 1050, grass = 5000, shrubs = 1600, stones = 900, drifts = 260, wind = new THREE.Vector3(1, 0, 0), avoid = [], center = { x: 0, z: 0 } } = {}) {
   const rnd = mulberry32(seed * 977 + 13);
   const ok = (x, z, clear = 1.2) => {
-    if (Math.hypot(x, z) > radius) return false;
+    if (Math.hypot(x - center.x, z - center.z) > radius) return false;
     const m = terrain.maskAt(x, z);
     if (m === 1 || m === 2) return false;
     const h = terrain.heightAt(x, z);
@@ -289,7 +289,7 @@ export function scatterGround(scene, terrain, world, { seed = 1, radius = 1050, 
         x = px + (rnd() - 0.5) * 9; z = pz + (rnd() - 0.5) * 9;
       } else {
         const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * radius;
-        x = Math.cos(a) * d; z = Math.sin(a) * d;
+        x = center.x + Math.cos(a) * d; z = center.z + Math.sin(a) * d;
       }
       if (!ok(x, z, opts.clear || 0.8)) continue;
       const s = sMin + rnd() * (sMax - sMin);

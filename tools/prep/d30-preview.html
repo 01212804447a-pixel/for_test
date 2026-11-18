@@ -1,0 +1,31 @@
+<!doctype html><html><head><style>body{margin:0}</style>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/examples/jsm/":"/node_modules/three/examples/jsm/","three/addons/":"/node_modules/three/examples/jsm/"}}</script></head><body>
+<script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+try {
+const q = new URLSearchParams(location.search);
+const { buildD30 } = await import('/src/artillery/d30model.js');
+const W = +(q.get('w') || 1400), H = +(q.get('h') || 700);
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setSize(W, H); r.toneMapping = THREE.ACESFilmicToneMapping; r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(r.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xb7c0c8);
+const pm = new THREE.PMREMGenerator(r);
+scene.environment = pm.fromEquirectangular(await new RGBELoader().loadAsync('/assets/hdr/snowy_field.hdr')).texture;
+scene.environmentIntensity = 0.6;
+const sun = new THREE.DirectionalLight(0xfff2e0, 2.6); sun.position.set(6, 9, 4); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8 }); scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.92 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+const g = buildD30();
+g.yaw.rotation.y = +(q.get('az') || 0); g.pitch.rotation.x = +(q.get('el') || 0.15);
+scene.add(g.root);
+const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 35), W / H, 0.05, 200);
+const p = (q.get('p') || '6,2.5,-4').split(',').map(Number), t = (q.get('t') || '0,0.9,-1').split(',').map(Number);
+cam.position.set(...p); cam.lookAt(...t);
+r.render(scene, cam);
+window.out = 'ok';
+} catch (e) { window.out = String(e.stack || e); }
+window.done = true;
+</script></body></html>

@@ -126,7 +126,23 @@ export class World {
   addStaticGeometry(material, geo, cast = true) { this._addStatic(material, geo, cast); }
 
   finalize({ navCenter = { x: 0, z: 0 }, navSize = 600 } = {}) {
+    // статичная геометрия сливается по материалу и по квадратам 400 м — так работает отсечение
+    // по пирамиде видимости и по области теней (на больших картах — в разы меньше вершин за кадр)
+    const TILE = 400;
+    const groups = [];
     for (const [mat, e] of this._static) {
+      const tiles = new Map();
+      for (const g of e.geos) {
+        if (!g.boundingBox) g.computeBoundingBox();
+        const bb = g.boundingBox;
+        const key = Math.floor((bb.min.x + bb.max.x) / 2 / TILE) + ',' + Math.floor((bb.min.z + bb.max.z) / 2 / TILE);
+        let t = tiles.get(key);
+        if (!t) { t = []; tiles.set(key, t); }
+        t.push(g);
+      }
+      for (const geos of tiles.values()) groups.push([mat, { geos, cast: e.cast }]);
+    }
+    for (const [mat, e] of groups) {
       const withColor = !!mat.vertexColors;
       const merged = mergeGeometries(e.geos.map((g) => {
         // оставляем общий набор атрибутов

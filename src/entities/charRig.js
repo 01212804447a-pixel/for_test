@@ -546,9 +546,12 @@ export class CharAnimator {
       const prog = reloadOn ? st.reload : 1;
       lib.sample(rc, clamp(prog, 0, 1) * rc.dur * 0.98, this.reloadW, acc, null, this.wP > 0.5 ? lib.armsMask : up);
     }
-    // выстрел: короткий клип с отдачей поверх
+    // выстрел: клип стрельбы стоя только для стрельбы «от бедра» и слабо. При прицельном огне
+    // (особенно очередями) он перезапускался каждый выстрел и сбивал руки и корпус —
+    // отдача при прицеливании процедурная (ниже: толчок корпуса и оружия)
     const fc = C.get('Firing_Rifle');
-    if (this.fireT < fc.dur && this.wP < 0.5) lib.sample(fc, this.fireT, 0.9 * (1 - this.fireT / fc.dur) * rest, acc, null, lib.noFingersUpper);
+    const fireW = 0.35 * (1 - this.fireT / fc.dur) * rest * (1 - this.aimW) * this.wS;
+    if (this.fireT < fc.dur && this.wP < 0.5 && fireW > 0.01) lib.sample(fc, this.fireT, fireW, acc, null, lib.spineMask);
     const hc = C.get('Hit_Reaction');
     if (this.hitT < hc.dur && this.wP < 0.5) lib.sample(hc, this.hitT, 0.8 * (1 - this.hitT / hc.dur), acc, null, up);
     rig.applyPose();
@@ -587,12 +590,12 @@ export class CharAnimator {
     this.rec += this.recV * dt;
     if (Math.abs(this.rec) > 1e-4 && standW > 0.01) {
       const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(this.root.quaternion);
-      rig.rotateWorld(b.Spine2, _q.setFromAxisAngle(ax, -this.rec * 0.035 * standW));
+      rig.rotateWorld(b.Spine2, _q.setFromAxisAngle(ax, -this.rec * 0.06 * standW));
     }
     this._gunMatrix();
     // лёжа: оружие прикладом в плечо, обе руки — на оружие
     if (this.wP > 0.01) this._proneGun(Dv, sp);
-    if (Math.abs(this.rec) > 1e-4) this.gunWorld.multiply(_m.makeTranslation(0, this.rec * 0.004, this.rec * 0.018));
+    if (Math.abs(this.rec) > 1e-4) this.gunWorld.multiply(_m.makeTranslation(0, this.rec * 0.01, this.rec * 0.09));
     if (this.wP > 0.5) this._arm('Right', this.gun.gripR, this.gripHandQ('Right'), 1);
     // левая рука на цевьё
     const lw = 1 - this.reloadW;

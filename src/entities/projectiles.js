@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { Parts } from '../weapons/gunkit.js';
 import { shellGeometry } from '../artillery/d30model.js';
+import { grenadeModel } from '../weapons/guns.js';
 import { stepProjectile, SIM_DT } from '../physics/ballistics.js';
 import { AMMO, HAND_GRENADES } from '../data/weapons.js';
 import { randn, rand, clamp } from '../core/math.js';
@@ -89,7 +90,7 @@ export class Projectiles {
       rx: -d.z / hl, rz: d.x / hl,
       tracer: ammo.tracer || (!ammoId && ammo.tracerEvery ? owner && owner.shotsFired % ammo.tracerEvery === 0 : false),
       alive: true, dist: 0, supp: new Set(), mesh: null, origin: pos.clone(),
-      thrustErr: ammo.motor ? new THREE.Vector3(randn() * 0.012, randn() * 0.012, randn() * 0.012) : null,
+      thrustErr: ammo.motor ? new THREE.Vector3(randn() * 0.0025, randn() * 0.0025, randn() * 0.0025) : null, // рассеивание ПГ-7: ~2 тыс.
       ownerVehicle: owner && owner.vehicle ? owner.vehicle : null,
       byPlayer: owner && owner.isPlayer,
     };
@@ -426,10 +427,9 @@ export class Projectiles {
   // ----- ручные гранаты -----
   throwGrenade(owner, pos, vel, type = 'f1', { visual = false, fuse = null } = {}) {
     const def = HAND_GRENADES[type];
-    const mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
-    mesh.scale.setScalar(1.3);
+    if (!this._f1Proto) { try { this._f1Proto = grenadeModel(); } catch (e) { this._f1Proto = new THREE.Mesh(this.grenadeGeo, this.grenadeMat); } }
+    const mesh = this._f1Proto.clone();
     mesh.position.copy(pos);
-    mesh.castShadow = true;
     this.game.scene.add(mesh);
     const gr = { owner, pos: pos.clone(), vel: vel.clone(), fuse: fuse ?? rand(def.fuse[0], def.fuse[1]), mesh, ammo: AMMO[def.ammo], visual, rest: false, warned: false, spin: new THREE.Vector3(rand(-10, 10), rand(-10, 10), rand(-10, 10)) };
     this.grenades.push(gr);

@@ -12,7 +12,7 @@ PORT="${PORT:-80}"
 echo "== Пакеты =="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -q
-apt-get install -y -q git curl ca-certificates nodejs npm
+apt-get install -y -q git curl ca-certificates nodejs
 node -v
 
 echo "== Пользователь и файлы игры =="
@@ -25,7 +25,6 @@ else
   git clone --depth 1 -b "$BRANCH" "$REPO" "$DIR"
 fi
 cd "$DIR"
-npm install --omit=dev --no-audit --no-fund
 chown -R negs:negs /opt/negs
 
 echo "== Служба =="

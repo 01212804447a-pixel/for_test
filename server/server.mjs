@@ -2,14 +2,14 @@
 // — раздаёт саму игру (index.html, dist/…) по HTTP;
 // — WebSocket /ws: комнаты кооператива и PvP, ретрансляция состояния игроков и мира,
 //   проверка попаданий и счёт в PvP, время матча.
-// Запуск: node server/server.mjs   (порт — переменная PORT, по умолчанию 8080)
+// Запуск: node server/server.mjs   (порт — переменная PORT, по умолчанию 8080). Зависимостей нет — нужен только Node.js 18+.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
+import { WSServer } from './ws-lite.mjs';
 
 const VER = 1;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -279,7 +279,7 @@ function onMessage(c, raw) {
 }
 
 // ---------------------------------------------------------------- WebSocket
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
+const wss = new WSServer({ server, path: '/ws', maxPayload: 256 * 1024 });
 wss.on('connection', (ws, req) => {
   const c = { id: 'p' + nextId++, ws, name: 'Боец', room: null, team: 'negs', weapon: 'ak74m', ready: false, ping: 0, alive: false, kills: 0, deaths: 0, hitBucket: 30, msgT: now(), msgN: 0 };
   clients.set(c.id, c);

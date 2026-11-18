@@ -493,7 +493,7 @@ function grenadeF1(P) {
   const pos = body.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const a = Math.atan2(z, x), e = Math.asin(y / 0.028);
+    const a = Math.atan2(z, x), e = Math.asin(Math.max(-1, Math.min(1, y / 0.028))); // на полюсах y/r чуть больше 1 → NaN
     const seg = Math.abs(Math.sin(a * 4)) ** 0.35 * Math.abs(Math.sin(e * 5)) ** 0.35;
     const k = 0.93 + 0.07 * seg;
     pos.setXYZ(i, x * k, y * 1.25 * k, z * k);
@@ -504,6 +504,15 @@ function grenadeF1(P) {
   P.add('steel', cylY(0.009, 0.03, 0.048, { seg: 16 }));
   P.add('steel', side([[-0.003, 0.046], [-0.007, 0.052, 0.002], [0.026, 0.02, 0.004], [0.03, -0.02, 0.004], [0.026, -0.022], [0.022, 0.016], [-0.003, 0.041]], 0.012, { bevel: 0.0008 }));
   P.add('steelBright', torus(0.011, 0.0013, { x: -0.014, y: 0.05, z: 0, axis: 'z' }));
+}
+
+// Граната Ф-1 для мира (брошенная): та же модель, что в руках
+export function grenadeModel() {
+  const P = new Parts();
+  grenadeF1(P);
+  const g = P.build(gunMats());
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
+  return g;
 }
 
 // ---------- сборка ----------

@@ -391,11 +391,11 @@ export class UI {
     this.show(`<h1>Игра по локальной сети</h1>
       <div class="brief">
       <p><b>1. Один компьютер — сервер.</b> На нём должен быть установлен <b>Node.js</b> (версия 18 или новее, nodejs.org) и папка с игрой (скачать с GitHub: «Code» → «Download ZIP», ветка с игрой).</p>
-      <p><b>2. Запуск сервера.</b> В папке игры откройте терминал (Windows: в адресной строке проводника наберите <code>cmd</code>) и выполните:<br><code>npm install</code> (один раз), затем <code>npm run server</code>.<br>Сервер напишет адреса, например <code>http://192.168.1.10:8080</code>.</p>
+      <p><b>2. Запуск сервера.</b> В папке игры откройте терминал (Windows: в адресной строке проводника наберите <code>cmd</code>) и выполните:<br><code>node server/server.mjs</code> (Windows: двойной щелчок по <code>server\\start-lan.bat</code>). Ничего устанавливать через npm не нужно.<br>Сервер напишет адреса, например <code>http://192.168.1.10:8080</code>.</p>
       <p><b>3. Все игроки</b> (и на самом сервере тоже) открывают в браузере этот адрес. Адрес сервера в меню «Сетевая игра» подставится сам.</p>
       <p><b>4. Брандмауэр.</b> Если другие компьютеры не открывают страницу — разрешите Node.js в брандмауэре Windows для частной сети (окно появляется при первом запуске) или откройте порт 8080.</p>
       <p><b>5.</b> Один игрок создаёт комнату, остальные входят. В кооперативе создатель комнаты — хост: у него считаются противник и задачи, поэтому лучше создавать комнату на самом мощном компьютере.</p>
-      <p class="note">Другой порт: <code>PORT=9000 npm run server</code> (Linux/macOS) или <code>set PORT=9000 &amp;&amp; npm run server</code> (Windows).</p>
+      <p class="note">Другой порт: <code>PORT=9000 node server/server.mjs</code> (Linux/macOS) или <code>set PORT=9000 &amp;&amp; node server\\server.mjs</code> (Windows).</p>
       </div><div class="row"><button class="btn" id="b">Назад</button></div>`, { wide: true });
     this.bind('#b', () => back());
   }

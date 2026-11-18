@@ -116,6 +116,7 @@ export class Mission {
     this.world = new World(this.scene, this.terrain);
     this.mats = ST.makeMats();
     this.fx = new Effects(this.scene);
+    this.fx.night = e.time === 'night' || e.time === 'dusk';
     this.fx.wind.copy(this.wind);
     this.fx.light = e.time === 'night' ? 0.3 : e.time === 'dusk' ? 0.65 : 1;
     this.projectiles = new Projectiles(this);

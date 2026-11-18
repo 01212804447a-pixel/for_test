@@ -192,7 +192,8 @@ export class Effects {
     if (smoke) for (let i = 0; i < 3; i++) {
       this.smoke.emit(pos.x, pos.y, pos.z, dir.x * rand(1, 3) + rand(-0.3, 0.3), dir.y * 2 + rand(0, 0.5), dir.z * rand(1, 3) + rand(-0.3, 0.3), rand(0.8, 1.6), 0.15 * scale, 1.2 * scale, 0.85, 0.85, 0.85, 0.18, 0, 1.5, -0.25);
     }
-    this.flashLight(pos, 40 * scale, 0.05);
+    // свет вспышки — чуть впереди дульного среза: стрелка не «заливает» оранжевым
+    this.flashLight(this._v.copy(pos).addScaledVector(dir, 0.7), (this.night ? 16 : 7) * scale, 0.045, 0xffb060, 18);
   }
 
   impact(pos, normal, mat, scale = 1) {

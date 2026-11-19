@@ -39,6 +39,10 @@ export class HUD {
     this.mapCanvas = el('canvas', '', this.mapBox); this.mapCanvas.width = this.mapCanvas.height = 760;
     this.tab = el('div', 'tabbox', root);
     this.hint = el('div', 'hint', root);
+    // счётчик кадров: средний FPS и время кадра за полсекунды, внизу в углу
+    this.fps = el('div', 'fps', root);
+    this.fps.style.cssText = 'position:absolute;right:6px;bottom:3px;font:11px/1.2 monospace;color:#cfd8dc;background:rgba(10,14,18,0.45);padding:1px 5px;border-radius:3px;pointer-events:none;z-index:30';
+    this._fpsN = 0; this._fpsT0 = performance.now(); this._fpsLast = this._fpsT0; this._fpsMax = 0;
     this.msgT = 0; this.bigT = 0; this.dmgT = 0; this.grenT = 0;
     this.radioLines = [];
     this.resize();
@@ -88,7 +92,21 @@ export class HUD {
 
   grenade() { this.grenT = 2.5; }
 
+  tickFps() {
+    const t = performance.now(), d = t - this._fpsLast;
+    this._fpsLast = t;
+    if (d > 1500) { this._fpsN = 0; this._fpsT0 = t; this._fpsMax = 0; return; } // пауза/загрузка — не считать
+    this._fpsN++; this._fpsMax = Math.max(this._fpsMax, d);
+    if (t - this._fpsT0 >= 500) {
+      const fps = (this._fpsN * 1000) / (t - this._fpsT0);
+      this.fps.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} мс (макс ${Math.round(this._fpsMax)})`;
+      this.fps.style.color = fps >= 50 ? '#b9e6a4' : fps >= 30 ? '#ecd98a' : '#f09a8a';
+      this._fpsN = 0; this._fpsT0 = t; this._fpsMax = 0;
+    }
+  }
+
   update(m, dt) {
+    this.tickFps();
     const p = m.player, b = p.body;
     // таймеры
     this.msgT -= dt; if (this.msgT <= 0) this.msg.style.opacity = 0;
@@ -100,7 +118,11 @@ export class HUD {
     const sup = p.suppression, hp = b.health / b.maxHealth;
     const v = Math.max(sup * 0.75, (1 - hp) * 0.55);
     this.vig.style.opacity = v;
-    m.renderer.domElement.style.filter = sup > 0.35 ? `blur(${((sup - 0.35) * 2.2).toFixed(2)}px) saturate(${(1 - sup * 0.4).toFixed(2)})` : (hp < 0.3 ? 'saturate(0.6)' : '');
+    // контузия: муть и двоение в глазах, спадает к концу
+    if (m._concT > 0) m._concT -= dt;
+    const cq = m._concT > 0 ? Math.min(1, m._concT / Math.max(0.1, m._concT0 * 0.5)) * (0.4 + m._concK) : 0;
+    m.renderer.domElement.style.filter = cq > 0.05 ? `blur(${(cq * 3.2).toFixed(2)}px) saturate(${(1 - cq * 0.45).toFixed(2)}) brightness(${(1 + cq * 0.25).toFixed(2)})`
+      : sup > 0.35 ? `blur(${((sup - 0.35) * 2.2).toFixed(2)}px) saturate(${(1 - sup * 0.4).toFixed(2)})` : (hp < 0.3 ? 'saturate(0.6)' : '');
     this.drawCompass(m);
     // задачи — прогресс
     const st = m.stages[m.stageIdx];

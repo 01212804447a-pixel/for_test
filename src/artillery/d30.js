@@ -33,6 +33,42 @@ for (const c of CHARGES) {
     explosive: { pen: 0, radius: 2, frag: 0, dmg: 20, fxSize: 1.2, smoke: { dur: 90, size: 2.2 } },
   });
 }
+// Осветительный С-463: та же баллистика, дистанционная трубка Т-7 — расчёт ставит её по таблице
+// на разрыв ≈ 450 м над целью; факел на парашюте горит ≈ 50 с, снижается ≈ 5 м/с
+for (const c of CHARGES) {
+  AMMO['s463_' + c.id] = prepareAmmo({
+    ...AMMO['of462_' + c.id], id: 's463_' + c.id, name: `С-463 (осветительный), заряд ${c.name}`, short: 'С-463',
+    illum: { h: 450, dur: 50, fall: 5 }, explosive: null,
+  });
+}
+// Кумулятивный БК-6М: 21,6 кг, специальный заряд, V₀ 740 м/с, бронепробиваемость ≈ 460 мм
+// по нормали на любой дальности (кумулятивной струе скорость не важна); прямой наводкой до 2 км
+AMMO.bk6m = prepareAmmo({
+  id: 'bk6m', name: 'БК-6М (кумулятивный), заряд специальный', short: 'БК-6М', kind: 'shell',
+  model: 'G1', bc: 3.1, mass: 21.63, caliber: 0.1219, v0: 740,
+  spin: { sg: 1.6, dir: 1 }, v0sd: 0.0015, maxT: 30, armDist: 25,
+  explosive: { pen: 460, radius: 5, frag: 22, dmg: 300, fxSize: 2.2 },
+});
+// «Лом» — подкалиберный бронебойный (БПС) с отделяющимся поддоном. Для Д-30 штатного БПС нет:
+// это игровое допущение по образцу 125-мм «ломов», с поправкой на низкое давление гаубицы:
+// стреловидный сердечник 4,6 кг, V₀ 1050 м/с, ≈ 340 мм у дула, падает со скоростью
+AMMO.bm122 = prepareAmmo({
+  id: 'bm122', name: '«Лом» — БПС (условный), заряд специальный', short: '«Лом»', kind: 'shell',
+  model: 'G7', bc: 1.6, mass: 4.6, caliber: 0.032, v0: 1050,
+  spin: { sg: 1.2, dir: 1 }, v0sd: 0.001, maxT: 12, pen: 340, apfsds: true, tracer: true, tracerColor: [1, 0.55, 0.2],
+});
+// снаряды Д-30: порядок переключения (Z)
+export const SHELLS = {
+  of: { name: 'ОФ-462', long: 'осколочно-фугасный', short: 'оск.', id: (c) => 'of462_' + c },
+  d: { name: 'Д-462', long: 'дымовой (завеса ≈ 1,5 мин)', short: 'дым.', id: (c) => 'd462_' + c },
+  s: { name: 'С-463', long: 'осветительный (факел на парашюте ≈ 50 с, разрыв ≈ 450 м над целью)', short: 'осв.', id: (c) => 's463_' + c },
+  bk: { name: 'БК-6М', long: 'кумулятивный, прямой наводкой (ОП4М-45), 460 мм брони', short: 'кум.', id: () => 'bk6m', special: true },
+  bm: { name: '«Лом»', long: 'подкалиберный БПС (условный), прямой наводкой, 340 мм у дула', short: 'БПС', id: () => 'bm122', special: true },
+};
+export const SHELL_ORDER = ['of', 'd', 's', 'bk', 'bm'];
+export const SPECIAL_CHARGE = { id: 'sp', name: 'специальный', short: 'СПЕЦ' };
+export function shellAmmoId(shell, ci) { const S = SHELLS[shell] || SHELLS.of; return S.id(CHARGES[ci].id); }
+
 WEAPONS.d30 = {
   id: 'd30', name: 'Д-30 (2А18)', cls: '122-мм гаубица', ammo: 'of462_full', mag: 1, mags: 40,
   rpm: 7, modes: ['single'], disp: 0.12, sound: 'gun122', artillery: true,
@@ -60,9 +96,13 @@ export function fly(ammo, env, angle, { dt = 1 / 120, windX = 0, windZ = 0, unti
 
 const tables = new Map();
 
-// Таблица стрельбы для заряда (ленивый расчёт, кэш)
-export function firingTable(ci) {
-  if (tables.has(ci)) return tables.get(ci);
+// Таблица стрельбы для заряда (ленивый расчёт, кэш); shell — для выстрелов прямой наводкой
+// (БК-6М, «лом») своя таблица на специальном заряде
+export function firingTable(ci, shell = 'of') {
+  const special = SHELLS[shell] && SHELLS[shell].special;
+  const key = special ? shell : ci;
+  if (tables.has(key)) return tables.get(key);
+  if (special) return directTable(shell);
   const ch = CHARGES[ci];
   const ammo = prepareAmmo({ ...AMMO['of462_' + ch.id] });
   const env = NORMAL_ENV;
@@ -114,6 +154,23 @@ export function firingTable(ci) {
   }
   const T = { charge: ch, ci, rows, maxRange: best, maxSight: maxM, ammo };
   tables.set(ci, T);
+  return T;
+}
+
+// Таблица прямой наводки (специальный заряд): дальность 100…2000/3000 м через 100 м
+function directTable(shell) {
+  const ammo = prepareAmmo({ ...AMMO[SHELLS[shell].id()] });
+  const env = NORMAL_ENV;
+  const maxD = shell === 'bm' ? 3000 : 2000;
+  const rows = [];
+  for (let D = 100; D <= maxD; D += 100) {
+    let lo = 0, hi = 60;
+    for (let k = 0; k < 24; k++) { const mid = (lo + hi) / 2; if (fly(ammo, env, mid * MIL, { dt: 1 / 240 }).x < D) lo = mid; else hi = mid; }
+    const m = (lo + hi) / 2, r = fly(ammo, env, m * MIL, { dt: 1 / 240 });
+    rows.push({ D, sight: m, dXmil: 0, t: r.t, top: r.top, fall: r.fall / MIL, drift: 0, dXt: 0, dXw: 0, dZw: 0, vEnd: r.vEnd });
+  }
+  const T = { charge: { ...SPECIAL_CHARGE, v0: ammo.v0 }, ci: -1, shell, rows, maxRange: maxD, maxSight: rows[rows.length - 1].sight, ammo, direct: true };
+  tables.set(shell, T);
   return T;
 }
 

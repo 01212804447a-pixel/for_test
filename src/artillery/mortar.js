@@ -13,6 +13,7 @@ import { charAvailable } from '../entities/charRig.js';
 import { CrewSoldier, crewItems } from './crew.js';
 import { GunUI } from './gunUI.js';
 import { Howitzer } from './howitzer.js';
+import { massBlast } from './ammoPile.js';
 import { setupEmplace } from './emplace.js';
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -82,12 +83,12 @@ export class Mortar {
     this.boxIt = {
       pos: new THREE.Vector3(), r: 1.6, hold: 0.4,
       get label() { return `Взять мину ${self.shellType === 'd' ? 'Д-832ДУ (дымовую)' : 'О-832ДУ'} — заряд ${CHARGES82[self.ci].name} (осталось ${self.shellType === 'd' ? self.smokes : self.mines})`; },
-      enabled: () => this.ready && this.box.alive && !this.crewAlive() && m.player.body.alive && !m.player.carry && !m.player.gun && !m.player.vehicle,
+      enabled: () => this.ready && this.box.alive && m.player.body.alive && !m.player.carry && !m.player.gun && !m.player.vehicle,
       action: () => this.manualPick(m.player),
     };
     this.muzzleIt = {
       pos: new THREE.Vector3(), r: 1.4, hold: 0.3, label: 'Опустить мину в ствол — выстрел!',
-      enabled: () => { const c = m.player.carry; return this.ready && !!c && c.item === 'mine' && c.gun === this; },
+      enabled: () => { const c = m.player.carry; return this.ready && !!c && c.item === 'mine' && (c.gun === this || c.free); },
       action: () => this.manualDrop(m.player),
     };
     m.interactables.push(this.gunIt, this.boxIt, this.muzzleIt);
@@ -152,16 +153,15 @@ export class Mortar {
   }
   boxExplode(by) {
     const m = this.m, d = this.box, P = d.pos.clone();
+    const mines = this.mines, smokes = this.smokes;
     this.mines = 0; this.smokes = 0; this.load = null; this.loaded = null;
     for (const c of this.crew) c.job = null;
     if (d.collider) { m.world.removeObstacle(d.collider); d.collider = null; }
     d.mesh.visible = false;
-    m.fx.shellBurst(P); m.audio.explosion(P, 2.2);
-    for (let k = 1; k <= 3; k++) m.after(0.15 * k + Math.random() * 0.2, () => { const Q = P.clone().add(new THREE.Vector3((Math.random() - 0.5) * 5, 0, (Math.random() - 0.5) * 5)); Q.y = m.terrain.heightAt(Q.x, Q.z) + 0.3; m.fx.explosion(Q, 1.6, true); m.audio.explosion(Q, 1.2); });
-    if (this.smokes > 0 || true) m.smokeScreens && m.smokeScreens.add(P, { dur: 40, size: 1.4, burst: true });
-    m.fx.addFire(P, 1.4, 90);
-    if (!m.netVisual) m.projectiles.explode(P, { radius: 12, frag: 40, dmg: 460, pen: 20, fxSize: 2.6 }, by, null, null, { fx: false });
-    m.hud.message(`Взрыв мин у ${this.name}!`, 4, true);
+    // сила взрыва — по числу оставшихся мин (дымовые — слабее, но дают завесу)
+    if (mines + smokes > 0) massBlast(m, P, { mines: mines + smokes * 0.4 }, by);
+    if (smokes > 0) m.smokeScreens && m.smokeScreens.add(P, { dur: 30 + smokes * 2, size: Math.min(2.2, 1 + smokes * 0.1), burst: true });
+    m.hud.message(`Взрыв мин у ${this.name}: ${mines + smokes} шт.!`, 4, true);
   }
 
   // ---------- заряжание ----------
@@ -280,16 +280,16 @@ export class Mortar {
     if (this[k] <= 0) { if (!fromNet) this.m.hud.message('Мины кончились', 2); return; }
     this[k]--;
     if (fromNet) return;
-    p.carry = { item: 'mine', gun: this, ci: this.ci, shell: sh, speed: 2.6 };
+    p.carry = { item: 'mine', gun: this, ci: this.ci, shell: sh, speed: 2.6, onDrop: () => { if (!(this.m.ammoPiles && this.m.ammoPiles.dropCarry())) { p.carry = null; this.m.hud.message('Груз брошен', 1.5); } } };
     this.m.audio.mech('reload');
-    this.m.hud.message(`Мина в руках (заряд ${CHARGES82[this.ci].name}): к дульному срезу, E — опустить в ствол`, 3);
+    this.m.hud.message(`Мина в руках (заряд ${CHARGES82[this.ci].name}): к дульному срезу — E, или G — положить на землю`, 3);
     this._net(['k', sh === 'd' ? 1 : 0]);
   }
   manualDrop(p) {
     const c = p.carry;
     if (!c) return;
     p.carry = null;
-    this.loaded = { ci: c.ci, shell: c.shell };
+    this.loaded = { ci: c.ci ?? this.ci, shell: c.shell === 'd' ? 'd' : 'o' };
     this.m.audio.mech('switch');
     this.m.after(0.35, () => this._shoot(p.body));
   }

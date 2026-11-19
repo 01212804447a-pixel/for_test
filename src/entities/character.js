@@ -29,6 +29,13 @@ export class CharacterModel {
     this.far = false;
   }
 
+  setWeapon(weaponId) {
+    const k = TP_KIND[weaponId] || 'ak74';
+    if (this.gun && this.gun.key === k) return;
+    this.gun = thirdPersonGun(k);
+    this.anim.setGun(this.gun);
+  }
+
   get deadT() { return this.anim.deadT; }
   set kick(v) { if (v > 0) this.anim.shot(); }
   get kick() { return 0; }

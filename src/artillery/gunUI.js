@@ -1,19 +1,22 @@
 // Интерфейс наводчика Д-30: панель приборов, сетки панорамы ПГ-1М и прицела ОП4М-45,
 // карта огня с измерением дальности и дирекционного угла, таблица стрельбы, гайд.
-import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid, GRID } from './d30.js';
+import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid, GRID, SHELLS } from './d30.js';
 
 const CARD = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
 
 // Описание орудия для интерфейса (по умолчанию — Д-30); у миномёта своё (mortar.js)
 export const D30_SPEC = {
-  title: 'Д-30', charges: CHARGES, table: firingTable, panoFov: 10.7, panoName: 'ПГ-1М',
-  shell: () => 'ОФ-462',
-  fuzeRow: (h) => `<div class="gr"><span>Взрыватель (X)</span><b>${h.fuze === 'О' ? 'осколочное' : 'фугасное'}</b></div><div class="gr"><span>Снаряд (Z)</span><b>${h.shellType === 'd' ? 'Д-462 дымовой' : 'ОФ-462'}</b></div>`,
-  loadedText: (L) => `заряд ${CHARGES[L.ci].name}, ${L.shell === 'd' ? 'дым.' : L.fuze === 'О' ? 'оск.' : 'фуг.'}`,
+  title: 'Д-30', charges: CHARGES, panoFov: 10.7, panoName: 'ПГ-1М',
+  // таблица: для БК-6М и «лома» — своя таблица прямой наводки на специальном заряде
+  table: (ci, h) => firingTable(ci, h ? (h.loaded ? h.loaded.shell : h.load ? h.load.shell : h.shellType) : 'of'),
+  shell: (h) => SHELLS[h.loaded ? h.loaded.shell : h.shellType].name,
+  fuzeRow: (h) => `<div class="gr"><span>Снаряд (Z)</span><b>${SHELLS[h.shellType].name} · ${SHELLS[h.shellType].short}</b></div>${h.shellType === 'of' ? `<div class="gr"><span>Взрыватель (X)</span><b>${h.fuze === 'О' ? 'осколочное' : 'фугасное'}</b></div>` : h.shellType === 's' ? '<div class="gr"><span>Трубка Т-7</span><b>по таблице, ≈ 450 м над целью</b></div>' : ''}`,
+  loadedText: (L) => SHELLS[L.shell].special ? `${SHELLS[L.shell].name}, заряд специальный` : `заряд ${CHARGES[L.ci].name}, ${L.shell === 'of' ? (L.fuze === 'О' ? 'оск.' : 'фуг.') : SHELLS[L.shell].short}`,
   views: { eye: 'обзор', pano: 'ПГ-1М', op4m: 'ОП4М-45', side: 'со стороны' },
-  keysExtra: ' · X — взрыватель · Z — дымовой',
+  keysExtra: ' · Z — снаряд · X — взрыватель',
   tableTitle: 'Таблица стрельбы 122-мм гаубицы Д-30',
-  tableNote: (T) => `Снаряд ОФ-462, взрыватель РГМ-2. Заряд <b>${T.charge.name}</b> (V₀ = ${T.charge.v0} м/с). Наибольшая дальность ${Math.round(T.maxRange).toLocaleString('ru')} м при прицеле ${T.maxSight}.`,
+  tableNote: (T) => T.direct ? `Снаряд ${SHELLS[T.shell].name}, заряд <b>специальный</b> (V₀ = ${T.charge.v0} м/с). Стрельба прямой наводкой по прицелу ОП4М-45: метку дальности — на цель. Скорость у цели — в последнем столбце.`
+    : `Снаряд ОФ-462 (С-463, Д-462 — та же таблица), взрыватель РГМ-2. Заряд <b>${T.charge.name}</b> (V₀ = ${T.charge.v0} м/с). Наибольшая дальность ${Math.round(T.maxRange).toLocaleString('ru')} м при прицеле ${T.maxSight}.`,
 };
 
 export class GunUI {
@@ -105,11 +108,11 @@ export class GunUI {
         g.beginPath(); g.moveTo(x, cy); g.lineTo(x, cy + (k % 10 === 0 ? 10 : 5)); g.stroke();
         if (k % 20 === 0) g.fillText(String(Math.abs(k) / 10), x, cy + 22);
       }
-      const T = this.spec.table(h.loaded ? h.loaded.ci : h.ci);
+      const T = this.spec.table(h.loaded ? h.loaded.ci : h.ci, h);
       g.textAlign = 'left';
       for (const r of T.rows) {
         if (r.D > 4000) break;
-        if (r.D % 400 !== 0 && r.D > 1200) continue;
+        if (T.direct ? r.D % 200 !== 0 && r.D > 1000 : r.D % 400 !== 0 && r.D > 1200) continue;
         const y = cy + r.sight * pxPerMil;
         if (y > cy + R - 10) break;
         g.beginPath(); g.moveTo(cx - 9, y); g.lineTo(cx + 9, y); g.stroke();
@@ -117,7 +120,7 @@ export class GunUI {
       }
       g.textAlign = 'center';
       g.fillStyle = 'rgba(10,14,18,0.75)'; g.fillRect(cx - 120, cy + R * 0.72, 240, 26);
-      g.fillStyle = '#e8f0d0'; g.font = '13px Arial'; g.fillText(`шкала дальностей: заряд ${this.spec.charges[h.loaded ? h.loaded.ci : h.ci].name}, ×100 м`, cx, cy + R * 0.72 + 17);
+      g.fillStyle = '#e8f0d0'; g.font = '13px Arial'; g.fillText(T.direct ? `шкала ${SHELLS[T.shell].name}, ×100 м` : `шкала дальностей: заряд ${this.spec.charges[h.loaded ? h.loaded.ci : h.ci].name}, ×100 м`, cx, cy + R * 0.72 + 17);
     }
     g.restore();
     // окно камеры снаряда не закрываем маской окуляра
@@ -217,21 +220,27 @@ export class GunUI {
   }
 
   // ---------- таблица стрельбы ----------
-  table(ci) {
-    const m = this.m, ui = m.app.ui, S = this.spec;
-    const T = S.table(ci);
+  table(ci, direct = null) {
+    const m = this.m, ui = m.app.ui, S = this.spec, h = this.h;
+    if (direct === null) direct = S.title === 'Д-30' && SHELLS[h.shellType] && SHELLS[h.shellType].special ? h.shellType : '';
+    const T = direct ? S.table(ci, { shellType: direct }) : S.table(ci);
     const e = m.def.env;
-    const rows = T.rows.map((r) => `<tr><td>${r.D.toLocaleString('ru')}</td><td><b>${r.sight.toFixed(0)}</b></td><td>${r.dXmil.toFixed(0)}</td><td>${r.t.toFixed(1)}</td><td>${r.drift.toFixed(0)}</td><td>${r.dZw.toFixed(1)}</td><td>${r.dXw.toFixed(0)}</td><td>${r.dXt.toFixed(0)}</td><td>${Math.round(r.top)}</td></tr>`).join('');
+    const rows = T.direct
+      ? T.rows.map((r) => `<tr><td>${r.D.toLocaleString('ru')}</td><td><b>${r.sight.toFixed(1)}</b></td><td>${r.t.toFixed(2)}</td><td>${Math.round(r.top * 10) / 10}</td><td>${Math.round(r.vEnd)}</td></tr>`).join('')
+      : T.rows.map((r) => `<tr><td>${r.D.toLocaleString('ru')}</td><td><b>${r.sight.toFixed(0)}</b></td><td>${r.dXmil.toFixed(0)}</td><td>${r.t.toFixed(1)}</td><td>${r.drift.toFixed(0)}</td><td>${r.dZw.toFixed(1)}</td><td>${r.dXw.toFixed(0)}</td><td>${r.dXt.toFixed(0)}</td><td>${Math.round(r.top)}</td></tr>`).join('');
+    const sp = S.title === 'Д-30' ? ['bk', 'bm'].map((k) => `<button class="btn ${direct === k ? '' : 'sec'}" data-dt="${k}">${SHELLS[k].name} (прямая наводка)</button>`).join('') : '';
     ui.show(`<h1>${S.tableTitle}</h1>
       <div class="opc">${S.tableNote(T)}</div>
-      <div class="row chs">${S.charges.map((c, i) => `<button class="btn ${i === ci ? '' : 'sec'}" data-ci="${i}">${c.name}</button>`).join('')}</div>
+      <div class="row chs">${S.charges.map((c, i) => `<button class="btn ${!direct && i === ci ? '' : 'sec'}" data-ci="${i}">${c.name}</button>`).join('')}${sp}</div>
       <div class="tblwrap"><table class="ft">
-      <tr><th>Д, м</th><th>Прицел, тыс.</th><th>ΔX<sub>тыс</sub>, м</th><th>t<sub>c</sub>, с</th><th>Z (деривация), тыс.</th><th>Z<sub>w</sub> (бок. ветер 10 м/с), тыс.</th><th>ΔX<sub>w</sub> (встречн. ветер 10 м/с), м</th><th>ΔX<sub>T</sub> (t на −10°), м</th><th>Y<sub>s</sub>, м</th></tr>
+      ${T.direct ? '<tr><th>Д, м</th><th>Прицел, тыс.</th><th>t<sub>c</sub>, с</th><th>Y<sub>s</sub>, м</th><th>V<sub>c</sub>, м/с</th></tr>'
+    : '<tr><th>Д, м</th><th>Прицел, тыс.</th><th>ΔX<sub>тыс</sub>, м</th><th>t<sub>c</sub>, с</th><th>Z (деривация), тыс.</th><th>Z<sub>w</sub> (бок. ветер 10 м/с), тыс.</th><th>ΔX<sub>w</sub> (встречн. ветер 10 м/с), м</th><th>ΔX<sub>T</sub> (t на −10°), м</th><th>Y<sub>s</sub>, м</th></tr>'}
       ${rows}</table></div>
       <p class="note">Нормальные условия: t = +15 °C, 750 мм рт. ст., ветра нет, цель на уровне орудия. Сейчас: t = ${e.tempC} °C (ΔT = ${e.tempC - 15}°), ветер ${e.wind} м/с с направления ${fmtDiv(e.windFrom / 360 * 6000)}.<br>
       ΔX<sub>тыс</sub> — изменение дальности при изменении прицела на 1 тыс.; Z — поправка направления на деривацию (снаряд уходит вправо, угломер уменьшить); Z<sub>w</sub> — снос боковым ветром 10 м/с; ΔX<sub>w</sub>, ΔX<sub>T</sub> — изменение дальности; Y<sub>s</sub> — высота траектории.</p>
       <div class="row"><button class="btn" data-close>Закрыть (Esc)</button></div>`, { wide: true, cls: 'fttable' });
-    ui.bind('[data-ci]', (b) => this.table(+b.dataset.ci));
+    ui.bind('[data-ci]', (b) => this.table(+b.dataset.ci, ''));
+    ui.bind('[data-dt]', (b) => this.table(ci, b.dataset.dt));
   }
 
   guide() { if (this.spec.guide) this.spec.guide(this.m); else this.m.app.ui.d30Guide(); }

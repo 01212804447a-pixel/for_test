@@ -7,12 +7,13 @@
 // пузырёк уровня на середину — тогда ствол стоит на нужном возвышении.
 import * as THREE from 'three';
 import { buildD30, D30, shellGeometry } from './d30model.js';
-import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid } from './d30.js';
+import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid, SHELLS, SHELL_ORDER, SPECIAL_CHARGE, shellAmmoId } from './d30.js';
 import { WEAPONS } from '../data/weapons.js';
 import { charAvailable } from '../entities/charRig.js';
 import { CrewSoldier, crewItems as crewItemsLazy } from './crew.js';
 import { Parts } from '../weapons/gunkit.js';
 import { GunUI, D30_SPEC } from './gunUI.js';
+import { massBlast } from './ammoPile.js';
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const EL_MIN = -117, EL_MAX = 1167; // −7° … +70°
@@ -97,19 +98,27 @@ export class Howitzer {
       action: () => this.towAction(),
     };
     // ручное заряжание, когда расчёт выбыл: взять снаряд/заряд из ящика, дослать у казённика
+    // ящик: взять снаряд (слева) или гильзу с зарядом (справа) — к казённику или положить где угодно (G)
+    const boxOk = () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !m.player.carry && this.box.alive && !this.box.stowed;
     this.boxIt = {
-      pos: new THREE.Vector3(x, y0 + 0.8, z), r: 1.8, hold: 0.5,
-      get label() { return self._boxLabel(); },
-      enabled: () => m.player.body.alive && !m.player.gun && !m.player.vehicle && !m.player.carry && this.box.alive && !this.box.stowed && !this.crewAlive(),
-      action: () => this.manualPick(m.player),
+      pos: new THREE.Vector3(x, y0 + 0.8, z), r: 0.95, hold: 0.5,
+      get label() { return self._boxLabel('shell'); },
+      enabled: boxOk,
+      action: () => this.manualPick(m.player, false, 'shell'),
+    };
+    this.chargeIt = {
+      pos: new THREE.Vector3(x, y0 + 0.8, z), r: 0.95, hold: 0.5,
+      get label() { return self._boxLabel('charge'); },
+      enabled: boxOk,
+      action: () => this.manualPick(m.player, false, 'charge'),
     };
     this.breechIt = {
       pos: new THREE.Vector3(x, y0 + 1.0, z), r: 1.7, hold: 0.6,
-      get label() { return m.player.carry && m.player.carry.item === 'shell' ? `Дослать снаряд в ${self.name}` : `Вставить гильзу с зарядом в ${self.name}`; },
-      enabled: () => { const c = m.player.carry; return !!c && c.gun === this && this.ready && !this.loaded && this.breech > 0.9 && (c.item === 'shell' ? !(this.load && this.load.shellIn) : !!(this.load && this.load.shellIn && !this.load.chargeIn)); },
+      get label() { const c = m.player.carry; return c && c.item === 'shell' ? `Дослать снаряд ${SHELLS[c.shell || self.shellType] ? SHELLS[c.shell || self.shellType].name : ''} в ${self.name}` : `Вставить гильзу с зарядом в ${self.name}`; },
+      enabled: () => { const c = m.player.carry; return !!c && (c.gun === this || (c.free && (c.item === 'shell' || c.item === 'charge'))) && this.ready && !this.loaded && this.breech > 0.9 && (c.item === 'shell' ? !(this.load && this.load.shellIn) : !!(this.load && this.load.shellIn && !this.load.chargeIn)); },
       action: () => this.manualInsert(m.player),
     };
-    m.interactables.push(this.gunIt, this.posIt, this.towIt, this.boxIt, this.breechIt);
+    m.interactables.push(this.gunIt, this.posIt, this.towIt, this.boxIt, this.chargeIt, this.breechIt);
     this.ui = null;
     if (towBy) this.hitch(towBy, true);
     this._place();
@@ -227,9 +236,9 @@ export class Howitzer {
     else if (op === 'c') { if (this.towBy) this.unhitch(true); this.startDeploy(true, e[3]); }
     else if (op === 'h') { const v = this.m.vehicles[e[3]]; if (v && !this.towBy) { if (this.tr !== 1) { this.tr = this.trTarget = 1; this._dropCollider(); } this.hitch(v, false, true); } }
     else if (op === 'u') this.unhitch(true, [e[3], e[4], e[5]]);
-    else if (op === 'l') this.orderLoad(true, e[3], e[4] ? 'Ф' : 'О', e[5] ? 'd' : 'of');
+    else if (op === 'l') this.orderLoad(true, e[3], e[4] ? 'Ф' : 'О', typeof e[5] === 'string' ? e[5] : e[5] ? 'd' : 'of');
     else if (op === 'k') this.manualPick(null, true, e[3]);
-    else if (op === 'n') this.manualInsert(null, true, e[3], e[4], e[5] ? 'Ф' : 'О');
+    else if (op === 'n') this.manualInsert(null, true, e[3], e[4], e[5] ? 'Ф' : 'О', e[6]);
   }
 
   // Геометрия походного положения: проушина относительно лафета (считается один раз)
@@ -274,7 +283,7 @@ export class Howitzer {
     this.rootPitch = -Math.atan2(H.y - (ga + G.y), G.z);
   }
 
-  get charge() { return CHARGES[this.ci]; }
+  get charge() { const sh = this.loaded ? this.loaded.shell : this.load ? this.load.shell : this.shellType; return SHELLS[sh] && SHELLS[sh].special ? SPECIAL_CHARGE : CHARGES[this.ci]; }
   // требуемое возвышение по прицелу и уровню
   get wantEl() { return this.drum + (this.level - 3000); }
 
@@ -314,7 +323,11 @@ export class Howitzer {
       this.gunIt.pos.copy(this.seatWorld()); this.gunIt.pos.y += 1.0;
       this.posIt.pos.set(0.95, 0.7, 0.15).applyMatrix4(g.body.matrixWorld);
       this.lunetteWorld(this.towIt.pos);
-      if (this.box) this.boxIt.pos.copy(this.box.pos).setY(this.box.pos.y + 0.5);
+      if (this.box) {
+        const d = this.box, c = Math.cos(d.yaw || 0), sn = Math.sin(d.yaw || 0), y = d.pos.y + 0.3;
+        this.boxIt.pos.set(d.pos.x + c * -0.25 + sn * 0.23, y, d.pos.z - sn * -0.25 + c * 0.23);
+        this.chargeIt.pos.set(d.pos.x + c * 0.62 + sn * 0.27, y, d.pos.z - sn * 0.62 + c * 0.27);
+      }
       if (this.tr === 0) { const bp = this._breechPoints(); this.breechIt.pos.copy(bp.S).setY(bp.S.y + 1.0); }
       this.towIt.pos.y = Math.max(this.towIt.pos.y, this.m.terrain.heightAt(this.towIt.pos.x, this.towIt.pos.z) + 0.9);
     }
@@ -430,27 +443,23 @@ export class Howitzer {
   // попадание в ящик: детонация боекомплекта — 50 снарядов и 50 зарядов
   boxExplode(by) {
     const m = this.m, d = this.box, P = d.pos.clone();
+    // сила взрыва — по тому, что осталось в ящике (снаряды детонируют, порох сгорает вспышкой)
+    const counts = { shells: this.shells, charges: this.charges };
     this.shells = 0; this.charges = 0; this.load = null; this.loaded = null;
     for (const c of this.crew) c.job = null;
     if (m.player.carry && m.player.carry.gun === this) m.player.carry = null;
     if (d.collider) { m.world.removeObstacle(d.collider); d.collider = null; }
     d.mesh.visible = false;
-    m.fx.shellBurst(P);
-    m.audio.explosion(P, 3);
-    for (let k = 1; k <= 4; k++) m.after(0.18 * k + Math.random() * 0.2, () => { const Q = P.clone().add(new THREE.Vector3((Math.random() - 0.5) * 8, 0, (Math.random() - 0.5) * 8)); Q.y = m.terrain.heightAt(Q.x, Q.z) + 0.3; m.fx.shellBurst(Q); m.audio.explosion(Q, 2); });
-    m.fx.addFire(P, 2.4, 150);
-    m.fx.addDecal(new THREE.Vector3(P.x, m.terrain.heightAt(P.x, P.z), P.z), new THREE.Vector3(0, 1, 0), 9, 0x141210);
-    m.noise(P, 2500, this.team, by || null);
-    m.player.shake = Math.max(m.player.shake, 2.5 * Math.max(0, 1 - P.distanceTo(m.camPos) / 300));
-    if (!m.netVisual) m.projectiles.explode(P, { radius: 18, frag: 55, dmg: 700, pen: 45, fxSize: 4 }, by, null, null, { fx: false });
-    m.hud.message(`Взрыв боекомплекта у ${this.name}!`, 4, true);
+    if (counts.shells + counts.charges > 0) massBlast(m, P, counts, by);
+    else { m.fx.explosion(P, 1, true); m.audio.explosion(P, 0.6); }
+    m.hud.message(`Взрыв боекомплекта у ${this.name}: ${counts.shells} сн., ${counts.charges} зар.!`, 4, true);
   }
 
-  _boxLabel() {
+  _boxLabel(it) {
     const c = this.m.player.carry;
     if (c) return 'Руки заняты';
-    const needShell = !(this.load && this.load.shellIn);
-    return needShell ? `Взять снаряд ОФ-462 (в ящике ${this.shells})` : `Взять гильзу с зарядом (в ящике ${this.charges})`;
+    const tail = this.crewAlive() ? ' — вынести (G — положить где угодно)' : ' — к казённику справа';
+    return it === 'shell' ? `Взять снаряд ${SHELLS[this.shellType].name} (в ящике ${this.shells})${tail}` : `Взять гильзу с зарядом (в ящике ${this.charges})${tail}`;
   }
 
   // игрок сам носит из ящика (расчёт выбыл)
@@ -459,21 +468,23 @@ export class Howitzer {
     if (it === 'shell' ? this.shells <= 0 : this.charges <= 0) { if (!fromNet) this.m.hud.message(it === 'shell' ? 'Снаряды кончились' : 'Заряды кончились', 2); return; }
     if (it === 'shell') this.shells--; else this.charges--;
     if (fromNet) return;
-    p.carry = { item: it, gun: this };
+    p.carry = { item: it, gun: this, shell: this.shellType, onDrop: () => { if (!(this.m.ammoPiles && this.m.ammoPiles.dropCarry())) { p.carry = null; this.m.hud.message('Груз брошен', 1.5); } } };
     this.m.audio.mech('reload');
-    this.m.hud.message(it === 'shell' ? 'Снаряд в руках (22 кг): несите к казённику справа, E — дослать' : 'Гильза с зарядом в руках: к казённику, E — вставить', 3);
+    this.m.hud.message(it === 'shell' ? 'Снаряд в руках (22 кг): к казённику справа — E, или G — положить на землю (в штабель)' : 'Гильза с зарядом в руках: к казённику — E, или G — положить на землю', 3);
     this._net(['k', it]);
   }
-  manualInsert(p, fromNet = false, item = null, ci = null, fuze = null) {
+  manualInsert(p, fromNet = false, item = null, ci = null, fuze = null, shell = null) {
     const it = item || (p.carry && p.carry.item);
     if (!it) return;
-    if (!this.load) this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shell: this.shellType, shellIn: false, chargeIn: false, closeT: 0 };
+    const carried = p && p.carry && p.carry.item === 'shell' ? p.carry.shell : null;
+    if (!this.load) this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shell: shell || carried || this.shellType, shellIn: false, chargeIn: false, closeT: 0 };
+    if (it === 'shell' && (shell || carried)) this.load.shell = shell || carried;
     this.load[it + 'In'] = true;
     this.m.audio.mech(it === 'shell' ? 'reload' : 'switch');
     if (fromNet) return;
     p.carry = null;
     this.m.hud.message(it === 'shell' ? 'Снаряд дослан. Теперь гильза с зарядом' : 'Заряд вставлен, клин закрыт', 2.5);
-    this._net(['n', it, this.load.ci, this.load.fuze === 'О' ? 0 : 1]);
+    this._net(['n', it, this.load.ci, this.load.fuze === 'О' ? 0 : 1, this.load.shell]);
   }
 
   // команда «Заряжай!» (наводчик, R)
@@ -487,9 +498,13 @@ export class Howitzer {
     this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shell: shell ?? this.shellType, shellIn: false, chargeIn: false, closeT: 0 };
     if (!fromNet) {
       if (!this.crewAlive()) m.hud.message(`Расчёт выбыл: снаряд и заряд носите сами — ящик в ${BOX_DIST} м за орудием (E), затем к казённику справа (E)`, 5);
-      else m.hud.radio('Командир орудия', this.load.shell === 'd' ? `Заряжай! Дымовым, заряд ${CHARGES[this.load.ci].name}` : `Заряжай! Осколочно-фугасным, заряд ${CHARGES[this.load.ci].name}, взрыватель ${this.load.fuze === 'О' ? 'осколочный' : 'фугасный'}`);
+      else {
+        const L = this.load, cn = SHELLS[L.shell].special ? 'специальный' : CHARGES[L.ci].name;
+        const what = { of: `Осколочно-фугасным, заряд ${cn}, взрыватель ${L.fuze === 'О' ? 'осколочный' : 'фугасный'}`, d: `Дымовым, заряд ${cn}`, s: `Осветительным, заряд ${cn}, трубку установить по таблице`, bk: 'Кумулятивным, заряд специальный', bm: 'Подкалиберным, заряд специальный' }[L.shell];
+        m.hud.radio('Командир орудия', `Заряжай! ${what}`);
+      }
       m.audio.mech('reload');
-      this._net(['l', this.load.ci, this.load.fuze === 'О' ? 0 : 1, this.load.shell === 'd' ? 1 : 0]);
+      this._net(['l', this.load.ci, this.load.fuze === 'О' ? 0 : 1, this.load.shell]);
     }
   }
 
@@ -624,7 +639,11 @@ export class Howitzer {
     }
     if (inp.hit('KeyZ')) {
       if (this.loaded || this.load) m.hud.message('Снаряд выбирается до заряжания', 2);
-      else { this.shellType = this.shellType === 'd' ? 'of' : 'd'; m.hud.message(this.shellType === 'd' ? 'Снаряд Д-462 — дымовой (завеса ≈ 1,5 мин)' : 'Снаряд ОФ-462 — осколочно-фугасный', 2); m.audio.click(); }
+      else {
+        this.shellType = SHELL_ORDER[(SHELL_ORDER.indexOf(this.shellType) + 1) % SHELL_ORDER.length];
+        const S = SHELLS[this.shellType];
+        m.hud.message(`Снаряд ${S.name} — ${S.long}${S.special ? '. Заряд специальный, наводить по ОП4М-45 (V)' : ''}`, 3); m.audio.click();
+      }
     }
     if (inp.hit('KeyX')) {
       if (this.loaded || this.load) m.hud.message('Взрыватель устанавливается до заряжания', 2);
@@ -680,11 +699,11 @@ export class Howitzer {
     const L = this.loaded;
     this.loaded = null;
     const pos = this.muzzleWorld(), dir = this.boreDir();
-    const ammoId = (L.shell === 'd' ? 'd462_' : 'of462_') + CHARGES[L.ci].id;
+    const ammoId = shellAmmoId(L.shell, L.ci);
     const p = m.projectiles.spawn({ weapon: WEAPONS.d30, pos, dir, owner: m.player.body, team: m.player.body.team, ammoId });
     p.fuze = L.fuze; p.gun = this; p.shotNo = ++this.shots; p.charge = L.ci;
     // фугасное действие (замедление): снаряд углубляется — меньше осколков, сильнее по укрытиям
-    if (L.fuze === 'Ф' && L.shell !== 'd') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
+    if (L.fuze === 'Ф' && L.shell === 'of') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
     p.onLand = (pp) => this.report(pp);
     if (m.net) m.net.onLocalShot({ weapon: WEAPONS.d30, owner: m.player.body, ammoId, gun: this }, p);
     this.recoilT = 0;
@@ -699,7 +718,7 @@ export class Howitzer {
     m.player.shake = Math.max(m.player.shake, this.view === 'side' ? 0.6 : 1.2);
     m.noise(pos, 3000, 'negs', m.player.body);
     const T = firingTable(L.ci);
-    m.hud.radio('Наводчик', `Выстрел! Заряд ${CHARGES[L.ci].name}, угломер ${fmtDiv(this.az)}, возвышение ${fmtDiv(this.elM)}.`);
+    m.hud.radio('Наводчик', SHELLS[L.shell].special ? `Выстрел! ${SHELLS[L.shell].name}, прямой наводкой.` : `Выстрел! ${SHELLS[L.shell].name}, заряд ${CHARGES[L.ci].name}, угломер ${fmtDiv(this.az)}, возвышение ${fmtDiv(this.elM)}.`);
     void T;
   }
 

@@ -17,6 +17,9 @@ import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.j
 import { SnowTrails } from '../world/trails.js';
 import { WIND } from '../world/shaders.js';
 import { SmokeScreens } from '../fx/smoke.js';
+import { Flares } from '../fx/flare.js';
+import { AmmoPiles } from '../artillery/ammoPile.js';
+import { buildArmory } from './armory.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -297,6 +300,8 @@ export class Mission {
     this.fx.night = e.time === 'night' || e.time === 'dusk';
     this.fx.wind.copy(this.wind);
     this.fx.light = e.time === 'night' ? 0.3 : e.time === 'dusk' ? 0.65 : 1;
+    this.flares = new Flares(this); // осветительные факелы (один общий свет — заранее в сцене)
+    this.ammoPiles = new AmmoPiles(this); // штабели снарядов/зарядов/мин, сложенные игроками
     this.projectiles = new Projectiles(this);
     if (e.snow > 0) {
       this.snow = new Snowfall(Math.floor((1500 + e.snow * 7000) * q.snow), e.snow, this.wind);
@@ -326,6 +331,12 @@ export class Mission {
       this.updaters = [];
       const lim = this.net.room.scoreLimit;
       this.stages = [{ objs: [{ text: `Командный бой до ${lim} побед. Tab — таблица счёта`, check: () => false, marker: () => null }] }];
+      // склады вооружения у точек появления: сменить оружие прямо в бою
+      const pm = pvpMap(def.id);
+      for (const team of ['negs', 'denter']) {
+        const sp = pm.spawns[team], a = sp.yaw ?? 0;
+        buildArmory(this, { x: sp.x + Math.cos(a) * 9, z: sp.z - Math.sin(a) * 9, yaw: a - Math.PI / 2, team });
+      }
     }
     // окраины расширенной карты
     if (this.wideMap && !def.noOutskirts) this._buildOutskirts();
@@ -1001,6 +1012,19 @@ export class Mission {
     this.player.suppression = Math.min(1, this.player.suppression + k);
   }
 
+  // контузия ударной волной: глохнет звук, звон, муть в глазах; при сильной — не может стрелять
+  onPlayerConcussion(k, t) {
+    const p = this.player, b = p.body;
+    if (!b.alive) return;
+    if ((this._concT || 0) > t * 0.7) return;
+    this._concT = t; this._concK = k; this._concT0 = t;
+    this.audio.concussion(k, t);
+    p.shake = Math.max(p.shake, 0.8 + k * 1.2);
+    p.suppression = 1;
+    if (k > 0.35) b.shockT = Math.max(b.shockT || 0, t * 0.35);
+    if (k > 0.25) this.hud.message(k > 0.6 ? 'Контузия!' : 'Оглушило разрывом', 2);
+  }
+
   onTargetHit(t, pt, p) {
     if (!p.byPlayer) return;
     const rx = Math.cos(t.facing), rz = -Math.sin(t.facing);
@@ -1016,6 +1040,7 @@ export class Mission {
     if (!d.alive) return;
     d.alive = false;
     if (d.kind === 'ammo') { d.gun.boxExplode(by); return; }
+    if (d.kind === 'pile') { this.ammoPiles.explode(d, by); return; }
     if (d.kind === 'art') {
       this.fx.addFire(d.pos.clone(), 1.6, 300);
       this.fx.addSmoke(d.pos.clone().add(new THREE.Vector3(3, 0, 2)), 2);
@@ -1286,6 +1311,7 @@ export class Mission {
     updateFlyingParts(this, dt);
     this.trails.update(dt);
     this.smokeScreens.update(dt);
+    this.flares.update(dt);
     WIND.uTime.value += dt;
     for (const h of this.guns) h.update(dt);
     for (const d of this.drones) d.update(dt, host);

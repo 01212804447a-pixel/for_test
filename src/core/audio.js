@@ -22,7 +22,9 @@ export class AudioSys {
     this.master.gain.value = this.volume;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.2;
-    this.master.connect(comp); comp.connect(ctx.destination);
+    // глушение при контузии: общий фильтр низких частот на выходе
+    this.deaf = ctx.createBiquadFilter(); this.deaf.type = 'lowpass'; this.deaf.frequency.value = 20000; this.deaf.Q.value = 0.5;
+    this.master.connect(this.deaf); this.deaf.connect(comp); comp.connect(ctx.destination);
     // Белый шум
     const len = ctx.sampleRate * 2;
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -45,6 +47,22 @@ export class AudioSys {
     this.revGain = ctx.createGain(); this.revGain.gain.value = 0.35;
     this.reverb.connect(this.revGain); this.revGain.connect(this.master);
     this._startWind();
+  }
+
+  // контузия: звук глохнет на t секунд (k — сила 0..1), в ушах звенит
+  concussion(k = 1, t = 3) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime, f = this.deaf.frequency;
+    f.cancelScheduledValues(t0);
+    f.setValueAtTime(Math.max(160, 900 - k * 700), t0 + 0.02);
+    f.setValueAtTime(Math.max(160, 900 - k * 700), t0 + t * 0.45);
+    f.exponentialRampToValueAtTime(20000, t0 + t);
+    // звон: высокий тон, мимо фильтра, медленно затухает
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 3600 + Math.random() * 900;
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.05 * this.volume * (0.4 + k), t0 + 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0005, t0 + t * 1.2);
+    o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + t * 1.2 + 0.1);
   }
 
   setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; }

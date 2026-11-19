@@ -446,6 +446,13 @@ export class CharAnimator {
     this.time = 0;
     this.pose = new Float32Array(this.rig.lib.n * 4); this.poseP = new Float32Array(3);
   }
+  // сменить оружие в руках (игрок взял другое на складе)
+  setGun(gun) {
+    if (this.gun) this.root.remove(this.gun.object);
+    this.gun = gun;
+    if (gun) { gun.object.matrixAutoUpdate = false; this.root.add(gun.object); this.grip = gripOffset(gun); gun.object.visible = !this.mountHidden; }
+  }
+
 
   get bones() { return this.rig.b; }
 

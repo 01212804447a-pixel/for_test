@@ -47,6 +47,19 @@ export class Projectiles {
   }
 
   // Снаряд 122 мм (ось вдоль −Z группы, поэтому lookAt направляет носом вперёд)
+  // стреловидный сердечник БПС: длинный «лом» с оперением (нос — к +Z, как у снаряда после lookAt)
+  dartMesh() {
+    if (!this._dartProto) {
+      const g = new THREE.Group(), mt = new THREE.MeshStandardMaterial({ color: 0x55585c, metalness: 0.9, roughness: 0.35 });
+      const rod = new THREE.CylinderGeometry(0.014, 0.016, 0.62, 10); rod.rotateX(Math.PI / 2);
+      const tip = new THREE.ConeGeometry(0.014, 0.06, 10); tip.rotateX(Math.PI / 2); tip.translate(0, 0, 0.34);
+      g.add(new THREE.Mesh(rod, mt), new THREE.Mesh(tip, mt));
+      for (let i = 0; i < 6; i++) { const f = new THREE.BoxGeometry(0.003, 0.05, 0.08); f.translate(0, 0.035, -0.27); f.rotateZ((i / 6) * Math.PI * 2); g.add(new THREE.Mesh(f, mt)); }
+      this._dartProto = g;
+    }
+    return this._dartProto.clone();
+  }
+
   shellMesh() {
     if (!this._shellProto) {
       const P = new Parts();
@@ -103,7 +116,7 @@ export class Projectiles {
 
   _addMesh(p, pos) {
     const kind = p.ammo.kind;
-    if (kind === 'shell') p.mesh = this.shellMesh();
+    if (kind === 'shell') p.mesh = p.ammo.apfsds ? this.dartMesh() : this.shellMesh();
     else if (kind === 'rocket') p.mesh = this.rocketProto.clone();
     else if (kind === 'grenade') p.mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
     if (p.mesh) { p.mesh.position.copy(pos); this.game.scene.add(p.mesh); }
@@ -122,6 +135,13 @@ export class Projectiles {
         p.dist += _p0.distanceTo(p.p);
         this._collide(p, _p0, p.p);
         if (p.ammo.fuse && p.t > p.ammo.fuse && p.alive) { this.explode(p.p.clone(), p.ammo.explosive, p.owner); p.alive = false; }
+        // осветительный: трубка срабатывает на нисходящей ветви на заданной высоте над землёй
+        if (p.ammo.illum && p.alive && p.v.y < 0 && p.p.y - g.world.terrain.heightAt(p.p.x, p.p.z) <= p.ammo.illum.h) {
+          p.alive = false;
+          g.fx.explosion(p.p, 0.5, false);
+          g.audio.explosion(p.p, 0.35);
+          if (g.flares) g.flares.add(p.p, p.ammo.illum);
+        }
         const sp = p.v.length();
         if (p.alive && (p.t > (p.ammo.maxT || 6) || sp < 60 && p.ammo.kind === 'bullet' || p.p.y < -50)) p.alive = false;
       }
@@ -164,16 +184,18 @@ export class Projectiles {
       const cx = s.pos.x, cy = s.pos.y + 0.9, cz = s.pos.z;
       // грубый отсев
       const mx = (a.x + b.x) / 2 - cx, my = (a.y + b.y) / 2 - cy, mz = (a.z + b.z) / 2 - cz;
-      const rr = segLen / 2 + 5;
+      // снаряды и крупный калибр свистят и «давят» с большего расстояния
+      const shellR = p.ammo.kind === 'shell' || p.ammo.caliber >= 0.08 ? 14 : p.ammo.caliber > 0.012 ? 6 : 3.5;
+      const rr = segLen / 2 + 5 + shellR;
       if (mx * mx + my * my + mz * mz > rr * rr) continue;
       // подавление: пролёт рядом с головой
       if (s.team !== p.team && !p.supp.has(s)) {
         const r = segSeg(a, b, s.eye, s.eye);
-        if (r.d2 < 12.25) {
+        if (r.d2 < shellR * shellR) {
           p.supp.add(s);
           const dd = Math.sqrt(r.d2);
-          const k = p.ammo.kind === 'bullet' ? (p.ammo.caliber > 0.007 ? 0.42 : 0.34) : 0.6;
-          const amount = (1 - dd / 3.5) * k;
+          const k = shellR > 10 ? 1.1 : shellR > 5 ? 0.7 : p.ammo.kind === 'bullet' ? (p.ammo.caliber > 0.007 ? 0.42 : 0.34) : 0.6;
+          const amount = (1 - dd / shellR) * k;
           if (s.brain) s.brain.onSuppress(amount, p.owner);
           if (s.isPlayer) g.onPlayerSuppressed(amount, p, dd);
         }
@@ -443,14 +465,33 @@ export class Projectiles {
     if (!opts.net) for (const v of g.vehicles) if (v === directVehicle || v.pos.distanceTo(pos) < ex.radius * 1.6 + v.type.len * 0.6) v.dmg.blastMarks(pos, ex, v === directVehicle);
     // осколки по дрону рядом с разрывом
     if (!visual) for (const d of g.drones || []) if (d.alive && d.pos.distanceTo(pos) < ex.frag * 0.8) g.hitDrone(d, 999, owner);
+    // крупный боеприпас (снаряд, мина, танковый): шире зона подавления и контузия ударной волной
+    const big = ex.dmg >= 200;
+    const supR = ex.frag * (big ? 2.6 : 1.6), conR = ex.radius * (big ? 2.6 : 1.8);
     if (fx || doSoldiers) for (const s of g.soldiers) {
       if (!s.alive || s.hidden) continue;
       const d = s.chest.distanceTo(pos);
-      if (d > ex.frag * 1.6) continue;
-      if (s.brain) s.brain.onSuppress(1 - d / (ex.frag * 1.6), owner);
-      if (s.isPlayer && fx) g.onPlayerBlast(1 - d / (ex.frag * 1.6));
+      if (d > Math.max(supR, conR)) continue;
+      if (d < supR) {
+        if (s.brain) s.brain.onSuppress(Math.min(1, (1 - d / supR) * (big ? 1.7 : 1)), owner);
+        if (s.isPlayer && fx) g.onPlayerBlast(1 - d / supR);
+      }
+      let blocked = null;
+      // контузия: оглушает и тех, кого не задело осколками; укрытие ослабляет волну
+      if (d < conR && ex.dmg >= 110 && !s.isRemote) {
+        blocked = !!g.world.raycast(src, s.chest, { mask: 'bullet' });
+        const k = 1 - d / conR, cov = blocked ? 0.45 : 1;
+        const t = (1 + 7 * Math.pow(k, 1.5)) * Math.min(1.6, Math.sqrt(ex.dmg / 420)) * cov;
+        if (t > 0.6) {
+          if (s.isPlayer) { if (fx && g.onPlayerConcussion) g.onPlayerConcussion(k * cov, t); }
+          else if (doSoldiers) {
+            if (g.net && !g.net.isHost) { if (s.netIdx !== undefined && owner === g.player.body) g.net.evHost(['sh', s.netIdx, +t.toFixed(1)]); }
+            else { s.shockT = Math.max(s.shockT || 0, t); s.suppression = 1; }
+          }
+        }
+      }
       if (d > ex.frag || !doSoldiers) continue;
-      const blocked = !!g.world.raycast(src, s.chest, { mask: 'bullet' });
+      if (blocked === null) blocked = !!g.world.raycast(src, s.chest, { mask: 'bullet' });
       let dmg = 0;
       if (d < ex.radius) dmg += ex.dmg * Math.pow(1 - d / ex.radius, 1.3) * (blocked ? 0.15 : 1);
       if (!blocked) {

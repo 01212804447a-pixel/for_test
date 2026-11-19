@@ -202,7 +202,9 @@ export class Brain {
       // дрон в небе: считаем полное расстояние; слышно его метров за 200, глазом — маленькая точка
       const d = t.isDrone ? t.pos.distanceTo(s.eye) : Math.hypot(dx, dz);
       const flashBoost = t.fireFlash > 0 || (g.time - (t.lastShotTime || -9) < 0.8) ? (g.isNight ? 3.5 : 1.8) : 1;
-      const range = t.isDrone ? Math.min(270, vr) : vr * (flashBoost > 1 ? 1.6 : 1) * (t.isVehicle ? 1.5 : 1);
+      // ночью под осветительным факелом цель видна почти как днём
+      const lit = g.isNight && g.flares && g.flares.list.length ? g.flares.lightAt(t.pos) : 0;
+      const range = t.isDrone ? Math.min(270, vr) : vr * (flashBoost > 1 ? 1.6 : 1) * (t.isVehicle ? 1.5 : 1) * (1 + lit * 1.6);
       if (d > range) { if (m) { m.seen = false; m.detect = Math.max(0, m.detect - tdt * 0.1); } continue; }
       const hd = Math.hypot(dx, dz);
       const cosA = hd > 0.1 ? (dx * fwdX + dz * fwdZ) / hd : 1;

@@ -320,6 +320,7 @@ export class NetSession {
         if (e[0] === 's') this.applyShot(e, msg.from);
         else if (e[0] === 'g') this.applyGrenade(e, msg.from);
         else if (e[0] === 'gm') { const h = this.m.guns[e[1]]; if (h) h.netOp(e); }
+        else if (e[0] === 'ap') { if (this.m.ammoPiles) this.m.ammoPiles.netOp(e); }
         else if (e[0] === 'mk') this.m.addMark({ team: e[1], x: e[2], z: e[3], label: e[4], kind: e[5], by: e[6], ttl: e[7], fromNet: true });
         else if (this.isHost) this.applyHostEvent(e, msg.from);
       } catch (err) { console.warn('net ev', e, err); }
@@ -359,6 +360,12 @@ export class NetSession {
         if (!s || !s.alive) return;
         Soldier.prototype.damage.call(s, e[2], e[3], src, new THREE.Vector3(e[6], e[7], e[8]), { raw: !!e[4], penetrating: !!e[5] });
         if (!s.alive && src && src.kills !== undefined && src.isRemote) src.kills++;
+        break;
+      }
+      case 'sh': {
+        // контузия бойца ИИ разрывом, который посчитал клиент
+        const s = m.netAI[e[1]];
+        if (s && s.alive) { s.shockT = Math.max(s.shockT || 0, e[2]); s.suppression = 1; if (s.brain) s.brain.onSuppress(1, src); }
         break;
       }
       case 'vh': {
@@ -469,6 +476,8 @@ export class NetSession {
         s.yaw = v[3]; s.aimYaw = v[4]; s.aimPitch = v[5]; s.vel.set(v[6], 0, v[7]);
         s.stance = STANCES[st.s] || 'stand';
         s.netAiming = !!st.aim;
+        // другое оружие в руках (смена на складе или переключение на РПГ/ПТРД)
+        if (st.w && st.w !== s.weaponId && WEAPONS[st.w] && !WEAPONS[st.w].artillery && WEAPONS[st.w].mag) { s.setWeapon(st.w); if (s.model && s.model.setWeapon) s.model.setWeapon(st.w); }
         if (st.rl && !(s.reloadT > 0)) { s.reloadT = s.reloadTotal = 2.5; } else if (!st.rl) s.reloadT = 0;
         s.health = st.hp;
       }

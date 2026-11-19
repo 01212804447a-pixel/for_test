@@ -578,6 +578,15 @@ export class Player {
     const b = this.body;
     this.carry = null;
     let seat = -1;
+    if (v.tank) {
+      // танк: игрок — командир (место 2), наводчик и мехвод — экипаж ИИ
+      if (v.seats[2]) { this.game.hud.message('Место командира занято'); return; }
+      v.seats[2] = b; b.vehicle = v; b.seat = 2; this.vehicle = v; this.seat = 2; b.hidden = true;
+      this.aim = false; this.aimT = 0;
+      const t = v.tank; t.aimYaw = v.yaw + v.turretYaw; t.aimPitch = 0; t.view = 'gunner'; t.hatch = false;
+      this.game.hud.message(`${v.type.name}: вы — командир. V — прицел/приборы, мышь — наводка, ЛКМ — огонь, R — дальномер, стрелки — команды мехводу, E — выйти`, 6);
+      return;
+    }
     if (!v.seats[0]) seat = 0;
     else if (v.gunWeapon && !v.seats[1]) seat = 1;
     else seat = v.seats.findIndex((s, i) => !s && i >= 2);
@@ -590,6 +599,7 @@ export class Player {
   }
 
   seatName() {
+    if (this.vehicle && this.vehicle.tank && this.seat === 2) return 'командир танка';
     return this.seat === 0 ? 'место водителя' : this.seat === 1 ? 'место стрелка' : 'место десанта';
   }
 
@@ -597,6 +607,7 @@ export class Player {
     const v = this.vehicle;
     if (!v) return;
     if (Math.abs(v.speed) > 4) { this.game.hud.message('Слишком высокая скорость для высадки'); return; }
+    if (v.tank) { const t = v.tank; t.hatch = false; t.gear = 0; t.steer = 0; t.gearCmd = 0; t.steerCmd = 0; t.queue = []; if (t.ui) t.ui.show(false); }
     v.unboard(this.body);
     this.vehicle = null; this.seat = -1;
     this.holdE = -999; // E ещё нажата — не садиться обратно, пока клавишу не отпустят
@@ -626,6 +637,15 @@ export class Player {
     this.stamina = Math.min(1, this.stamina + dt * 0.09);
     if (this.winded && this.stamina > 0.35) this.winded = false;
     if (!(this.aim && inp.bd('sprint'))) { this.breath = Math.min(1, this.breath + dt * 0.22); this.breathLock = Math.max(0, this.breathLock - dt); }
+    // танк: командир управляет сам (прицелы, команды мехводу)
+    if (v.tank && this.seat === 2) {
+      v.tank.control(dt, mdx, mdy);
+      if (this.vehicle) { b.yaw = this.yaw; this.updateHitboxes(); }
+      this.shake = Math.max(0, this.shake - dt * 2.5);
+      this.suppression = Math.max(0, this.suppression - dt * 0.3);
+      this.scoped = false;
+      return;
+    }
     // водитель сдал задом к орудию в походном положении: E — прицепить
     const towGun = this.seat === 0 && g.guns && g.guns.find((h) => h.canHitch(v));
     this.towHint = towGun ? `<b>E</b> — прицепить ${towGun.name} (не выходя из машины)` : null;

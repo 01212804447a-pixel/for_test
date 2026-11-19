@@ -3,6 +3,8 @@
 // столкновения (OBB), бронирование по проекциям, турели, места десанта.
 import * as THREE from 'three';
 import { buildTigr, buildNiva, buildMTLB } from './vehicleModels.js';
+import { buildT72 } from './t72Model.js';
+import { Tank, tankZone as tankZoneOf, T72_ARMOR as TANK_ARMOR } from './tank.js';
 import { blobShadow } from '../world/flora.js';
 import { WEAPONS } from '../data/weapons.js';
 import { clamp, rand, randn, wrapAngle } from '../core/math.js';
@@ -47,11 +49,23 @@ export const VEHICLE_TYPES = {
     susp: { droop: 0.08, comp: 0.13, zeta: 0.55, hcg: 0.8 }, hitch: 3.35,
     desc: 'Гусеничный бронетранспортёр-тягач. Отличная проходимость по глубокому снегу, башня с ПКТ и прицелом ПП-61АМ, 11 мест десанта.',
   },
+  // Т-72Б (1985): боевая масса 44,5 т, В-84-1 840 л. с. (618 кВт), 60 км/ч по шоссе, назад 4 км/ч,
+  // длина корпуса 6,86 м, ширина 3,59 м, высота 2,19 м, колея 2,79 м, гусеница 580 мм
+  t72b: {
+    id: 't72b', name: 'Т-72Б', cls: 'Основной боевой танк', len: 6.86, width: 3.46, height: 2.19,
+    wheelbase: 4.3, track: 2.79, wheelR: 0.375, maxSpeed: 60 / 3.6, reverse: 4 / 3.6, brake: 5, turnRate: 0.36, grip: 8,
+    mass: 44500, power: 618, eta: 0.68, cda: 7.0,
+    tracked: true, tank: true, seats: 3, troop: 1, ctrlSeat: 2, gun: '2a46m', turret: true,
+    armor: { front: 520, side: 80, top: 40 }, hp: 1500,
+    engine: 'tracked', camo: ['#56603f', '#e2e5e7', '#3c4630'],
+    susp: { droop: 0.1, comp: 0.16, zeta: 0.6, hcg: 1.05 }, hitch: 3.6,
+    desc: 'Экипаж 3: вы — командир, наводчик и мехвод — ИИ. 125-мм 2А46М с АЗ (22 в карусели), СУО 1А40-1 с дальномером, ДЗ «Контакт-1». Только виды изнутри: прицелы, приборы, люк. Командам мехводу (стрелки) нужна секунда. Может тянуть Д-30.',
+  },
 };
 
 function buildModel(type) {
   const T = VEHICLE_TYPES[type];
-  return type === 'tigr' ? buildTigr(T.camo) : type === 'niva' ? buildNiva(T.camo) : buildMTLB(T.camo);
+  return type === 'tigr' ? buildTigr(T.camo) : type === 'niva' ? buildNiva(T.camo) : type === 't72b' ? buildT72(T.camo) : buildMTLB(T.camo);
 }
 
 export class Vehicle {
@@ -94,6 +108,7 @@ export class Vehicle {
     this.wheelRot = 0;
     this.dmg = new VehicleDamage(this);
     this._updateCollider();
+    this.tank = this.type.tank ? new Tank(this) : null;
   }
 
   get driver() { return this.seats[0]; }
@@ -101,10 +116,11 @@ export class Vehicle {
   get turret() { return !!this.model.turret; }
   get crewTeam() { const o = this.seats.find((s) => s && s.alive); return o ? o.team : null; }
 
-  hasFreeSeat() { return this.alive && this.seats.some((s, i) => !s && i >= 2) || (this.alive && !this.gunWeapon && this.seats.some((s, i) => !s && i >= 1)); }
+  hasFreeSeat() { if (this.tank) return false; return this.alive && this.seats.some((s, i) => !s && i >= 2) || (this.alive && !this.gunWeapon && this.seats.some((s, i) => !s && i >= 1)); }
 
   board(s, seatIdx = -1) {
     if (!this.alive) return false;
+    if (this.tank && seatIdx < 0) return false; // в танк — только экипаж и командир-игрок
     let idx = seatIdx;
     if (idx < 0) idx = this.seats.findIndex((x, i) => !x && i >= (this.gunWeapon ? 2 : 1));
     if (idx < 0 || this.seats[idx]) return false;
@@ -141,6 +157,16 @@ export class Vehicle {
   damageHit(pen, pt, owner, heat, ex, fromNet = false) {
     if (!this.alive) return;
     const g = this.game;
+    if (this.tank) {
+      // общий путь (без нормали): зона по точке, направление — к центру танка
+      if (g.net && !g.net.isHost && !fromNet) { g.net.fwdVehicleHit(this, pen, pt, owner, heat, ex); return; }
+      if (!pt) return;
+      const dir = new THREE.Vector3(this.pos.x - pt.x, 0, this.pos.z - pt.z).normalize();
+      const z = tankZoneOf(this, pt, dir);
+      const arm = TANK_ARMOR[z.zone][heat ? 1 : 0];
+      this.tank.applyHit({ zone: z.zone, pen: Math.round(pen), armor: arm, ce: !!heat, lp: [z.lp.x, z.lp.y, z.lp.z], big: !!(ex && ex.dmg >= 200), mass: 0, ric: false }, owner);
+      return;
+    }
     if (g.net && !g.net.isHost && !fromNet) { g.net.fwdVehicleHit(this, pen, pt, owner, heat, ex); return; }
     // ходовая: пробитое/оторванное колесо, перебитая гусеница
     const wi = pt ? this.dmg.onHit(pt, pen, heat, ex) : -1;
@@ -168,6 +194,7 @@ export class Vehicle {
   damageBlast(ex, d, owner, pos = null) {
     if (!this.alive) return;
     if (this.game.net && !this.game.net.isHost) return;
+    if (this.tank) { this.tank.blast(ex, d, owner, pos); return; }
     if (pos) this.dmg.onBlast(pos, ex);
     const k = Math.max(0, 1 - d / (ex.radius * 2.2));
     const vuln = this.typeId === 'niva' ? 1 : 0.15;
@@ -218,6 +245,7 @@ export class Vehicle {
   update(dt) {
     const g = this.game, T = this.type, w = g.world;
     if (!this.alive) { this.vel.multiplyScalar(Math.exp(-3 * dt)); this.speed = 0; this._place(dt); return; }
+    if (this.tank) this.tank.update(dt, !this.netPuppet);
     if (this.netPuppet) { this._puppet(dt); return; }
     if (this.ai) this._aiDrive(dt);
     const ctl = this.driver && this.driver.alive ? this.controls : { throttle: 0, steer: 0, brake: 1 };
@@ -256,6 +284,8 @@ export class Vehicle {
     const decel = (Froll + Fres) / M * gc;
     vF += aF * dt;
     if (Math.abs(vF) <= decel * dt) vF = 0; else vF -= Math.sign(vF) * decel * dt;
+    // коробка передач: задний ход — не быстрее паспортного (у Т-72Б — 4 км/ч), кроме спуска накатом
+    if (T.tank && th < 0 && vF < -T.reverse) vF = Math.max(vF, -T.reverse - Math.max(0, Fg / M) * 0.5);
     // стоянка: машина на тормозах держится на склоне, пока уклон не превысит сцепление
     if ((th === 0 || ctl.brake) && v < 0.5 && Math.abs(Fg) < (mu + 0.1) * N + Froll) vF = 0;
     // боковая составляющая веса на поперечном склоне и сцепление с грунтом
@@ -326,7 +356,8 @@ export class Vehicle {
     for (let i = 0; i < this.seats.length; i++) {
       const s = this.seats[i];
       if (!s) continue;
-      if (!s.alive) { this.seats[i] = null; s.vehicle = null; s.hidden = false; continue; }
+      if (!s.alive) { if (this.tank && s.isCrew) continue; this.seats[i] = null; s.vehicle = null; s.hidden = false; continue; }
+      if (this.tank) { if (i === 2) this.tank.placeCommander(s); continue; }
       if (i === 1 && this.gunWeapon) {
         const tp = this.toWorld(this.model.turret.position.x, this.model.turret.position.y, this.model.turret.position.z);
         s.pos.set(tp.x, tp.y - (T.gunExposed ? 1.0 : 0.3), tp.z);

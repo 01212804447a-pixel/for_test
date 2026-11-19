@@ -289,6 +289,7 @@ export class NetSession {
       veh.hp = v[9];
       if (!v[10] && veh.alive) { m.netVisual = true; veh.destroy(null); m.netVisual = false; }
       if (v[14] && (v[14] & ~veh.dmg.applied)) veh.dmg.apply(v[14] | veh.dmg.applied); // ходовая: колёса, гусеницы
+      if (veh.tank && v[15]) veh.tank.applyNet(v[15]); // танк: экипаж, модули, пожар
       if (v[11]) {
         const vi = this.vehInterp[v[0]] || (this.vehInterp[v[0]] = { src: null, buf: new Interp([3]) });
         if (vi.src !== 'host') { vi.src = 'host'; vi.buf.reset(); }
@@ -333,6 +334,13 @@ export class NetSession {
     const w = WEAPONS[e[2]];
     if (!w) return;
     const pos = new THREE.Vector3(e[4], e[5], e[6]), vel = new THREE.Vector3(e[7], e[8], e[9]);
+    if (w.tankGun) {
+      // выстрел танковой пушки: снаряд (картинка) и дульная волна у танка стрелка
+      const p = m.projectiles.spawn({ weapon: w, pos, dir: vel.clone().normalize(), owner: owner || m.player.body, team: owner ? owner.team : 'negs', ammoId: e[3] || undefined, visual: true, vel });
+      const tv = owner && owner.vehicle;
+      if (tv && tv.tank) { p.ownerVehicle = tv; tv.tank.remoteFire(); }
+      return;
+    }
     if (w.artillery) {
       const gun = m.guns[e[10]];
       const p = m.projectiles.spawn({ weapon: w, pos, dir: vel.clone().normalize(), owner: owner || m.player.body, team: owner ? owner.team : 'negs', ammoId: e[3] || undefined, visual: true, vel });
@@ -366,6 +374,12 @@ export class NetSession {
         // контузия бойца ИИ разрывом, который посчитал клиент
         const s = m.netAI[e[1]];
         if (s && s.alive) { s.shockT = Math.max(s.shockT || 0, e[2]); s.suppression = 1; if (s.brain) s.brain.onSuppress(1, src); }
+        break;
+      }
+      case 'tkh': {
+        // попадание в танк, разобранное у стрелка (зона, пробитие) — урон считает хост
+        const v = m.vehicles[e[1]];
+        if (v && v.alive && v.tank && e[2]) v.tank.applyHit(e[2], src);
         break;
       }
       case 'vh': {
@@ -482,6 +496,8 @@ export class NetSession {
         s.health = st.hp;
       }
       this.applySeat(s, st.veh, st.seat);
+      // командир танка: люк открыт — виден по пояс над башенкой
+      if (st.veh >= 0 && st.seat === 2) { const tv = m.vehicles[st.veh]; if (tv && tv.tank) { tv.tank.hatch = !!st.th; s.hidden = !st.th; } }
       // турель у стрелка-игрока
       if (st.tg && st.veh >= 0) { const veh = m.vehicles[st.veh]; if (veh) { veh.turretYaw = st.tg[0]; veh.gunPitch = st.tg[1]; veh.netTurret = true; } }
     }
@@ -495,8 +511,9 @@ export class NetSession {
     // техника: кто считает движение
     m.vehicles.forEach((veh, i) => {
       let driver = null;
-      for (const p of this.peers.values()) if (p.last && p.last.alive && p.last.veh === i && p.last.seat === 0) driver = p;
-      const localDriver = m.player.vehicle === veh && m.player.seat === 0;
+      const cs = veh.type.ctrlSeat ?? 0;
+      for (const p of this.peers.values()) if (p.last && p.last.alive && p.last.veh === i && p.last.seat === cs) driver = p;
+      const localDriver = m.player.vehicle === veh && m.player.seat === cs;
       const vi = this.vehInterp[i];
       if (localDriver || (!driver && this.isHost)) { veh.netPuppet = null; }
       else if (vi && ((driver && vi.src === driver.id) || (!driver && vi.src === 'host'))) veh.netPuppet = vi.buf;
@@ -563,7 +580,8 @@ export class NetSession {
       veh: p.vehicle ? m.vehicles.indexOf(p.vehicle) : -1, seat: p.vehicle ? p.seat : -1,
       gun: p.gun ? m.guns.indexOf(p.gun) : -1,
     };
-    if (p.vehicle && p.seat === 0) { const v = p.vehicle; st.vs = [r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), r3(v.pitch), r3(v.roll)]; }
+    if (p.vehicle && p.vehicle.tank && p.seat === 2) st.th = p.vehicle.tank.hatch ? 1 : 0;
+    if (p.vehicle && p.seat === (p.vehicle.type.ctrlSeat ?? 0)) { const v = p.vehicle; st.vs = [r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), r3(v.pitch), r3(v.roll)]; }
     if (p.vehicle && p.seat === 1) st.tg = [r3(p.vehicle.turretYaw), r3(p.vehicle.gunPitch)];
     if (p.gun) st.gs = [r2(p.gun.az), r2(p.gun.elM)];
     this.net.send(st);
@@ -578,7 +596,7 @@ export class NetSession {
       const fl = (s.alive ? 1 : 0) | (s.brain && s.brain.aiming ? 2 : 0) | (s.reloadT > 0 ? 4 : 0) | (s.hidden ? 8 : 0);
       ai.push([i, r2(s.pos.x), r2(s.pos.y), r2(s.pos.z), r3(s.yaw), r3(s.aimYaw), r3(s.aimPitch), Math.max(0, STANCES.indexOf(s.stance)), r2(s.vel.x), r2(s.vel.z), fl, s.vehicle ? m.vehicles.indexOf(s.vehicle) : -1, s.vehicle ? s.seat : -1]);
     }
-    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll), v.dmg.state]);
+    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll), v.dmg.state, v.tank ? v.tank.netState() : 0]);
     const st = m.stages[m.stageIdx];
     this.net.send({
       t: 'ws', ts: Math.round(performance.now()), st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',

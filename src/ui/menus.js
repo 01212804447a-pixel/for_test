@@ -245,7 +245,7 @@ export class UI {
     const e = m.env;
     const timeName = { day: 'день (низкое солнце)', dusk: 'полярные сумерки', night: 'полярная ночь' }[e.time];
     const squad = m.noSquad ? [] : s.squad.filter((id) => !(s.hospital[id] > 0));
-    const seats = (s.vehicles || []).reduce((a, v) => a + VEHICLE_TYPES[v].seats, 0);
+    const seats = (s.vehicles || []).reduce((a, v) => a + (VEHICLE_TYPES[v].troop ?? VEHICLE_TYPES[v].seats), 0);
     this.show(`<h1>${m.title}</h1><div class="opc">${m.code}</div>
       <div class="brief">${m.brief.split('\n').map((p) => `<p>${p}</p>`).join('')}</div>
       <div class="cond"><b>Условия:</b> ${timeName}; t = ${e.tempC} °C; ветер ${CARDINALS[Math.round(e.windFrom / 45) % 8]} (${e.windFrom}°), ${e.wind} м/с; видимость ~${e.visibility} м${e.snow > 0.3 ? '; снегопад' : ''}${e.aurora ? '; северное сияние' : ''}.</div>
@@ -504,7 +504,7 @@ export class UI {
     const summary = (p) => {
       const k = kitOf(p, r);
       const w = (WEAPONS[k.weapon] || {}).name || '';
-      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}${k.mortar ? ' · миномёт' : ''}${k.kpv ? ' · КПВ' : ''}`;
+      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}${k.mortar ? ' · миномёт' : ''}${k.kpv ? ' · КПВ' : ''}${k.tank ? ' · Т-72Б' : ''}`;
     };
     this.show(`<h1>${escH(r.name)}</h1><div class="opc">${pvp ? `Противостояние · ${escH(title)} · до ${r.scoreLimit} побед или ${r.timeLimit} мин` : `Кооператив · ${escH(title)}`}</div>
       <div id="nerr" class="bad"></div>
@@ -521,6 +521,7 @@ export class UI {
         <label><input type="checkbox" id="kd" ${kit.howitzer ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Д-30 с расчётом на прицепе — тягач ${sel('kt', TOW_CHOICES.map((t) => [t, VEHICLE_TYPES[t].name]), kit.tow)}</label>
         <label><input type="checkbox" id="kmo" ${kit.mortar ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 82-мм миномёт 2Б14 с расчётом</label>
         <label><input type="checkbox" id="kkp" ${kit.kpv ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 14,5-мм КПВ на станке</label>
+        <label><input type="checkbox" id="ktk" ${kit.tank ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Танк Т-72Б (вы — командир, наводчик и мехвод — ИИ)</label>
       </div>
       ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
       <p class="note">${pvp ? 'Каждый выбирает своё: оружие, РПГ или ПТРД, гранаты, состав отделения ИИ, нужна ли ему Д-30 и на каком тягаче.' : `На старте у всех — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}; Д-30 — у тех, кто её взял. Хост (создатель комнаты) считает противника и задачи.`}</p>
@@ -547,6 +548,7 @@ export class UI {
     on('#kd', (e) => { kit.howitzer = e.checked; });
     on('#kmo', (e) => { kit.mortar = e.checked; });
     on('#kkp', (e) => { kit.kpv = e.checked; });
+    on('#ktk', (e) => { kit.tank = e.checked; });
     on('#kt', (e) => { kit.tow = e.value; });
     this.bind('#kl', () => { this._netClear(); this.magLoader(LOADABLE.includes(kit.weapon) ? kit.weapon : null, () => this.netRoom()); });
     if (lobby) sendKit();
@@ -627,10 +629,10 @@ export class UI {
   motorPool() {
     const s = this.app.save;
     const render = () => {
-      const seats = (s.vehicles || []).reduce((a, v) => a + VEHICLE_TYPES[v].seats, 0);
+      const seats = (s.vehicles || []).reduce((a, v) => a + (VEHICLE_TYPES[v].troop ?? VEHICLE_TYPES[v].seats), 0);
       this.show(`<h1>Автопарк</h1><p class="note">Выберите до двух машин для выдвижения (мест: ${seats}, нужно ${s.squad.length + 1}). На задании: подойдите к машине и нажмите E. Отделение по команде «за мной» (F) рассаживается само; в МТ-ЛБ один из бойцов садится за ПКТ.</p>
         <div class="arm">${Object.values(VEHICLE_TYPES).map((v) => `<div class="card ${s.vehicles.includes(v.id) ? 'on' : ''}" data-id="${v.id}"><div class="ct">${v.name}</div><div class="cr">${v.cls}</div>
-          <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч · мест ${v.seats} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}
+          <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч${v.reverse ? `, назад ${(v.reverse * 3.6).toFixed(0)}` : ''} · ${v.tank ? 'экипаж 3, мест для отделения нет' : `мест ${v.seats}`} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}${v.tank ? ` · ${(v.mass / 1000).toFixed(1)} т, ${Math.round(v.power * 1.36)} л. с.` : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}
           <div class="card ${s.howitzer ? 'on' : ''}" id="d30"><div class="ct">122-мм гаубица Д-30</div><div class="cr">Буксируемое орудие</div>
           <div class="cn">Масса 3,2 т · дальность до 15,2 км · ${s.vehicles.length ? 'на прицепе у ' + VEHICLE_TYPES[s.vehicles[0]].name : 'нужен тягач — выберите машину'}</div>
           <div class="cb">Выезжает в походном положении на прицепе у первой машины. На огневой позиции: отцепить (E у проушины), привести в боевое положение (E справа у колеса, ≈16 с), затем E слева — место наводчика.</div></div>

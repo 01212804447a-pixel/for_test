@@ -1,5 +1,5 @@
 // Клавиатура и мышь с захватом указателя
-const GAME_KEYS = new Set(['Tab', 'Space', 'F1', 'F2', 'F3', 'F4', 'AltLeft', 'AltRight', 'KeyF', 'Quote', 'Slash']);
+const GAME_KEYS = new Set(['Tab', 'Space', 'F1', 'F2', 'F3', 'F4', 'AltLeft', 'AltRight', 'KeyF', 'Quote', 'Slash', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
 // Действия и клавиши по умолчанию (Mouse0/1/2 — кнопки мыши)
 export const ACTIONS = [

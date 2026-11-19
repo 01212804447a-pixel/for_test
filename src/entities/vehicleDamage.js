@@ -409,7 +409,8 @@ export class VehicleDamage {
     const lp = _v.copy(p).applyMatrix4(_m);
     if (lp.y > 1.3) return;
     const side = lp.x < 0 ? 0 : 1;
-    if (Math.abs(Math.abs(lp.x) - 1.24) < r + 0.3 && Math.abs(lp.z) < 3.4 + r) this.setBit(24 + side);
+    const tx = v.model.tracks ? Math.abs(v.model.tracks.sides[1].x) : 1.24;
+    if (Math.abs(Math.abs(lp.x) - tx) < r + 0.3 && Math.abs(lp.z) < 3.4 + r) this.setBit(24 + side);
   }
   setBit(b) { this.state |= 1 << b; this.apply(); }
 

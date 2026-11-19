@@ -79,7 +79,7 @@ function send(c, msg) { if (c.ws.readyState === 1) c.ws.send(typeof msg === 'str
 const KIT_WEAPONS = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];
 const KIT_HEAVY = ['rpg7', 'ptrd'];
 const KIT_ROLES = ['rifleman', 'rifleman_akm', 'mg', 'sniper', 'at', 'gp', 'medic'];
-const KIT_TOW = ['tigr', 'niva', 'mtlb'];
+const KIT_TOW = ['tigr', 'niva', 'mtlb', 't72b'];
 function cleanKit(k) {
   if (!k || typeof k !== 'object') return null;
   return {
@@ -92,6 +92,7 @@ function cleanKit(k) {
     smokes: Math.max(0, Math.min(4, Math.round(+(k.smokes ?? 2) || 0))),
     mortar: !!k.mortar,
     kpv: !!k.kpv,
+    tank: !!k.tank,
   };
 }
 

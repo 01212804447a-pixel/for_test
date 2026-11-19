@@ -226,6 +226,8 @@ export class Projectiles {
     }
     if (p.byPlayer) p.impact = { pos: pt.clone(), normal: best.hit && best.hit.normal ? best.hit.normal.clone() : (best.ph ? best.ph.normal.clone() : null), target: best.hit && best.hit.obstacle && best.hit.obstacle.owner && best.hit.obstacle.owner.kind === 'target' ? best.hit.obstacle.owner : null, kind: best.kind };
     if (best.kind === 'prop') { this._hitProp(p, best.ph, pt); return; }
+    // танк: зональная броня, заброневое действие (урон — у хоста; у чужих выстрелов — только вид)
+    if (best.kind === 'vehicle' && best.hit.vehicle.tank) { best.hit.vehicle.tank.projectileHit(p, best.hit, pt); p.alive = false; return; }
     if (p.visual && best.kind !== 'static') {
       // чужой выстрел: только картинка, урон считает стрелок
       const dir = p.v.clone().normalize();

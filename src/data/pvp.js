@@ -26,14 +26,14 @@ export const NET_ROLES = {
   gp: { role: 'rifleman', weapon: 'ak74m_gp', name: 'стрелок с ГП-25' },
   medic: { role: 'medic', weapon: 'ak74m', name: 'медик' },
 };
-export const TOW_CHOICES = ['tigr', 'niva', 'mtlb'];
+export const TOW_CHOICES = ['tigr', 'niva', 'mtlb', 't72b'];
 // Снаряжение игрока в сетевой игре (комната): оружие, тяжёлое оружие, гранаты, отделение, Д-30 и тягач
 export function defaultKit(save = {}, room = {}) {
   const sq = ['sniper', 'mg', 'rifleman', 'at', 'medic', 'rifleman_akm'].slice(0, room.squad ?? 3);
   return {
     weapon: PVP_WEAPONS.includes(save.primary) ? save.primary : 'ak74m',
     heavy: save.launcher === true ? 'rpg7' : save.launcher || null,
-    grenades: 3, smokes: 2, squad: sq, howitzer: false, tow: 'tigr', mortar: false, kpv: false,
+    grenades: 3, smokes: 2, squad: sq, howitzer: false, tow: 'tigr', mortar: false, kpv: false, tank: false,
   };
 }
 export function kitOf(pl, room) {

@@ -45,18 +45,19 @@ float vp_n(vec3 x){ vec3 i=floor(x); vec3 f=fract(x); f=f*f*(3.0-2.0*f);
              mix(mix(vp_h(i+vec3(0,0,1)),vp_h(i+vec3(1,0,1)),f.x),mix(vp_h(i+vec3(0,1,1)),vp_h(i+vec3(1,1,1)),f.x),f.y),f.z); }
 float vp_f(vec3 p){ return vp_n(p)*0.5+vp_n(p*2.07)*0.25+vp_n(p*4.13)*0.125+vp_n(p*8.4)*0.0625; }
 `;
-export function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss = 0.5, metal = 0.25, camo = true, dirtAmt = 0.85 } = {}) {
+// yOff — высота начала координат детали над землёй (башня, пушка): грязь снизу считается от земли
+export function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, gloss = 0.5, metal = 0.25, camo = true, dirtAmt = 0.85, yOff = 0 } = {}) {
   const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: gloss, metalness: metal, clearcoat: 0.25, clearcoatRoughness: 0.55 });
   const C = cols.map((c) => new THREE.Color(c));
   while (C.length < 3) C.push(C[C.length - 1]);
   m.onBeforeCompile = (sh) => {
     sh.uniforms.vpC0 = { value: C[0] }; sh.uniforms.vpC1 = { value: C[1] }; sh.uniforms.vpC2 = { value: C[2] };
-    sh.uniforms.vpScale = { value: scale }; sh.uniforms.vpDirt = { value: dirtTop }; sh.uniforms.vpSnow = { value: snow }; sh.uniforms.vpCamo = { value: camo ? 1 : 0 }; sh.uniforms.vpDirtAmt = { value: dirtAmt };
+    sh.uniforms.vpScale = { value: scale }; sh.uniforms.vpDirt = { value: dirtTop }; sh.uniforms.vpSnow = { value: snow }; sh.uniforms.vpCamo = { value: camo ? 1 : 0 }; sh.uniforms.vpDirtAmt = { value: dirtAmt }; sh.uniforms.vpYOff = { value: yOff };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvVpP = position;\nvVpN = normal;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;\nuniform vec3 vpC0, vpC1, vpC2;\nuniform float vpScale, vpDirt, vpSnow, vpCamo, vpDirtAmt;\n${PAINT_GLSL}`)
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying vec3 vVpP;\nvarying vec3 vVpN;\nuniform vec3 vpC0, vpC1, vpC2;\nuniform float vpScale, vpDirt, vpSnow, vpCamo, vpDirtAmt, vpYOff;\n${PAINT_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        vec3 P = vVpP;
+        vec3 P = vVpP + vec3(0.0, vpYOff, 0.0);
         // камуфляж: пятна с чёткими краями
         float n1 = vp_f(P * vpScale * vec3(1.0, 1.4, 0.7) + 3.0);
         float n2 = vp_f(P * vpScale * vec3(0.8, 1.6, 0.9) + 17.0);
@@ -82,7 +83,7 @@ export function paintMaterial(cols, { scale = 0.55, dirtTop = 1.0, snow = 0.85, 
   return m;
 }
 
-function materials(cols, opts) {
+export function materials(cols, opts) {
   const std = (o) => new THREE.MeshStandardMaterial(o);
   return {
     paint: paintMaterial(cols, opts),
@@ -104,7 +105,7 @@ function materials(cols, opts) {
 }
 
 // Колесо: шина (тело вращения со скруглёнными плечами) + грунтозацепы + диск со ступицей
-function makeWheel(parent, r, w, x, y, z, M, { hubs = 8, lugs = 22, rimR = 0.55, mt = false } = {}) {
+export function makeWheel(parent, r, w, x, y, z, M, { hubs = 8, lugs = 22, rimR = 0.55, mt = false } = {}) {
   const steer = new THREE.Group(); steer.position.set(x, y, z);
   const spin = new THREE.Group(); steer.add(spin);
   const P = new Parts();
@@ -337,10 +338,16 @@ export function buildNiva(camoCols) {
 // ---------- МТ-ЛБ ----------
 // Контур гусеницы в плоскости (z, y): ремень вокруг окружностей по часовой стрелке
 // (низ — вперёд, перед — вверх, верх — назад). Вогнутые перегибы (верх на катках) — излом.
-function trackPath() {
+// контур гусеницы МТ-ЛБ: нижняя ветвь по катковым, ведущее спереди, верхняя ветвь на катках
+function mtlbCircles() {
   const t = 0.025, rw = 0.28 + t, rs = 0.25 + t;
   const W = (i, top) => ({ c: [-2.2 + i * 0.88, 0.33], r: rw, top });
-  const C = [W(5), W(4), W(3), W(2), W(1), W(0), { c: [-2.85, 0.66], r: rs }, W(0, 1), W(1, 1), W(2, 1), W(3, 1), W(4, 1), W(5, 1), { c: [2.88, 0.6], r: rs }];
+  return [W(5), W(4), W(3), W(2), W(1), W(0), { c: [-2.85, 0.66], r: rs }, W(0, 1), W(1, 1), W(2, 1), W(3, 1), W(4, 1), W(5, 1), { c: [2.88, 0.6], r: rs }];
+}
+
+// circles — окружности обхода (z, y, r + толщина трака) по ходу ленты: низ (корма → нос), передний
+// ленивец/ведущее, верх (нос → корма), заднее колесо
+function trackPath(C = mtlbCircles()) {
   const n = C.length, beta = [];
   for (let i = 0; i < n; i++) {
     const A = C[i], B = C[(i + 1) % n];
@@ -383,31 +390,36 @@ function trackPath() {
   return { N, P, T, len };
 }
 
-let _linkGeo = null;
-function linkGeometry(pitch) {
-  if (_linkGeo) return _linkGeo;
+const _linkGeo = new Map();
+function linkGeometry(pitch, w = 0.42, ridge = 1) {
+  const key = `${pitch.toFixed(4)}:${w}:${ridge}`;
+  if (_linkGeo.has(key)) return _linkGeo.get(key);
   const parts = [
-    new THREE.BoxGeometry(0.42, 0.035, pitch * 0.86),                 // башмак
-    new THREE.BoxGeometry(0.42, 0.022, 0.03).translate(0, 0.026, -pitch * 0.18), // грунтозацеп
-    new THREE.BoxGeometry(0.035, 0.06, pitch * 0.5).translate(-0.03, -0.045, 0), // гребень (направляющий)
-    new THREE.CylinderGeometry(0.012, 0.012, 0.44, 6).rotateZ(Math.PI / 2).translate(0, 0, pitch * 0.45), // палец
+    new THREE.BoxGeometry(w, 0.035, pitch * 0.86),                 // башмак
+    new THREE.BoxGeometry(w, 0.022, 0.03).translate(0, 0.026, -pitch * 0.18), // грунтозацеп
+    new THREE.CylinderGeometry(0.012, 0.012, w + 0.02, 6).rotateZ(Math.PI / 2).translate(0, 0, pitch * 0.45), // палец
   ];
-  _linkGeo = mergeGeometries(parts.map((g) => { const n = g.index ? g.toNonIndexed() : g; const o = new THREE.BufferGeometry(); o.setAttribute('position', n.attributes.position); o.setAttribute('normal', n.attributes.normal); return o; }));
-  return _linkGeo;
+  // гребни (направляющие): один у МТ-ЛБ, два у танка (каток с двумя дисками идёт между ними)
+  if (ridge === 1) parts.push(new THREE.BoxGeometry(0.035, 0.06, pitch * 0.5).translate(-0.03, -0.045, 0));
+  else for (const sx of [-1, 1]) parts.push(new THREE.BoxGeometry(0.03, 0.07, pitch * 0.5).translate(sx * 0.04, -0.05, 0));
+  const geo = mergeGeometries(parts.map((g) => { const n = g.index ? g.toNonIndexed() : g; const o = new THREE.BufferGeometry(); o.setAttribute('position', n.attributes.position); o.setAttribute('normal', n.attributes.normal); return o; }));
+  _linkGeo.set(key, geo);
+  return geo;
 }
 
-function buildTracks(g, M) {
-  const path = trackPath();
-  const count = Math.round(path.len / 0.118), pitch = path.len / count;
+// гусеницы: cfg.circles — контур, cfg.pitch — шаг трака, cfg.width — ширина, cfg.x — колея/2
+export function buildTracks(g, M, cfg = {}) {
+  const path = trackPath(cfg.circles || mtlbCircles());
+  const count = Math.round(path.len / (cfg.pitch || 0.118)), pitch = path.len / count;
   const mat = M.links || (M.links = new THREE.MeshStandardMaterial({ color: 0x3b3d40, roughness: 0.72, metalness: 0.55 }));
-  const geo = linkGeometry(pitch);
+  const geo = linkGeometry(pitch, cfg.width || 0.42, cfg.ridges || 1);
   const sides = [];
   for (const s of [-1, 1]) {
     const im = new THREE.InstancedMesh(geo, mat, count);
     im.castShadow = true; im.receiveShadow = true;
     im.frustumCulled = false;
     g.add(im);
-    sides.push({ im, x: s * 1.24, s, off: 0, last: NaN, broken: false });
+    sides.push({ im, x: s * (cfg.x || 1.24), s, off: 0, last: NaN, broken: false });
   }
   const m4 = new THREE.Matrix4();
   // переставить траки борта по смещению ленты off (м)
@@ -474,20 +486,21 @@ export function buildMTLB(camoCols) {
   // бревно для самовытаскивания на корме
   P.add('canvas', cylX(0.1, -1.0, 1.0, { y: 1.75, z: 3.0, seg: 12 }));
   g.add(P.build(M));
-  // башня с ПКТ
+  // башня с ПКТ (своя краска: грязь снизу — от земли, а не от погона)
   const tur = new THREE.Group();
   const TP = new Parts();
+  const MT = { ...M, paint: paintMaterial(camoCols, { scale: 0.32, dirtTop: 1.05, snow: 0.95, gloss: 0.75, metal: 0.35, yOff: 1.8 }) };
   TP.add('paint', xf(new THREE.CylinderGeometry(0.42, 0.5, 0.36, 26), { y: 0 }));
   TP.add('paint', xf(new THREE.SphereGeometry(0.42, 26, 10, 0, Math.PI * 2, 0, Math.PI / 2), { sy: 0.42, y: 0.17 }));
   TP.add('glass', rbox(0.14, 0.1, 0.14, -0.18, 0.26, -0.22, 0.02));
   TP.add('paint', cylY(0.16, 0.24, 0.32, { x: 0.12, z: 0.1, seg: 18 }));
-  tur.add(TP.build(M));
+  tur.add(TP.build(MT));
   const gun = new THREE.Group();
   const GP = new Parts();
   GP.add('paint', rbox(0.26, 0.2, 0.22, 0, 0, -0.08, 0.05));
   GP.add('metal', cylZ(0.02, -0.2, -1.0, { seg: 10 }));
   GP.add('dark', lathe([[0, -1.1], [0.028, -1.1], [0.03, -0.98], [0, -0.98]], { seg: 12 }));
-  gun.add(GP.build(M));
+  gun.add(GP.build(MT));
   gun.position.set(0, 0.06, -0.32);
   tur.add(gun);
   tur.position.set(0.55, 1.8, -1.45);

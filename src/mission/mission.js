@@ -381,6 +381,18 @@ export class Mission {
         if (k.mortar) { const q = at(-8 - n * 5, 6); this.guns.push(new Mortar(this, { x: q.x, z: q.z, dir: (((-sp.yaw) / MIL) % 6000 + 6000) % 6000, name: `2Б14 (${pl.name})`, team })); }
         if (k.kpv) { const q = at(-4 - n * 5, -4); this.guns.push(new Kpv(this, { x: q.x, z: q.z, yaw: sp.yaw, name: `КПВ (${pl.name})`, team })); }
       });
+      // танк Т-72Б — у каждого, кто его взял (команда — по игроку)
+      const perTeam3 = { negs: 0, denter: 0 };
+      room.players.forEach((pl) => {
+        const k = kitOf(pl, room);
+        if (!k.tank) return;
+        const team = this.pvp ? pl.team : 'negs';
+        const sp = this.pvp ? pvpMap(def.id).spawns[team] : { x: st.x, z: st.z, yaw: st.yaw };
+        const n = perTeam3[team]++;
+        const c = Math.cos(sp.yaw), s = Math.sin(sp.yaw);
+        const ox = -14 - n * 6, oz = 8 + n * 3;
+        this.addVehicle('t72b', { x: sp.x + c * ox + s * oz, z: sp.z - s * ox + c * oz, yaw: sp.yaw, team });
+      });
       room.players.forEach((pl) => {
         const k = kitOf(pl, room);
         if (!k.howitzer) return;
@@ -1267,7 +1279,7 @@ export class Mission {
     }
     if (best) return best;
     for (const v of this.vehicles) {
-      if (!v.alive || v.crewTeam === 'denter') continue;
+      if (!v.alive || (v.crewTeam && v.crewTeam !== b.team)) continue;
       const dd = this.world.pointObstacleDist(v.collider, b.pos.x, b.pos.z);
       if (dd < 1.6) return { label: `Сесть: ${v.type.name}`, hold: 0, action: () => p.enterVehicle(v) };
     }
@@ -1369,6 +1381,10 @@ export class Mission {
     const v = p.vehicle;
     if (p.gun) {
       fov = p.gun.camera(cam);
+      look.position.copy(cam.position); look.quaternion.copy(cam.quaternion); look.updateMatrixWorld(true);
+    } else if (v && v.tank && p.seat === 2) {
+      // танк: только виды изнутри (прицелы, приборы, люк)
+      fov = v.tank.camera(cam);
       look.position.copy(cam.position); look.quaternion.copy(cam.quaternion); look.updateMatrixWorld(true);
     } else if (!v) {
       const bob = Math.sin(p.walkPhase * 2) * 0.025 * Math.min(1, b.speed / 3) * (1 - p.aimT * 0.8);

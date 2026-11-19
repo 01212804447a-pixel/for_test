@@ -165,7 +165,8 @@ export class HUD {
       (p.aimT > 0.5 ? `<div class="sm">Дыхание (Shift)</div><div class="bar thin"><i style="width:${(p.breath * 100).toFixed(0)}%;background:${p.breathLock > 0 ? '#d0503c' : '#8fb4d8'}"></i></div>` : '');
     if (this._sh !== sh) { this.status.innerHTML = sh; this._sh = sh; }
     // техника
-    if (p.vehicle) {
+    if (p.vehicle && p.vehicle.tank) this.veh.style.display = 'none'; // у танка — своя панель командира
+    else if (p.vehicle) {
       const vv = p.vehicle;
       const vh = `<div class="wn">${vv.type.name}</div><div>${p.seatName()} · ${(Math.abs(vv.speed) * 3.6).toFixed(0)} км/ч</div><div class="bar"><i style="width:${(Math.max(0, vv.hp) / vv.type.hp * 100).toFixed(0)}%"></i></div><div class="sm">W/S — газ/тормоз, A/D — руль, Space — стояночный, C — камера, 1/2 — место, E — выход${p.seat > 1 ? ', R — пополнить БК' : ''}</div>`;
       if (this._vh !== vh) { this.veh.innerHTML = vh; this._vh = vh; }

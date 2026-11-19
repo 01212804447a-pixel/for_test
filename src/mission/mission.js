@@ -32,6 +32,7 @@ import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/ma
 import { Howitzer } from '../artillery/howitzer.js';
 import { Mortar } from '../artillery/mortar.js';
 import { Kpv } from '../artillery/kpv.js';
+import { Atgm } from '../artillery/atgm.js';
 import { canCarry } from '../artillery/emplace.js';
 import { pvpMap, NET_ROLES, kitOf } from '../data/pvp.js';
 import { grenadeModel, smokeGrenadeModel } from '../weapons/guns.js';
@@ -365,6 +366,10 @@ export class Mission {
       const v = carrier('kpv'), q = nearStart(6, -3);
       this.guns.push(new Kpv(this, { x: q.x, z: q.z, yaw: st.yaw, name: 'КПВ № 1', stowIn: v || null }));
     }
+    if (!this.net && this.setup.atgm) {
+      const v = carrier('atgm'), q = nearStart(-4, -5);
+      this.guns.push(new Atgm(this, { x: q.x, z: q.z, yaw: st.yaw, name: '«Малютка» № 1', stowIn: v || null }));
+    }
     if (this.net && def.id !== 'artillery') {
       // сетевая игра: Д-30 с расчётом и выбранный тягач — у каждого, кто их взял
       const room = this.net.room;
@@ -372,7 +377,7 @@ export class Mission {
       const perTeam2 = { negs: 0, denter: 0 };
       room.players.forEach((pl) => {
         const k = kitOf(pl, room);
-        if (!k.mortar && !k.kpv) return;
+        if (!k.mortar && !k.kpv && !k.atgm) return;
         const team = this.pvp ? pl.team : 'negs';
         const sp = this.pvp ? pvpMap(def.id).spawns[team] : { x: st.x, z: st.z, yaw: st.yaw };
         const n = perTeam2[team]++;
@@ -380,6 +385,7 @@ export class Mission {
         const at = (lx, lz) => ({ x: sp.x + c * lx + s * lz, z: sp.z - s * lx + c * lz });
         if (k.mortar) { const q = at(-8 - n * 5, 6); this.guns.push(new Mortar(this, { x: q.x, z: q.z, dir: (((-sp.yaw) / MIL) % 6000 + 6000) % 6000, name: `2Б14 (${pl.name})`, team })); }
         if (k.kpv) { const q = at(-4 - n * 5, -4); this.guns.push(new Kpv(this, { x: q.x, z: q.z, yaw: sp.yaw, name: `КПВ (${pl.name})`, team })); }
+        if (k.atgm) { const q = at(4 + n * 5, -5); this.guns.push(new Atgm(this, { x: q.x, z: q.z, yaw: sp.yaw, name: `ПТРК (${pl.name})`, team })); }
       });
       // танк Т-72Б — у каждого, кто его взял (команда — по игроку)
       const perTeam3 = { negs: 0, denter: 0 };
@@ -391,7 +397,7 @@ export class Mission {
         const n = perTeam3[team]++;
         const c = Math.cos(sp.yaw), s = Math.sin(sp.yaw);
         const ox = -14 - n * 6, oz = 8 + n * 3;
-        this.addVehicle('t72b', { x: sp.x + c * ox + s * oz, z: sp.z - s * ox + c * oz, yaw: sp.yaw, team });
+        this.addVehicle(team === 'denter' ? 't80bv' : 't72b', { x: sp.x + c * ox + s * oz, z: sp.z - s * ox + c * oz, yaw: sp.yaw, team });
       });
       room.players.forEach((pl) => {
         const k = kitOf(pl, room);
@@ -525,6 +531,7 @@ export class Mission {
       howitzer: (o) => { const h = new Howitzer(self, o); self.guns.push(h); return h; },
       mortar: (o) => { const h = new Mortar(self, o); self.guns.push(h); return h; },
       kpv: (o) => { const h = new Kpv(self, o); self.guns.push(h); return h; },
+      atgm: (o) => { const h = new Atgm(self, o); self.guns.push(h); return h; },
       artTarget: (o) => self.addArtTarget(o),
     };
     return ctx;
@@ -599,7 +606,9 @@ export class Mission {
     const v = new Vehicle(this, type, { x: o.x, z: o.z, yaw: o.yaw || 0, team: o.team || 'negs' });
     this.vehicles.push(v);
     this.world.vehicles.push(v);
-    if (o.crew) {
+    // танк противника: экипаж ИИ (командир, наводчик, мехвод) — свой, без бойцов-пассажиров
+    if (v.tank && (o.tankAI || (o.team === 'denter' && !this.pvp))) v.tank.enableAI(o.tankAI || {});
+    if (o.crew && !v.tank) {
       o.crew.forEach((c, i) => {
         const s = this.addEnemy({ x: o.x, z: o.z, weapon: c.weapon || 'akm', role: c.role || 'rifleman', secondary: c.secondary, group: o.group, mode: 'guard' });
         const seat = i === 0 ? 0 : (i === 1 && v.gunWeapon ? 1 : -1);

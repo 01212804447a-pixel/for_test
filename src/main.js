@@ -155,7 +155,7 @@ class App {
     setTimeout(() => {
       try {
         const squad = def.noSquad ? [] : this.save.squad.filter((x) => !(this.save.hospital[x] > 0));
-        const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv });
+        const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv, atgm: !!this.save.atgm });
         this.hud.reset();
         m.build();
         this.mission = m;

@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { buildTigr, buildNiva, buildMTLB } from './vehicleModels.js';
 import { buildT72 } from './t72Model.js';
-import { Tank, tankZone as tankZoneOf, T72_ARMOR as TANK_ARMOR } from './tank.js';
+import { Tank, tankZone as tankZoneOf } from './tank.js';
 import { blobShadow } from '../world/flora.js';
 import { WEAPONS } from '../data/weapons.js';
 import { clamp, rand, randn, wrapAngle } from '../core/math.js';
@@ -61,11 +61,24 @@ export const VEHICLE_TYPES = {
     susp: { droop: 0.1, comp: 0.16, zeta: 0.6, hcg: 1.05 }, hitch: 3.6,
     desc: 'Экипаж 3: вы — командир, наводчик и мехвод — ИИ. 125-мм 2А46М с АЗ (22 в карусели), СУО 1А40-1 с дальномером, ДЗ «Контакт-1». Только виды изнутри: прицелы, приборы, люк. Командам мехводу (стрелки) нужна секунда. Может тянуть Д-30.',
   },
+  // Т-80БВ (1985): 43,7 т, газотурбинный ГТД-1000ТФ 1100 л. с. (809 кВт), 70 км/ч, назад 11 км/ч,
+  // корпус 6,98 м; СУО 1А33 (1Г42 + вычислитель 1В517), АЗ «Корзина» на 28 выстрелов, «Контакт-1».
+  // У N.E.G.S таких нет — это танки «Дентера»
+  t80bv: {
+    id: 't80bv', name: 'Т-80БВ', cls: 'Основной боевой танк (газотурбинный)', len: 6.98, width: 3.46, height: 2.2,
+    wheelbase: 4.15, track: 2.8, wheelR: 0.335, maxSpeed: 70 / 3.6, reverse: 11 / 3.6, brake: 5.5, turnRate: 0.42, grip: 8,
+    mass: 43700, power: 809, eta: 0.6, cda: 7.0,
+    tracked: true, tank: true, seats: 3, troop: 1, ctrlSeat: 2, gun: '2a46m', turret: true, enemyOnly: true,
+    armor: { front: 500, side: 80, top: 40 }, hp: 1500,
+    engine: 'turbine', camo: ['#4a5047', '#d8dbdb', '#2b2f29'],
+    susp: { droop: 0.11, comp: 0.16, zeta: 0.55, hcg: 1.05 }, hitch: 3.6,
+    desc: 'Танк «Дентера». Газовая турбина: быстрый (70 км/ч, назад 11), свистит издалека. СУО 1А33 сама берёт дальность и упреждение, в АЗ 28 выстрелов. Броня как у Т-72Б.',
+  },
 };
 
 function buildModel(type) {
   const T = VEHICLE_TYPES[type];
-  return type === 'tigr' ? buildTigr(T.camo) : type === 'niva' ? buildNiva(T.camo) : type === 't72b' ? buildT72(T.camo) : buildMTLB(T.camo);
+  return type === 'tigr' ? buildTigr(T.camo) : type === 'niva' ? buildNiva(T.camo) : type === 't72b' ? buildT72(T.camo) : type === 't80bv' ? buildT72(T.camo, 't80') : buildMTLB(T.camo);
 }
 
 export class Vehicle {
@@ -163,7 +176,7 @@ export class Vehicle {
       if (!pt) return;
       const dir = new THREE.Vector3(this.pos.x - pt.x, 0, this.pos.z - pt.z).normalize();
       const z = tankZoneOf(this, pt, dir);
-      const arm = TANK_ARMOR[z.zone][heat ? 1 : 0];
+      const arm = this.tank.spec.armor[z.zone][heat ? 1 : 0];
       this.tank.applyHit({ zone: z.zone, pen: Math.round(pen), armor: arm, ce: !!heat, lp: [z.lp.x, z.lp.y, z.lp.z], big: !!(ex && ex.dmg >= 200), mass: 0, ric: false }, owner);
       return;
     }
@@ -703,6 +716,7 @@ export class Vehicle {
     if (!ai || !this.driver || !this.driver.alive) { this.controls.throttle = 0; this.controls.brake = 1; return; }
     if (ai.alerted && !ai.dismounted) {
       this.controls.throttle = 0; this.controls.brake = 1; this.controls.steer = 0;
+      if (this.tank) return; // танк: «короткая» — стоит и стреляет, экипаж не высаживается
       if (Math.abs(this.speed) < 1) {
         ai.dismounted = true;
         for (const s of [...this.seats]) {

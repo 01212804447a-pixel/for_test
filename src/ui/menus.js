@@ -504,7 +504,7 @@ export class UI {
     const summary = (p) => {
       const k = kitOf(p, r);
       const w = (WEAPONS[k.weapon] || {}).name || '';
-      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}${k.mortar ? ' · миномёт' : ''}${k.kpv ? ' · КПВ' : ''}${k.tank ? ' · Т-72Б' : ''}`;
+      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}${k.mortar ? ' · миномёт' : ''}${k.kpv ? ' · КПВ' : ''}${k.tank ? ' · танк' : ''}${k.atgm ? ' · ПТРК' : ''}`;
     };
     this.show(`<h1>${escH(r.name)}</h1><div class="opc">${pvp ? `Противостояние · ${escH(title)} · до ${r.scoreLimit} побед или ${r.timeLimit} мин` : `Кооператив · ${escH(title)}`}</div>
       <div id="nerr" class="bad"></div>
@@ -521,7 +521,8 @@ export class UI {
         <label><input type="checkbox" id="kd" ${kit.howitzer ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Д-30 с расчётом на прицепе — тягач ${sel('kt', TOW_CHOICES.map((t) => [t, VEHICLE_TYPES[t].name]), kit.tow)}</label>
         <label><input type="checkbox" id="kmo" ${kit.mortar ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 82-мм миномёт 2Б14 с расчётом</label>
         <label><input type="checkbox" id="kkp" ${kit.kpv ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 14,5-мм КПВ на станке</label>
-        <label><input type="checkbox" id="ktk" ${kit.tank ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Танк Т-72Б (вы — командир, наводчик и мехвод — ИИ)</label>
+        <label><input type="checkbox" id="ktk" ${kit.tank ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Танк (N.E.G.S — Т-72Б, «Дентер» — Т-80БВ; вы — командир)</label>
+        <label><input type="checkbox" id="kat" ${kit.atgm ? 'checked' : ''} ${lobby ? '' : 'disabled'}> ПТРК 9К11 «Малютка» (ручное наведение, 6 ракет)</label>
       </div>
       ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
       <p class="note">${pvp ? 'Каждый выбирает своё: оружие, РПГ или ПТРД, гранаты, состав отделения ИИ, нужна ли ему Д-30 и на каком тягаче.' : `На старте у всех — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}; Д-30 — у тех, кто её взял. Хост (создатель комнаты) считает противника и задачи.`}</p>
@@ -549,6 +550,7 @@ export class UI {
     on('#kmo', (e) => { kit.mortar = e.checked; });
     on('#kkp', (e) => { kit.kpv = e.checked; });
     on('#ktk', (e) => { kit.tank = e.checked; });
+    on('#kat', (e) => { kit.atgm = e.checked; });
     on('#kt', (e) => { kit.tow = e.value; });
     this.bind('#kl', () => { this._netClear(); this.magLoader(LOADABLE.includes(kit.weapon) ? kit.weapon : null, () => this.netRoom()); });
     if (lobby) sendKit();
@@ -631,7 +633,7 @@ export class UI {
     const render = () => {
       const seats = (s.vehicles || []).reduce((a, v) => a + (VEHICLE_TYPES[v].troop ?? VEHICLE_TYPES[v].seats), 0);
       this.show(`<h1>Автопарк</h1><p class="note">Выберите до двух машин для выдвижения (мест: ${seats}, нужно ${s.squad.length + 1}). На задании: подойдите к машине и нажмите E. Отделение по команде «за мной» (F) рассаживается само; в МТ-ЛБ один из бойцов садится за ПКТ.</p>
-        <div class="arm">${Object.values(VEHICLE_TYPES).map((v) => `<div class="card ${s.vehicles.includes(v.id) ? 'on' : ''}" data-id="${v.id}"><div class="ct">${v.name}</div><div class="cr">${v.cls}</div>
+        <div class="arm">${Object.values(VEHICLE_TYPES).filter((v) => !v.enemyOnly).map((v) => `<div class="card ${s.vehicles.includes(v.id) ? 'on' : ''}" data-id="${v.id}"><div class="ct">${v.name}</div><div class="cr">${v.cls}</div>
           <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч${v.reverse ? `, назад ${(v.reverse * 3.6).toFixed(0)}` : ''} · ${v.tank ? 'экипаж 3, мест для отделения нет' : `мест ${v.seats}`} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}${v.tank ? ` · ${(v.mass / 1000).toFixed(1)} т, ${Math.round(v.power * 1.36)} л. с.` : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}
           <div class="card ${s.howitzer ? 'on' : ''}" id="d30"><div class="ct">122-мм гаубица Д-30</div><div class="cr">Буксируемое орудие</div>
           <div class="cn">Масса 3,2 т · дальность до 15,2 км · ${s.vehicles.length ? 'на прицепе у ' + VEHICLE_TYPES[s.vehicles[0]].name : 'нужен тягач — выберите машину'}</div>
@@ -641,7 +643,10 @@ export class UI {
           <div class="cb">Едет в кузове ${s.vehicles.length ? VEHICLE_TYPES[s.vehicles[0]].name : '(без машины — стоит у места выдвижения)'}. E у кормы — выгрузить и нести, E — поставить. Наводчик — слева у прицела МПМ-44М (E), R — заряжать, Пробел — мину в ствол.</div></div>
           <div class="card ${s.kpv ? 'on' : ''}" id="kpv"><div class="ct">14,5-мм КПВ на станке</div><div class="cr">Пулемёт на колёсном станке со щитом</div>
           <div class="cn">600 выстр./мин · Б-32 пробивает «Тигр» и кирпич · 8 лент по 40 патронов</div>
-          <div class="cb">Едет в кузове «Тигра» или МТ-ЛБ (в «Ниву» не входит). E у кормы — выгрузить и катить, E — поставить где нужно, E у пулемёта — лечь за него.</div></div></div>
+          <div class="cb">Едет в кузове «Тигра» или МТ-ЛБ (в «Ниву» не входит). E у кормы — выгрузить и катить, E — поставить где нужно, E у пулемёта — лечь за него.</div></div>
+          <div class="card ${s.atgm ? 'on' : ''}" id="atg"><div class="ct">ПТРК 9К11 «Малютка»</div><div class="cr">Ручное наведение по проводу</div>
+          <div class="cn">До 3 км · 115–120 м/с · 4 кумулятивные 9М14М (≈460 мм) и 2 тандемные (≈600 мм за ДЗ)</div>
+          <div class="cb">Чемодан-пусковая и пульт с прицелом 9Ш16. Ракету ведёте сами: W/A/S/D — ручка, держите трассер на цели. Берёт Т-80БВ в борт, тандемная — и в лоб корпуса. Едет в любой машине.</div></div></div>
         <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
       this.bind('.card[data-id]', (e) => {
         const id = e.dataset.id;
@@ -652,6 +657,7 @@ export class UI {
       this.bind('#d30', () => { s.howitzer = !s.howitzer; this.app.persist(); render(); });
       this.bind('#mor', () => { s.mortar = !s.mortar; this.app.persist(); render(); });
       this.bind('#kpv', () => { s.kpv = !s.kpv; this.app.persist(); render(); });
+      this.bind('#atg', () => { s.atgm = !s.atgm; this.app.persist(); render(); });
       this.bind('#b', () => this.close());
     };
     render();

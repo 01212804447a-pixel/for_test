@@ -93,6 +93,7 @@ function cleanKit(k) {
     mortar: !!k.mortar,
     kpv: !!k.kpv,
     tank: !!k.tank,
+    atgm: !!k.atgm,
   };
 }
 

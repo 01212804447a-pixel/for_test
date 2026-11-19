@@ -368,7 +368,10 @@ export const MISSIONS = [
       ctx.stage([ctx.objReach('Отойти к точке сбора', -400, 520, 40)], () => {
         const route = [{ x: 500, z: -170 }, { x: 150, z: -200 }, { x: 0, z: -150 }];
         const n = ctx.vehicle('niva', { x: 1000, z: -152, yaw: PI / 2, team: 'denter', ai: { route, speed: 10 }, crew: [{}, { weapon: 'akm' }, { weapon: 'akm' }], group: reinf });
-        ctx.vehicle('mtlb', { x: 1040, z: -150, yaw: PI / 2, team: 'denter', ai: { route, speed: 10, leader: n }, crew: [{}, {}, {}, { role: 'mg', weapon: 'pkm' }, {}, {}], group: reinf });
+        const mtr = ctx.vehicle('mtlb', { x: 1040, z: -150, yaw: PI / 2, team: 'denter', ai: { route, speed: 10, leader: n }, crew: [{}, {}, {}, { role: 'mg', weapon: 'pkm' }, {}, {}], group: reinf });
+        // с колонной — Т-80БВ «Дентера»
+        ctx.vehicle('t80bv', { x: 1090, z: -150, yaw: PI / 2, team: 'denter', ai: { route, speed: 8, leader: mtr } });
+        ctx.radio('С колонной идёт танк Т-80БВ! В лоб его не взять — уходите к точке сбора, бейте только в борт или корму.', 'Штаб', 4);
         ctx.onUpdate(() => { for (const v of ctx.mission.vehicles) if (v.ai && v.ai.done) v.ai.alerted = true; });
       });
       g.onAlert = () => ctx.radio('Тревога в порту! Работайте быстро.', 'Штаб', 0.5);
@@ -378,7 +381,7 @@ export const MISSIONS = [
   // ================================================================ 5
   {
     id: 'm5', title: 'Объект-17', code: 'Операция «Последний рубеж»',
-    brief: 'Лойд Кранди скрывается на «Объекте-17» — бывшей военной базе на мысе. Периметр, три вышки, бункеры, у ворот — трофейный МТ-ЛБ. В командном бункере — Кранди с личной охраной в тяжёлой броне. У северного причала его ждёт катер.\n\nЗадача: прорвать периметр, ликвидировать Лойда Кранди до того, как он уйдёт к причалу, зачистить объект. Это последняя операция.',
+    brief: 'Лойд Кранди скрывается на «Объекте-17» — бывшей военной базе на мысе. Периметр, три вышки, бункеры, у ворот — трофейный МТ-ЛБ, в центре базы — танк Т-80БВ. В командном бункере — Кранди с личной охраной в тяжёлой броне. У северного причала его ждёт катер.\n\nЗадача: прорвать периметр, ликвидировать Лойда Кранди до того, как он уйдёт к причалу, зачистить объект. Это последняя операция.',
     env: { time: 'day', sunElev: 3, sunAz: 165, overcast: 0.1, snow: 0.06, tempC: -36, windFrom: 180, wind: 6, visibility: 800, fog: 0.0008 },
     terrain: { seed: 77, amp: 16, features: [
       { type: 'coast', nx: 0, nz: -1, d: 520, depth: 8 },
@@ -412,6 +415,8 @@ export const MISSIONS = [
       ctx.forest({ x: -350, z: 320, r: 140, trees: 28, seed: 16 }); ctx.forest({ x: 380, z: 260, r: 120, trees: 24, seed: 17 });
       const g = ctx.group('base');
       const gate = ctx.vehicle('mtlb', { x: 0, z: -122, yaw: PI, team: 'denter', crew: [{}, { weapon: 'akm' }], group: g, parked: true });
+      // Т-80БВ в окопе посреди базы: держит южный сектор
+      ctx.vehicle('t80bv', { x: -24, z: -262, yaw: PI, team: 'denter', tankAI: { hold: true, skill: 0.65 } });
       towers.forEach((t, i) => ctx.enemy({ x: [-140, 140, 140][i], z: [-110, -110, -410][i], y: t.top, yaw: PI * (i === 2 ? 0.5 : 1), static: true, group: g, weapon: i === 0 ? 'svd' : 'pkm', role: i === 0 ? 'sniper' : 'mg' }));
       const pos = [[-20, -142, PI, 'pkm', 'mg'], [20, -142, PI, 'akm'], [0, -222, PI, 'ak74m'], [-60, -163, PI, 'akm'], [60, -173, PI, 'ak74m', 'at'], [-42, -302, PI, 'akm'], [42, -312, PI, 'akm'], [-90, -262, 1, 'akm'], [-90, -302, 1, 'ak74m'], [90, -282, -1, 'akm'], [-45, -228, PI, 'akm'], [45, -233, PI, 'ak74m'], [0, -388, 0, 'pkm', 'mg']];
       for (const [x, z, yaw, w, role] of pos) ctx.enemy({ x, z, yaw, mode: 'guard', group: g, weapon: w, role: role || 'rifleman', secondary: role === 'at' ? 'rpg7' : undefined, skill: { aim: 0.6, reaction: 0.6, nerve: 0.65 } });
@@ -441,6 +446,7 @@ export const MISSIONS = [
         }
       });
       ctx.radio('Кей, это финал. «Объект-17» в 750 м к северу. −36, ветер южный 6 м/с — в спину. Кранди нужен любой ценой.', 'Штаб', 1);
+      ctx.radio('В центре базы Т-80БВ, держит южный сектор. Обходите с флангов, гранатомёт — в борт, или ПТРК.', 'Штаб', 9);
     },
   },
 ];

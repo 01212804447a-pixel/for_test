@@ -194,6 +194,8 @@ export class NetSession {
     if (s === m.player.body) return 'p';
     if (s.isRemote) return 'r' + s.peer.id;
     if (s.netIdx !== undefined) return 'a' + s.netIdx;
+    // экипаж танка ИИ: «v<машина>.<место>»
+    if (s.isCrew && s.vehicle) return 'v' + m.vehicles.indexOf(s.vehicle) + '.' + s.vehicle.seats.indexOf(s);
     return null;
   }
   resolve(ref, from) {
@@ -202,6 +204,7 @@ export class NetSession {
     if (ref === 'p') { const p = this.peers.get(from); return p ? p.soldier : null; }
     if (ref[0] === 'r') { const id = ref.slice(1); if (id === this.net.id) return m.player.body; const p = this.peers.get(id); return p ? p.soldier : null; }
     if (ref[0] === 'a') return m.netAI[+ref.slice(1)] || null;
+    if (ref[0] === 'v') { const [vi, si] = ref.slice(1).split('.').map(Number); const v = m.vehicles[vi]; return v ? v.seats[si] || null : null; }
     return null;
   }
   ev(e) { this.out.push(e); }
@@ -210,7 +213,7 @@ export class NetSession {
   // ---------------------------------------------------------------- исходящие: выстрелы, гранаты, урон
   onLocalShot(o, p) {
     const own = o.owner === this.m.player.body;
-    if (!own && !(this.isHost && o.owner && o.owner.netIdx !== undefined)) return;
+    if (!own && !(this.isHost && o.owner && (o.owner.netIdx !== undefined || o.owner.isCrew))) return;
     const gi = o.gun ? this.m.guns.indexOf(o.gun) : -1;
     this.ev(['s', this.ref(o.owner), o.weapon.id, o.ammoId || 0, r2(p.p.x), r2(p.p.y), r2(p.p.z), r2(p.v.x), r2(p.v.y), r2(p.v.z), gi]);
   }
@@ -223,7 +226,7 @@ export class NetSession {
     const m = this.m;
     // урон удалённому игроку засчитываем только от своих источников (свой боец, ИИ хоста)
     const src = source;
-    const mine = src === m.player.body || (this.isHost && src && src.netIdx !== undefined) || !src;
+    const mine = src === m.player.body || (this.isHost && src && (src.netIdx !== undefined || src.isCrew)) || !src;
     if (!mine) return;
     if (!src && !this.isHost) return;
     this.net.send({ t: 'hit', to: peerId, dmg: r2(amount), zone, raw: !!opts.raw, pen: opts.penetrating !== false, dir: dir ? [r3(dir.x), r3(dir.y), r3(dir.z)] : null, by: this.ref(src), late: !m.player.body.alive, w: src && src.weapon ? src.weapon.id : '' });
@@ -453,7 +456,7 @@ export class NetSession {
     const w = src && src.weapon ? src.weapon.id : (this._lastHitBy && this._lastHitBy.w) || '';
     this.net.send({ t: 'died', by, w });
     this.respawnAt = m.time + (this.pvp ? 5 : 20);
-    this.deathBy = src && src.isRemote ? src.peer.name : src && src.netIdx !== undefined ? 'противник' : '';
+    this.deathBy = src && src.isRemote ? src.peer.name : src && src.netIdx !== undefined ? 'противник' : src && src.isCrew && src.vehicle ? src.vehicle.type.name : '';
     m.hud.message('Вы погибли', 3, true);
   }
 

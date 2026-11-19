@@ -14,7 +14,7 @@ import { AMMO, WEAPONS } from '../data/weapons.js';
 import { prepareAmmo } from '../physics/ballistics.js';
 import { fly, NORMAL_ENV } from '../artillery/d30.js';
 import { Soldier } from './soldier.js';
-import { clamp, rand, wrapAngle } from '../core/math.js';
+import { clamp, rand, randn, wrapAngle } from '../core/math.js';
 import { T72 } from './t72Model.js';
 
 // ---------- боеприпасы 2А46М ----------
@@ -56,14 +56,34 @@ const LOAD_T = 7.1;                              // цикл АЗ
 const GEARS = [-4, 0, 12, 25, 40, 60];           // скорости по командам, км/ч (−4 — задний ход)
 const GEAR_NAMES = ['назад', 'стой', 'малый вперёд', 'средний', 'быстрее', 'полный'];
 const VIEWS = ['gunner', 'tkn', 'pano', 'driver'];
-const VIEW_NAMES = { gunner: 'Прицел наводчика 1А40-1', tkn: 'Командирский ТКН-3', pano: 'Приборы командирской башенки', driver: 'Прибор механика ТНПО-168В', hatch: 'Командир в люке (НСВТ)' };
+const VIEW_NAMES = { gunner: 'Прицел наводчика', tkn: 'Командирский ТКН-3', pano: 'Приборы командирской башенки', driver: 'Прибор механика ТНПО-168В', hatch: 'Командир в люке (НСВТ)' };
 
 // ---------- броня (мм стальной брони, эквивалент по линии прицеливания) ----------
-// [КЭ — подкалиберный/бронебойный, ХЭ — кумулятивный]
+// [КЭ — подкалиберный/бронебойный, ХЭ — кумулятивный, вклад ДЗ «Контакт-1» в ХЭ — его снимает
+// тандемная боевая часть (лидирующий заряд подрывает блок, основной бьёт по броне)]
 export const T72_ARMOR = {
-  turretFront: [520, 900], turretSide: [270, 380], turretRear: [70, 70], turretRoof: [40, 60],
-  hullUpper: [480, 700], hullLower: [250, 260], hullSide: [80, 200], hullSideLow: [80, 90],
-  hullRear: [40, 45], hullRoof: [20, 20], hullBottom: [20, 20],
+  turretFront: [520, 900, 250], turretSide: [270, 380, 0], turretRear: [70, 70, 0], turretRoof: [40, 60, 0],
+  hullUpper: [480, 700, 220], hullLower: [250, 260, 0], hullSide: [80, 200, 0], hullSideLow: [80, 90, 0],
+  hullRear: [40, 45, 0], hullRoof: [20, 20, 0], hullBottom: [20, 20, 0],
+};
+// Т-80БВ: комбинированная лобовая броня корпуса и литая башня с наполнителем, «Контакт-1»
+export const T80_ARMOR = {
+  turretFront: [500, 850, 250], turretSide: [260, 360, 0], turretRear: [70, 70, 0], turretRoof: [40, 60, 0],
+  hullUpper: [470, 690, 220], hullLower: [250, 260, 0], hullSide: [80, 200, 0], hullSideLow: [80, 90, 0],
+  hullRear: [40, 45, 0], hullRoof: [20, 20, 0], hullBottom: [20, 20, 0],
+};
+// паспортные отличия: СУО, прицел, боекомплект
+export const TANK_SPECS = {
+  t72b: {
+    name: 'Т-72Б', fcs: '1А40-1', sight: 'Прицел наводчика 1А40-1', lead: false, armor: T72_ARMOR,
+    car: { bm: 10, bk: 6, of: 6 }, rack: { bm: 9, bk: 6, of: 8 },
+    fcsNote: 'лазерный дальномер, ввод дальности в баллистический вычислитель — автоматически; упреждение — по шкалам',
+  },
+  t80bv: {
+    name: 'Т-80БВ', fcs: '1А33', sight: 'Прицел-дальномер 1Г42', lead: true, armor: T80_ARMOR,
+    car: { bm: 12, bk: 8, of: 8 }, rack: { bm: 4, bk: 3, of: 3 },
+    fcsNote: 'дальность, угол прицеливания и упреждение по скорости слежения — автоматически (баллистический вычислитель 1В517)',
+  },
 };
 const ZONE_NAMES = {
   turretFront: 'лоб башни', turretSide: 'борт башни', turretRear: 'корма башни', turretRoof: 'крыша башни',
@@ -105,17 +125,20 @@ export function tankZone(v, pt, dir) {
 export class Tank {
   constructor(v) {
     this.v = v; this.m = v.game;
+    this.spec = TANK_SPECS[v.typeId] || TANK_SPECS.t72b;
     const m = this.m, team = v.team;
     // экипаж: механик-водитель (место 0) и наводчик (место 1); командир (место 2) — игрок
-    const mk = (name) => { const s = new Soldier(m, { team, faction: team, name, callsign: name, role: 'crew', weapon: 'ak74m', x: v.pos.x, z: v.pos.z, noModel: true, grenades: 0, armor: 0.6, helmet: 0.3, medkits: 0 }); s.isCrew = true; s.hidden = true; return s; };
+    const mk = this._mkCrew = (name) => { const s = new Soldier(m, { team, faction: team, name, callsign: name, role: 'crew', weapon: 'ak74m', x: v.pos.x, z: v.pos.z, noModel: true, grenades: 0, armor: 0.6, helmet: 0.3, medkits: 0 }); s.isCrew = true; s.hidden = true; return s; };
     this.driver = mk('Мехвод'); this.gunner = mk('Наводчик');
     v.seats[0] = this.driver; this.driver.vehicle = v; this.driver.seat = 0;
     v.seats[1] = this.gunner; this.gunner.vehicle = v; this.gunner.seat = 1;
     // боекомплект: карусель АЗ и немеханизированная укладка
-    this.car = { bm: 10, bk: 6, of: 6 };
-    this.rack = { bm: 9, bk: 6, of: 8 };
+    this.car = { ...this.spec.car };
+    this.rack = { ...this.spec.rack };
     this.sel = 'bm'; this.loaded = 'bm'; this.loadT = 0; this.loading = null;
-    this.range = 0; this.superEl = 0; this.rangeT = 0;
+    this.range = 0; this.superEl = 0; this.rangeT = 0; this.fcsT = 0;
+    this.leadY = 0; this.leadP = 0; this.rateY = 0; this.rateP = 0;
+    this.cmdr = null; this.ai = null;
     this.aimYaw = v.yaw; this.aimPitch = 0;
     this.lookYaw = 0; this.lookPitch = 0;          // свободный обзор (панорама, люк, мехвод) — от корпуса
     this.view = 'gunner'; this.hatch = false;
@@ -132,6 +155,15 @@ export class Tank {
   }
 
   get commander() { return this.v.seats[2]; }
+  // в танке командир-человек (игрок или игрок по сети), а не ИИ
+  get humanCmd() { const c = this.v.seats[2]; return !!c && !c.isCrew; }
+
+  // экипаж ИИ целиком (танк противника): командир на месте 2 и логика боя
+  enableAI(opts = {}) {
+    if (!this.cmdr) { this.cmdr = this._mkCrew('Командир'); this.v.seats[2] = this.cmdr; this.cmdr.vehicle = this.v; this.cmdr.seat = 2; }
+    this.ai = new TankAI(this, opts);
+    return this.ai;
+  }
   get gunnerOk() { return this.gunner.alive; }
   get driverOk() { return this.driver.alive; }
 
@@ -142,7 +174,8 @@ export class Tank {
     for (let D = 100; D <= 5000; D += 100) {
       let lo = -0.002, hi = 0.15;
       for (let k = 0; k < 22; k++) { const mid = (lo + hi) / 2; if (fly(ammo, NORMAL_ENV, mid, { dt: 1 / 120 }).x < D) lo = mid; else hi = mid; }
-      rows.push((lo + hi) / 2);
+      const a = (lo + hi) / 2;
+      rows.push({ a, t: fly(ammo, NORMAL_ENV, a, { dt: 1 / 120 }).t });
     }
     this._tables[key] = rows;
     return rows;
@@ -150,7 +183,42 @@ export class Tank {
   superFor(key, D) {
     if (!D) return 0;
     const T = this.table(key), f = clamp(D / 100 - 1, 0, T.length - 1), i = Math.floor(f);
-    return T[i] + (T[Math.min(T.length - 1, i + 1)] - T[i]) * (f - i);
+    return T[i].a + (T[Math.min(T.length - 1, i + 1)].a - T[i].a) * (f - i);
+  }
+  tofFor(key, D) {
+    if (!D) return 0;
+    const T = this.table(key), f = clamp(D / 100 - 1, 0, T.length - 1), i = Math.floor(f);
+    return T[i].t + (T[Math.min(T.length - 1, i + 1)].t - T[i].t) * (f - i);
+  }
+
+  // СУО: дальномер сам замеряет дальность по линии прицеливания (≈3 раза в секунду),
+  // баллистический вычислитель выставляет угол прицеливания для заряженного (заряжаемого)
+  // снаряда; у 1А33 (Т-80БВ) — ещё упреждение по угловой скорости слежения за целью
+  _fcs(dt) {
+    this.fcsT -= dt;
+    if (this.fcsT <= 0) { this.fcsT = 0.33; if (this.mod.sight > 0) this.measure(); }
+    const key = this.loaded || (this.loading && this.loading.key) || this.sel;
+    this.superEl = this.range ? this.superFor(key, this.range) : 0;
+    if (this.spec.lead && dt > 0) {
+      const wy = wrapAngle(this.aimYaw - (this._ay0 ?? this.aimYaw)) / dt, wp = (this.aimPitch - (this._ap0 ?? this.aimPitch)) / dt;
+      this._ay0 = this.aimYaw; this._ap0 = this.aimPitch;
+      const k = Math.min(1, dt * 2.2);
+      this.rateY += (clamp(wy, -0.4, 0.4) - this.rateY) * k; this.rateP += (clamp(wp, -0.2, 0.2) - this.rateP) * k;
+      const tof = this.tofFor(key, this.range || 1000);
+      this.leadY = clamp(this.rateY * tof, -0.03, 0.03); this.leadP = clamp(this.rateP * tof, -0.01, 0.01);
+    } else { this.leadY = 0; this.leadP = 0; }
+  }
+
+  // замер лазерным дальномером по линии прицеливания; нет отражения — дальность прежняя
+  measure() {
+    const m = this.m;
+    const from = this.sightWorld('gunner');
+    const dir = _v.set(-Math.sin(this.aimYaw) * Math.cos(this.aimPitch), Math.sin(this.aimPitch), -Math.cos(this.aimYaw) * Math.cos(this.aimPitch));
+    const to = from.clone().addScaledVector(dir, 5000);
+    const hit = m.world.raycast(from, to, { mask: 'sight', vehicles: true, ignore: this.v });
+    const D = hit ? hit.t * 5000 : 0;
+    if (D > 50 && D < 5000) { this.range = Math.round(D / 5) * 5; return true; }
+    return false;
   }
 
   // ---------- точки и направления ----------
@@ -208,7 +276,11 @@ export class Tank {
     this._autoload(dt);
     // команды механику-водителю: исполнение с задержкой
     while (this.queue.length && this.queue[0].t <= this.time) { const c = this.queue.shift(); c.run(); }
-    this._drive(dt);
+    // экипаж ИИ (танк противника) сам ищет цели и стреляет; едет по маршруту (Vehicle._aiDrive)
+    if (this.ai && !this.humanCmd) this.ai.update(dt);
+    if (!v.ai) this._drive(dt);
+    // СУО: дальность, угол прицеливания, упреждение
+    this._fcs(dt);
     // приводы наведения: башня и пушка догоняют линию прицеливания (стабилизатор)
     this._lay(dt);
     this.coax.cd -= dt; this.nsvt.cd -= dt; this.smokeCD -= dt;
@@ -280,7 +352,7 @@ export class Tank {
   _lay(dt) {
     const v = this.v;
     // желаемое направление ствола в мире: линия прицеливания + угол прицеливания
-    const yaw = this.aimYaw, pitch = this.aimPitch + this.superEl;
+    const yaw = this.aimYaw + this.leadY, pitch = this.aimPitch + this.superEl + this.leadP;
     const d = _v.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
     v.mesh.updateMatrixWorld(true);
     _q.copy(v.mesh.quaternion).invert();
@@ -304,7 +376,7 @@ export class Tank {
     // выйти
     if (inp.bh('use')) { p.exitVehicle(); return; }
     // виды
-    if (inp.bh('cmdSuppress') || inp.hit('KeyV')) { if (this.hatch) this.setHatch(false); const i = VIEWS.indexOf(this.view); this.view = VIEWS[(i + 1) % VIEWS.length]; m.hud.message(VIEW_NAMES[this.view], 1.5); if (this.view === 'pano' || this.view === 'driver') { this.lookYaw = this.view === 'pano' ? wrapAngle(v.turretYaw + this.cupYaw) : 0; this.lookPitch = 0; } }
+    if (inp.bh('cmdSuppress') || inp.hit('KeyV')) { if (this.hatch) this.setHatch(false); const i = VIEWS.indexOf(this.view); this.view = VIEWS[(i + 1) % VIEWS.length]; m.hud.message(this.viewName(this.view), 1.5); if (this.view === 'pano' || this.view === 'driver') { this.lookYaw = this.view === 'pano' ? wrapAngle(v.turretYaw + this.cupYaw) : 0; this.lookPitch = 0; } }
     if (inp.bh('crouch')) this.setHatch(!this.hatch);
     // снаряд для следующего заряжания
     RKEYS.forEach((k, i) => { if (inp.hit('Digit' + (i + 1))) { this.sel = k; m.hud.message(`Следующий — ${ROUNDS[k].name} (${ROUNDS[k].long}). В карусели ${this.car[k]}, в укладке ${this.rack[k]}`, 2.5); m.audio.click(); } });
@@ -354,6 +426,8 @@ export class Tank {
     p.pitch = view === 'gunner' || view === 'tkn' ? this.aimPitch : this.lookPitch;
   }
 
+  viewName(view) { return view === 'gunner' ? this.spec.sight : VIEW_NAMES[view]; }
+
   setHatch(on) {
     const m = this.m, v = this.v;
     if (on && Math.abs(v.speed) > 12) { m.hud.message('На такой скорости из люка не высунуться', 1.5); return; }
@@ -367,32 +441,30 @@ export class Tank {
     const m = this.m;
     if (this.mod.sight <= 0) { m.hud.message('Прицел-дальномер разбит', 1.5); return; }
     if (!this.gunnerOk && this.view !== 'gunner') { m.hud.message('Наводчик выбыл: дальность — по шкале ТКН-3', 1.5); return; }
-    const from = this.sightWorld(this.view === 'tkn' ? 'tkn' : 'gunner');
-    const dir = _v.set(-Math.sin(this.aimYaw) * Math.cos(this.aimPitch), Math.sin(this.aimPitch), -Math.cos(this.aimYaw) * Math.cos(this.aimPitch));
-    const to = from.clone().addScaledVector(dir, 5000);
-    const hit = m.world.raycast(from, to, { mask: 'sight', vehicles: true, ignore: this.v });
-    const D = hit ? hit.t * 5000 : 0;
-    this.range = D > 50 && D < 5000 ? Math.round(D / 5) * 5 : 0;
-    this.rangeT = 3;
+    const ok = this.measure();
+    this.rangeT = 3; this.fcsT = 0.6;
     m.audio.click();
-    if (!this.range) m.hud.message('Дальномер: нет отражения', 1.2);
+    if (!ok) m.hud.message('Дальномер: нет отражения — дальность прежняя', 1.2);
   }
 
-  fireGun() {
+  fireGun(owner = null) {
     const m = this.m, v = this.v, p = m.player;
-    if (this.mod.gun <= 0) { m.hud.message('Пушка повреждена!', 1.5); return; }
-    if (!this.loaded) { if (this.loading) m.hud.message(`Заряжание… ${Math.max(0, this.loading.t).toFixed(1)} с`, 1); else m.hud.message('Не заряжено', 1); m.audio.click(); return; }
-    if (this.layErr > 2.5 * MIL) { m.hud.message('Пушка не согласована с линией прицеливания', 1); return; }
+    const me = !owner || owner === p.body, say = (t, d) => { if (me) m.hud.message(t, d); };
+    owner = owner || p.body;
+    if (this.mod.gun <= 0) { say('Пушка повреждена!', 1.5); return false; }
+    if (!this.loaded) { if (this.loading) say(`Заряжание… ${Math.max(0, this.loading.t).toFixed(1)} с`, 1); else say('Не заряжено', 1); if (me) m.audio.click(); return false; }
+    if (this.layErr > 2.5 * MIL) { say('Пушка не согласована с линией прицеливания', 1); return false; }
     const key = this.loaded;
     this.loaded = null;
     const pos = new THREE.Vector3(), dir = new THREE.Vector3();
     this.muzzle(pos, dir);
     const ammoId = ROUNDS[key].id, w = WEAPONS['2a46m'];
-    const pr = m.projectiles.spawn({ weapon: w, pos, dir, owner: p.body, team: p.body.team, ammoId });
+    const pr = m.projectiles.spawn({ weapon: w, pos, dir, owner, team: v.team, ammoId });
     pr.ownerVehicle = v;
-    if (m.net) m.net.onLocalShot({ weapon: w, owner: p.body, ammoId }, pr);
-    this._blast(pos, dir, true);
-    m.hud.radio('Командир', `Выстрел! ${ROUNDS[key].name}${this.range ? `, дальность ${this.range}` : ''}`);
+    if (m.net) m.net.onLocalShot({ weapon: w, owner, ammoId }, pr);
+    this._blast(pos, dir, me);
+    if (me) m.hud.radio('Командир', `Выстрел! ${ROUNDS[key].name}${this.range ? `, дальность ${this.range}` : ''}`);
+    return true;
   }
 
   // дульная волна, откат, пыль/снег, звук (свой выстрел и чужой по сети)
@@ -410,7 +482,7 @@ export class Tank {
     m.audio.explosion(pos, 1.8);
     m.audio.shot(pos, 'rpg', own);
     if (own) m.player.shake = Math.max(m.player.shake, 1.4);
-    m.noise(pos, 3500, v.team, own ? m.player.body : null);
+    m.noise(pos, 3500, v.team, own ? m.player.body : (v.seats[2] || null));
     v.lastShotTime = m.time; v.fireFlash = 0.1;
     // ударная волна у дула оглушает пехоту рядом (не задевает своего командира в люке)
   }
@@ -422,14 +494,15 @@ export class Tank {
     this.loaded = null;
   }
 
-  fireCoax() {
+  fireCoax(owner = null) {
     const m = this.m, c = this.coax;
     if (c.cd > 0 || c.reload > 0) return;
-    if (c.ammo <= 0) { if (c.belts > 0) { c.reload = 7; m.hud.message('ПКТ: новая лента', 1.5); } return; }
+    if (c.ammo <= 0) { if (c.belts > 0) { c.reload = 7; if (!owner) m.hud.message('ПКТ: новая лента', 1.5); } return; }
+    owner = owner || m.player.body;
     c.ammo--; c.cd = 60 / WEAPONS.pkt.rpm;
     const g = this.v.model.gun; g.updateMatrixWorld(true);
     const pos = new THREE.Vector3(0.3, 0, -0.62).applyMatrix4(g.matrixWorld), dir = new THREE.Vector3(0, 0, -1).transformDirection(g.matrixWorld);
-    m.fireProjectile({ weapon: WEAPONS.pkt, pos, dir, owner: m.player.body, team: m.player.body.team, vehicleShot: this.v });
+    m.fireProjectile({ weapon: WEAPONS.pkt, pos, dir, owner, team: this.v.team, vehicleShot: this.v });
   }
 
   fireNSVT() {
@@ -472,8 +545,9 @@ export class Tank {
     const Z = tankZone(v, pt, dir);
     const ex = p.ammo.explosive;
     const ce = !!(ex && ex.pen >= 150);                         // кумулятивная струя
-    const [ke, he] = T72_ARMOR[Z.zone];
-    const armor = ce ? he : ke;
+    const [ke, he, era] = this.spec.armor[Z.zone];
+    // тандемная кумулятивная БЧ: лидирующий заряд снимает динамическую защиту
+    const armor = ce ? he - (ex.tandem ? era || 0 : 0) : ke;
     let pen;
     if (ex) pen = ex.pen;
     else { const sp = p.v.length(), k = sp / p.ammo.v0; pen = p.ammo.pen * (p.ammo.apfsds ? k : k * k); }
@@ -506,6 +580,7 @@ export class Tank {
   applyHit(r, owner) {
     const m = this.m, v = this.v;
     if (!v.alive) return;
+    if (this.ai) this.ai.onHit(owner);
     const lp = new THREE.Vector3(...r.lp);
     const mine = this._mine();
     // ходовая: гусеница
@@ -593,7 +668,7 @@ export class Tank {
   // состояние повреждений (у хоста): экипаж, модули, пожар
   netState() {
     const M = this.mod;
-    return [this.driver.alive ? 1 : 0, this.gunner.alive ? 1 : 0, M.engine, M.gun, M.sight, M.traverse, M.autoloader, this.fire > 0 ? 1 : 0, this.knocked ? 1 : 0];
+    return [this.driver.alive ? 1 : 0, this.gunner.alive ? 1 : 0, M.engine, M.gun, M.sight, M.traverse, M.autoloader, this.fire > 0 ? 1 : 0, this.knocked ? 1 : 0, this.cmdr ? (this.cmdr.alive ? 1 : 0) : 1];
   }
   applyNet(a) {
     if (!Array.isArray(a)) return;
@@ -603,6 +678,7 @@ export class Tank {
     ks.forEach((k, i) => { if (a[2 + i] === 0 && this.mod[k] > 0) this.breakModule(k, { engine: 'Двигатель поражён!', gun: 'Пушка повреждена!', sight: 'Прицел разбит!', traverse: 'Привод башни повреждён!', autoloader: 'АЗ повреждён!' }[k]); });
     if (a[7] && !this.fire) { this.fire = 0.01; this.extT = 99; } else if (!a[7] && this.fire) this.fire = 0;
     if (a[8]) this.knocked = true;
+    if (a[9] === 0 && this.cmdr && this.cmdr.alive) { this.cmdr.alive = false; this.cmdr.health = 0; }
   }
 
   // командир: в люке — по пояс над башенкой (его можно ранить), иначе внутри
@@ -637,6 +713,122 @@ export class Tank {
   }
 }
 
+// ---------- экипаж ИИ: танк противника ----------
+// Обнаружение: цель должна быть в поле зрения приборов и на прямой видимости некоторое время
+// (технику видно быстрее, пехоту — дольше, лежачую — ещё дольше). Командир выбирает самую
+// опасную цель (танк, затем техника, гранатомётчик, пехота), даёт наводчику время на захват;
+// наводчик наводит с небольшой ошибкой, дальность и угол прицеливания вводит СУО. Снаряд по
+// цели: по танку — подкалиберный, по лёгкой технике и пехоте — осколочно-фугасный, по пехоте
+// вблизи — спаренный ПКТ. На маршруте при обнаружении — «короткая»: стоп и огонь.
+class TankAI {
+  constructor(t, { hold = false, skill = 0.6 } = {}) {
+    this.t = t; this.m = t.m;
+    this.hold = hold; this.skill = skill;
+    this.target = null; this.seen = new Map();
+    this.scanT = rand(0, 0.5); this.react = 0; this.sweep = Math.random() * 6;
+    this.errY = 0; this.errP = 0; this.lastSeen = -99; this.burst = 0; this.home = t.v.yaw;
+  }
+
+  aimPoint(tg, out = new THREE.Vector3()) {
+    if (tg.isVehicle) return out.set(tg.pos.x, tg.pos.y + (tg.tank ? 1.25 : tg.type.height * 0.55), tg.pos.z);
+    return out.copy(tg.chest || tg.pos);
+  }
+
+  onHit(owner) {
+    // по танку стреляют: развернуть башню к стрелку, быстрый захват
+    if (!owner) return;
+    const tg = owner.vehicle && owner.vehicle.alive ? owner.vehicle : owner;
+    if (tg.team === this.t.v.team || tg.alive === false) return;
+    this.seen.set(tg, 5);
+    if (this.target !== tg) { this.target = tg; this.react = rand(1.2, 2.2); }
+    this.lastSeen = this.m.time;
+  }
+
+  _pick() {
+    const t = this.t, v = t.v, m = this.m;
+    const S = t.sightWorld('gunner');
+    const vr = clamp((m.visibility || 800) * (m.isNight ? 1.6 : 2.2), 350, 2400);
+    let best = null, bs = 0;
+    const P = new THREE.Vector3();
+    for (const tg of m.targetsFor(v.team)) {
+      if (tg.isDrone || tg.alive === false) continue;
+      this.aimPoint(tg, P);
+      const d = P.distanceTo(S);
+      if (d > vr) { this.seen.delete(tg); continue; }
+      // поле зрения: по ходу башни и корпуса шире, сзади — плохо (перископы командира)
+      const ang = Math.abs(wrapAngle(Math.atan2(-(P.x - S.x), -(P.z - S.z)) - (v.yaw + v.turretYaw)));
+      const fov = ang < 0.6 ? 1 : ang < 1.6 ? 0.55 : 0.25;
+      const vis = m.world.los(S, P, tg.isVehicle ? tg : tg.vehicle || null, v);
+      if (!vis) { this.seen.set(tg, Math.max(0, (this.seen.get(tg) || 0) - 0.25)); continue; }
+      const flash = tg.lastShotTime !== undefined && m.time - tg.lastShotTime < 1 ? 3 : 1;
+      let base;
+      if (tg.isVehicle) base = 1.0 * clamp(1000 / d, 0.25, 2);
+      else {
+        // одиночного бойца в маскхалате из танка заметить трудно: дальше — дольше, лёжа — ещё дольше
+        const stance = tg.stance === 'prone' ? 0.35 : tg.stance === 'crouch' ? 0.65 : 1;
+        const mv = tg.vel && Math.hypot(tg.vel.x, tg.vel.z) > 1 ? 1.5 : 1;
+        base = clamp(180 / d, 0.06, 1.5) * stance * mv * (tg.team === 'negs' ? 0.7 : 1);
+      }
+      const rate = 0.5 * fov * flash * base * (0.6 + this.skill) * (t.cmdr && t.cmdr.alive ? 1 : 0.5);
+      const sv = Math.min(6, (this.seen.get(tg) || 0) + rate);
+      this.seen.set(tg, sv);
+      if (sv < 1) continue;
+      const threat = tg.tank ? 6 : tg.isVehicle ? 3 : tg.secondary && (tg.secondary.id === 'rpg7') ? 2.2 : tg.isPlayer ? 1.4 : 1;
+      const sc = threat * 1000 / (d + 150) + (tg === this.target ? 1.5 : 0);
+      if (sc > bs) { bs = sc; best = tg; }
+    }
+    // новая цель: доклад командира, целеуказание, захват наводчиком — несколько секунд
+    if (best && best !== this.target) { this.react = rand(3.5, 6.5) * (1.3 - this.skill * 0.5); }
+    this.target = best;
+    if (best) this.lastSeen = m.time;
+  }
+
+  update(dt) {
+    const t = this.t, v = t.v, m = this.m;
+    if (!t.gunner.alive && !(t.cmdr && t.cmdr.alive)) { this.target = null; return; }
+    this.scanT -= dt;
+    if (this.scanT <= 0) { this.scanT = 0.5; this._pick(); }
+    const tg = this.target;
+    // на маршруте: увидели противника — стоп («короткая»), потеряли надолго — дальше
+    if (v.ai) v.ai.alerted = m.time - this.lastSeen < 14;
+    if (!tg || tg.alive === false) {
+      this.target = null;
+      // поиск: башня медленно ходит по сектору вокруг направления движения/обороны
+      this.sweep += dt * 0.22;
+      const base = this.hold ? this.home : v.yaw;
+      t.aimYaw = wrapAngle(base + Math.sin(this.sweep) * 0.95);
+      t.aimPitch += (0.0 - t.aimPitch) * Math.min(1, dt);
+      return;
+    }
+    const S = t.sightWorld('gunner'), P = this.aimPoint(tg);
+    const dx = P.x - S.x, dz = P.z - S.z, D = Math.hypot(dx, dz);
+    // ошибка наводки: медленный дрейф, к выстрелу наводчик её выбирает
+    const sig = (0.25 + D / 1000 * 0.18) * MIL * (1.5 - this.skill) * (t.gunner.alive ? 1 : 1.8);
+    const k = Math.min(1, dt * 0.7);
+    this.errY += (randn() * sig - this.errY) * k; this.errP += (randn() * sig * 0.7 - this.errP) * k;
+    t.aimYaw = Math.atan2(-dx, -dz) + this.errY;
+    t.aimPitch = Math.atan2(P.y - S.y, D) + this.errP;
+    // снаряд для следующего заряжания
+    const want = tg.tank ? 'bm' : tg.isVehicle ? (tg.type.armor.front > 8 ? 'bk' : 'of') : 'of';
+    t.sel = (t.car[want] + t.rack[want] > 0) ? want : t.sel;
+    this.react -= dt;
+    if (this.react > 0) return;
+    const owner = t.cmdr && t.cmdr.alive ? t.cmdr : t.gunner;
+    // пехота вблизи — очередями из ПКТ
+    if (!tg.isVehicle && D < 550 && t.layErr < 4 * MIL) {
+      this.burst -= dt;
+      if (this.burst < -1.2) this.burst = rand(0.6, 1.4);
+      if (this.burst > 0) t.fireCoax(owner);
+      if (D < 220 || t.loaded !== 'of') return;
+    }
+    // пушка: заряжено, ствол согласован, дальномер «видит» цель
+    const onTarget = t.range > 0 && Math.abs(t.range - D) < Math.max(30, D * 0.06);
+    if (t.loaded && t.layErr < 0.8 * MIL && onTarget) {
+      if (t.fireGun(owner)) this.react = rand(0.8, 1.8);
+    }
+  }
+}
+
 // ---------- интерфейс: прицелы, панель, подсказки ----------
 class TankUI {
   constructor(t) {
@@ -663,12 +855,13 @@ class TankUI {
     const tr = v.model.tracks.sides.map((s) => (s.broken ? '<span class="bad">разбита</span>' : 'цела'));
     const ld = t.loaded ? `<b class="ok">${ROUNDS[t.loaded].name} — ГОТОВ</b>` : t.loading ? `заряжание ${ROUNDS[t.loading.key].name}${t.loading.manual ? ' (вручную)' : ''} ${Math.max(0, t.loading.t).toFixed(1)} с` : '<span class="warn">не заряжено</span>';
     this.panel.innerHTML = `
-      <div class="gt">Т-72Б · командир · ${VIEW_NAMES[t.hatch ? 'hatch' : t.view]}</div>
+      <div class="gt">${t.spec.name} · командир · ${t.viewName(t.hatch ? 'hatch' : t.view)}</div>
       <div class="gr"><span>Пушка 2А46М</span>${ld}</div>
       <div class="gr"><span>Следующий (1–3)</span><b>${ROUNDS[t.sel].name}</b></div>
       <div class="gr"><span>Карусель АЗ</span><b>БР ${t.car.bm} · КС ${t.car.bk} · ОФ ${t.car.of}</b></div>
       <div class="gr"><span>Укладка</span><b>БР ${t.rack.bm} · КС ${t.rack.bk} · ОФ ${t.rack.of}</b></div>
-      <div class="gr"><span>Дальность (R)</span><b>${t.range ? t.range + ' м' : '—'}</b></div>
+      <div class="gr"><span>Дальность (СУО ${t.spec.fcs})</span><b>${t.range ? t.range + ' м · авто' : '—'}</b></div>
+      ${t.spec.lead ? `<div class="gr"><span>Упреждение</span><b>${(t.leadY / MIL).toFixed(1)} тыс.</b></div>` : ''}
       <div class="gr"><span>ПКТ / НСВТ</span><b>${t.coax.ammo}+${t.coax.belts}×250 · ${t.nsvt.ammo}+${t.nsvt.boxes}×50</b></div>
       <div class="gr"><span>902Б «Туча» (G)</span><b>${t.smokes}</b></div>
       <hr>
@@ -678,7 +871,7 @@ class TankUI {
       <div class="gr"><span>Гусеницы Л/П</span><b>${tr[0]} / ${tr[1]}</b></div>
       ${Object.values(t.mod).some((x) => x <= 0) || t.fire ? `<div class="gr"><span>Повреждения</span><b>${md('engine', 'двигатель')}${md('gun', 'пушка')}${md('sight', 'прицел')}${md('traverse', 'привод башни')}${md('autoloader', 'АЗ')}${t.fire ? '<span class="bad">ПОЖАР</span>' : ''}</b></div>` : ''}
       <hr>
-      <div class="gk">Мышь — наводка (в прицелах) / обзор · ЛКМ — пушка · ПКМ — ПКТ · R — дальномер · 1–3 — снаряд<br>
+      <div class="gk">Мышь — наводка (в прицелах) / обзор · ЛКМ — пушка · ПКМ — ПКТ · дальность и угол прицеливания — сами (R — замер сейчас) · 1–3 — снаряд<br>
       ↑ ↓ — вперёд/назад, быстрее/тише · ← → — левее/правее · Пробел — «Стой!» (мехвод выполняет с задержкой)<br>
       V — прицел наводчика / ТКН-3 / панорама / мехвод · Q — целеуказание по взгляду · C — люк (НСВТ) · G — дым · H — прицепить Д-30 · E — выйти</div>`;
   }

@@ -88,7 +88,9 @@ function turretShell() {
   return g;
 }
 
-export function buildT72(camoCols) {
+// variant: 't72' — Т-72Б; 't80' — Т-80БВ (катки Ø670 мм, 5 роликов, выхлоп ГТД в корму, «Кобра», прожектор слева)
+export function buildT72(camoCols, variant = 't72') {
+  const V80 = variant === 't80';
   const PO = { scale: 0.3, dirtTop: 1.0, snow: 0.95, gloss: 0.7, metal: 0.38 };
   const M = materials(camoCols, PO);
   M.era = M.paint;
@@ -144,9 +146,16 @@ export function buildT72(camoCols) {
   // МТО: решётки воздухопритока и жалюзи над радиаторами
   for (let i = 0; i < 9; i++) P.add('dark', rbox(1.7, 0.02, 0.07, 0, 1.485, 1.25 + i * 0.2, 0.004));
   P.add('paint', rbox(1.9, 0.03, 0.6, 0, 1.49, 0.75, 0.01));
-  // выхлоп слева сзади на полке
-  P.add('dark', rbox(0.24, 0.2, 0.55, -1.5, 1.2, 2.2, 0.02));
-  for (let i = 0; i < 4; i++) P.add('metal', rbox(0.25, 0.012, 0.012, -1.5, 1.14 + i * 0.045, 1.95, 0.002));
+  if (!V80) {
+    // выхлоп дизеля слева сзади на полке
+    P.add('dark', rbox(0.24, 0.2, 0.55, -1.5, 1.2, 2.2, 0.02));
+    for (let i = 0; i < 4; i++) P.add('metal', rbox(0.25, 0.012, 0.012, -1.5, 1.14 + i * 0.045, 1.95, 0.002));
+  } else {
+    // ГТД-1000ТФ: широкий выхлоп назад через кормовой лист, жалюзи воздухоочистителя на всю ширину МТО
+    P.add('dark', rbox(1.36, 0.36, 0.1, 0, 1.12, 3.44, 0.03));
+    for (let i = 0; i < 6; i++) P.add('metal', rbox(1.3, 0.014, 0.05, 0, 0.99 + i * 0.052, 3.5, 0.003));
+    for (let i = 0; i < 5; i++) P.add('dark', rbox(2.0, 0.02, 0.08, 0, 1.49, 0.6 + i * 0.16, 0.004));
+  }
   // наружные топливные баки и ящики ЗИП на полках
   for (let i = 0; i < 3; i++) P.add('paint', rbox(0.48, 0.36, 0.95, 1.43, 1.32, -1.75 + i * 1.12, 0.05));
   P.add('paint', rbox(0.48, 0.32, 1.1, -1.43, 1.3, -1.6, 0.04));
@@ -154,9 +163,11 @@ export function buildT72(camoCols) {
   P.add('paint', rbox(0.48, 0.34, 0.75, -1.43, 1.31, 0.9, 0.05));
   // бочки на корме (2×200 л) и бревно самовытаскивания
   for (const s of [-1, 1]) {
-    P.add('paint', cylX(0.29, s * 0.45, s * 1.38, { y: 1.15, z: 3.62, seg: 22 }));
-    P.add('metal', torus(0.29, 0.012, { x: s * 0.62, y: 1.15, z: 3.62, axis: 'x', seg: 22 }));
-    P.add('metal', torus(0.29, 0.012, { x: s * 1.2, y: 1.15, z: 3.62, axis: 'x', seg: 22 }));
+    // у Т-80 бочки выше и шире — посередине кормы выхлоп турбины
+    const bx = V80 ? 0.3 : 0, by = V80 ? 1.48 : 1.15, bz = V80 ? 3.5 : 3.62;
+    P.add('paint', cylX(0.29, s * (0.45 + bx), s * (1.38 + bx * 0.5), { y: by, z: bz, seg: 22 }));
+    P.add('metal', torus(0.29, 0.012, { x: s * (0.62 + bx), y: by, z: bz, axis: 'x', seg: 22 }));
+    P.add('metal', torus(0.29, 0.012, { x: s * (1.2 + bx * 0.5), y: by, z: bz, axis: 'x', seg: 22 }));
     P.add('metal', rbox(0.05, 0.4, 0.3, s * 0.92, 0.85, 3.52, 0.01));
   }
   P.add('canvas', cylX(0.12, -1.6, 1.6, { y: 1.62, z: 3.18, seg: 14 }));
@@ -164,16 +175,18 @@ export function buildT72(camoCols) {
   // буксирные тросы вдоль бортов
   for (const s of [-1, 1]) P.add('metal', cylZ(0.016, -2.9, 2.9, { x: s * 1.13, y: 1.5, seg: 6 }));
   // ---------- ходовая ----------
-  const Y = T72.wheelY, R = T72.wheelR, X = T72.trackX;
-  const WZ = [-2.0, -1.2, -0.4, 0.4, 1.2, 2.0];
+  const Y = V80 ? 0.37 : T72.wheelY, R = V80 ? 0.335 : T72.wheelR, X = T72.trackX;
+  const WZ = V80 ? [-2.1, -1.27, -0.44, 0.39, 1.22, 2.05] : [-2.0, -1.2, -0.4, 0.4, 1.2, 2.0];
+  const RZ = V80 ? [-1.75, -0.95, -0.15, 0.65, 1.45] : [-1.55, 0.0, 1.55], RY = V80 ? 0.86 : 0.95, RR = V80 ? 0.1 : 0.11;
+  const ID = V80 ? [-3.0, 0.5, 0.27] : [-2.95, 0.56, 0.29], SP = V80 ? [3.02, 0.6, 0.31] : [2.95, 0.62, 0.33];
   for (const s of [-1, 1]) {
     for (const z of WZ) res.wheels.push(roadWheel(g, s * X, Y, z, R, M));
     // поддерживающие ролики
-    for (const z of [-1.55, 0.0, 1.55]) res.wheels.push(roadWheel(g, s * X, 0.95, z, 0.11, M, { w: 0.12, gap: 0.08, spokes: 0 }));
+    for (const z of RZ) res.wheels.push(roadWheel(g, s * X, RY, z, RR, M, { w: 0.12, gap: 0.08, spokes: 0 }));
     // ленивец спереди
-    res.wheels.push(roadWheel(g, s * X, 0.56, -2.95, 0.29, M, { w: 0.16, gap: 0.08, spokes: 6 }));
+    res.wheels.push(roadWheel(g, s * X, ID[1], ID[0], ID[2], M, { w: 0.16, gap: 0.08, spokes: 6 }));
     // ведущее колесо сзади
-    res.wheels.push(sprocket(g, s * X, 0.62, 2.95, 0.33, M));
+    res.wheels.push(sprocket(g, s * X, SP[1], SP[0], SP[2], M));
     for (const w of res.wheels) if (w.side === undefined) w.side = s;
     // балансиры (торсионная подвеска)
     for (const z of WZ) P.add('metal', rbox(0.08, 0.08, 0.42, s * 1.12, Y + 0.12, z - 0.18, 0.02, { rx: 0.4 }));
@@ -182,9 +195,9 @@ export function buildT72(camoCols) {
   const t = 0.035;
   const C = [];
   for (let i = WZ.length - 1; i >= 0; i--) C.push({ c: [WZ[i], Y], r: R + t });
-  C.push({ c: [-2.95, 0.56], r: 0.29 + t });
-  for (const z of [-1.55, 0.0, 1.55]) C.push({ c: [z, 0.95], r: 0.11 + t });
-  C.push({ c: [2.95, 0.62], r: 0.33 + t });
+  C.push({ c: [ID[0], ID[1]], r: ID[2] + t });
+  for (const z of RZ) C.push({ c: [z, RY], r: RR + t });
+  C.push({ c: [SP[0], SP[1]], r: SP[2] + t });
   res.tracks = buildTracks(g, M, { circles: C, pitch: 0.137, width: 0.58, x: X, ridges: 2 });
   g.add(P.build(M));
 
@@ -227,6 +240,12 @@ export function buildT72(camoCols) {
     tg.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(-Math.PI / 2 + 0.35, -phi, 0, 'YXZ')));
     tg.translate(x * 1.03, 0.52, z * 1.03);
     TP.add('dark', tg);
+  }
+  if (V80) {
+    // станция наведения 9С461 комплекса «Кобра» перед командирской башенкой, антенна
+    TP.add('dark', rbox(0.34, 0.2, 0.28, 0.42, 0.7, -0.52, 0.03));
+    TP.add('metal', cylY(0.012, 0.8, 1.15, { x: 0.52, z: -0.45, seg: 6 }));
+    TP.add('paint', rbox(0.5, 0.2, 0.34, -0.1, 0.62, 0.62, 0.04)); // ящик ЗИП на крыше
   }
   // ящики ЗИП по бортам и на корме башни, ОПВТ (труба) на корме
   for (const s of [-1, 1]) TP.add('paint', rbox(0.3, 0.32, 0.8, s * 1.12, 0.22, 0.45, 0.04, { ry: s * -0.35 }));
@@ -280,9 +299,10 @@ export function buildT72(camoCols) {
   // спаренный ПКТ справа от пушки
   GP.add('dark', cylZ(0.016, -0.3, -0.6, { x: 0.3, y: 0.0, seg: 8 }));
   // прожектор Л-4 справа (качается с пушкой)
-  GP.add('paint', cylZ(0.17, -0.1, -0.36, { x: 0.62, y: 0.16, seg: 22 }));
-  GP.add('lens', cylZ(0.15, -0.36, -0.365, { x: 0.62, y: 0.16, seg: 22 }));
-  GP.add('metal', rbox(0.08, 0.06, 0.3, 0.45, 0.12, -0.2, 0.01));
+  const lx = V80 ? -0.62 : 0.62;
+  GP.add('paint', cylZ(0.17, -0.1, -0.36, { x: lx, y: 0.16, seg: 22 }));
+  GP.add('lens', cylZ(0.15, -0.36, -0.365, { x: lx, y: 0.16, seg: 22 }));
+  GP.add('metal', rbox(0.08, 0.06, 0.3, lx * 0.73, 0.12, -0.2, 0.01));
   gun.add(GP.build(MG));
   tur.add(gun);
   g.add(tur);

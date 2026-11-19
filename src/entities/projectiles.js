@@ -131,7 +131,7 @@ export class Projectiles {
         const h = Math.min(SIM_DT, rem);
         rem -= h;
         _p0.copy(p.p);
-        stepProjectile(p, p.ammo, env, h);
+        if (p.guide) p.guide(p, h); else stepProjectile(p, p.ammo, env, h); // ПТУР — своё наведение
         p.dist += _p0.distanceTo(p.p);
         this._collide(p, _p0, p.p);
         if (p.ammo.fuse && p.t > p.ammo.fuse && p.alive) { this.explode(p.p.clone(), p.ammo.explosive, p.owner); p.alive = false; }

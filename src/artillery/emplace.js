@@ -5,9 +5,9 @@
 import * as THREE from 'three';
 
 const CAP = { tigr: 1, niva: 1, mtlb: 2 };                 // сколько такого оружия влезает
-const NIVA_OK = { mortar: true, kpv: false };              // в «Ниву» КПВ на станке не влезает
+const NIVA_OK = { mortar: true, kpv: false, atgm: true };              // в «Ниву» КПВ на станке не влезает
 
-export function canCarry(v, kind) { return v.alive && (v.cargo || []).length < (CAP[v.typeId] || 1) && (v.typeId !== 'niva' || NIVA_OK[kind]); }
+export function canCarry(v, kind) { return v.alive && !v.tank && (v.cargo || []).length < (CAP[v.typeId] || 1) && (v.typeId !== 'niva' || NIVA_OK[kind]); }
 
 function rearOf(v, out = new THREE.Vector3()) {
   const T = v.type, d = T.len / 2 + 0.9;

@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mulberry32 } from '../core/math.js';
+import { frostGlass } from './shaders.js';
 
 // hp — прочность плитки; tile — её размер, м; blast — радиус пролома от взрыва (доля радиуса
 // фугасного действия); blastK — какая доля фугасного удара достаётся плитке; debris — цвет обломков
@@ -76,7 +77,7 @@ export class Destruction {
     this.debris = new Debris(world.scene);
     this.blds = []; this.walls = []; this.panes = []; this.fences = [];
     this.cur = null; this.game = null;
-    this.glassMat = new THREE.MeshStandardMaterial({ color: 0x9fb8c8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.6 });
+    this.glassMat = frostGlass(new THREE.MeshStandardMaterial({ color: 0x9fb8c8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.6 }));
   }
 
   // ---------- сборка здания ----------

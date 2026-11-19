@@ -15,6 +15,7 @@ import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
 import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.js';
 import { SnowTrails } from '../world/trails.js';
+import { WIND } from '../world/shaders.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -371,6 +372,10 @@ export class Mission {
     this.cover = new GroundCover(this.scene, this.terrain, this.world, { density: qk, radius: this.settings.quality === 'low' ? 100 : 150 });
     this.terrain.terrainUniforms.uSunDir.value.copy(this.lights.sunDir);
     this.terrain.terrainUniforms.uSparkle.value = e.time === 'night' ? 0.25 : e.time === 'dusk' ? 0.6 : 1;
+    // ветер для застругов, качания деревьев и травы
+    { const wl = Math.hypot(this.wind.x, this.wind.z) || 1; this.terrain.terrainUniforms.uWindDir.value.set(this.wind.x / wl, this.wind.z / wl); }
+    this.terrain.terrainUniforms.uDetail.value = this.settings.quality === 'low' ? 0 : 1;
+    WIND.uWind.value.copy(this.wind); WIND.uTime.value = 0;
     this.app.post.preset(e.time);
     this.app.post.bloom.enabled = this.settings.quality !== 'low';
     this.app.post.setAO(this.settings.quality === 'high', 0.7);
@@ -1242,6 +1247,7 @@ export class Mission {
     for (const v of this.vehicles) v.update(dt);
     updateFlyingParts(this, dt);
     this.trails.update(dt);
+    WIND.uTime.value += dt;
     for (const h of this.guns) h.update(dt);
     for (const d of this.drones) d.update(dt, host);
     this.world.destr.update(dt);

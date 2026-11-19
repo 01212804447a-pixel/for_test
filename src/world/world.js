@@ -171,6 +171,10 @@ export class World {
         if (withColor) {
           ng.setAttribute('color', g.attributes.color || new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
         }
+        // доп. атрибуты материала (например, aSway у деревьев — качание по ветру)
+        for (const [name, size] of (mat.userData && mat.userData.keepAttrs) || []) {
+          ng.setAttribute(name, g.attributes[name] || new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * size), size));
+        }
         return ng;
       }), false);
       if (!merged) continue;

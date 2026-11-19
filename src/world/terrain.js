@@ -280,7 +280,7 @@ export class Terrain {
       mat.map = snowMap; mat.normalMap = texAsset('snow_02_nor.jpg', { srgb: false }); mat.roughnessMap = texAsset('snow_02_rough.jpg', { srgb: false });
       mat.normalScale.set(0.7, 0.7); mat.roughness = 1;
     }
-    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 }, uSnowAvg: { value: snowMap ? 0.5 : 0.93 } };
+    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 }, uSnowAvg: { value: snowMap ? 0.5 : 0.93 }, uWindDir: { value: new THREE.Vector2(1, 0) }, uDetail: { value: 1 } };
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.terrainUniforms);
       sh.vertexShader = sh.vertexShader
@@ -289,8 +289,12 @@ export class Terrain {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
 varying vec3 vWPos; varying vec3 vWNrm;
-uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle; uniform float uSnowAvg;
+uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle; uniform float uSnowAvg; uniform vec2 uWindDir; uniform float uDetail;
 float tHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
+float tN(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(tHash(i), tHash(i+vec2(1,0)), f.x), mix(tHash(i+vec2(0,1)), tHash(i+vec2(1,1)), f.x), f.y); }
+// заструги: гребни, вытянутые по ветру (гребнистый шум)
+float tSg(vec2 s){ float a = 1.0 - abs(tN(s) * 2.0 - 1.0); float b = 1.0 - abs(tN(s * 2.1 + 5.3) * 2.0 - 1.0); return a * a * 0.7 + b * b * 0.3; }
 vec3 triRock(vec3 p, vec3 n){
   vec3 w = pow(abs(n), vec3(4.0)); w /= (w.x + w.y + w.z);
   return texture2D(uRock, p.yz * 0.33).rgb * w.x + texture2D(uRock, p.xz * 0.33).rgb * w.y + texture2D(uRock, p.xy * 0.33).rgb * w.z;
@@ -306,15 +310,42 @@ vec3 triRock(vec3 p, vec3 n){
   vec4 sampledDiffuseColor = vec4(mix(snowC, rockC / max(vColor.rgb, vec3(0.2)), rockW), 1.0);
   diffuseColor *= sampledDiffuseColor;
   float snowW = 1.0 - rockW;`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  // заструги — гребни надувного снега вдоль ветра, пятнами; видны при низком солнце
+  float snDist = length(cameraPosition - vWPos);
+  {
+    float fadeS = (1.0 - smoothstep(70.0, 240.0, snDist)) * uDetail * snowW * smoothstep(0.86, 0.97, normalize(vWNrm).y);
+    if (fadeS > 0.001) {
+      vec2 wd = uWindDir, wn = vec2(-wd.y, wd.x);
+      vec2 q = vec2(dot(vWPos.xz, wd), dot(vWPos.xz, wn));
+      float patchK = smoothstep(0.3, 0.7, tN(vWPos.xz * 0.021 + 3.7));
+      vec2 sc = vec2(0.11, 0.85), s0 = q * sc;
+      float e = 0.12;
+      float h0 = tSg(s0), hx = tSg(s0 + vec2(e, 0.0)), hy = tSg(s0 + vec2(0.0, e));
+      vec2 g = vec2((hx - h0) / e * sc.x, (hy - h0) / e * sc.y);
+      vec3 gW = vec3(g.x * wd.x + g.y * wn.x, 0.0, g.x * wd.y + g.y * wn.y) * 0.2 * fadeS * (0.35 + 0.65 * patchK);
+      normal = normalize(normal - (viewMatrix * vec4(gW, 0.0)).xyz);
+    }
+  }`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  float snGlint = 0.0;
   {
     vec2 cell = floor(vWPos.xz * 22.0);
     float h = tHash(cell);
     vec3 V = normalize(cameraPosition - vWPos);
     vec3 R = reflect(-V, normalize(vWNrm + vec3(tHash(cell + 1.0) - 0.5, 0.0, tHash(cell + 2.0) - 0.5) * 0.6));
     float gl = step(0.975, h) * pow(max(dot(R, uSunDir), 0.0), 24.0);
-    float fadeD = 1.0 - smoothstep(10.0, 60.0, length(cameraPosition - vWPos));
-    totalEmissiveRadiance += vec3(1.0, 0.97, 0.9) * gl * snowW * fadeD * 2.5 * uSparkle;
+    float fadeD = 1.0 - smoothstep(10.0, 60.0, snDist);
+    snGlint = gl * snowW * fadeD * 2.5 * uSparkle;
+  }`)
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+  {
+    // снег в тени — голубой (светит небо), на солнце — чуть тёплый; искры — только на солнце
+    float sunlit = dot(reflectedLight.directDiffuse, vec3(0.333)) / max(dot(diffuseColor.rgb, vec3(0.333)), 0.02);
+    float lit = smoothstep(0.04, 0.35, sunlit);
+    reflectedLight.indirectDiffuse *= mix(vec3(1.0), vec3(0.86, 0.95, 1.16), snowW);
+    reflectedLight.directDiffuse *= mix(vec3(1.0), vec3(1.03, 1.0, 0.96), snowW);
+    reflectedLight.directSpecular += vec3(1.0, 0.97, 0.9) * snGlint * lit;
   }`);
     };
     const mesh = new THREE.Mesh(geo, mat);

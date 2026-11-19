@@ -11,8 +11,9 @@ function bake(W, H, heightFn, { tint = [0.80, 0.84, 0.92], alphaFn }) {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) h[y * W + x] = heightFn((x + 0.5) / W, (y + 0.5) / H);
   const cc = document.createElement('canvas'); cc.width = W; cc.height = H;
   const cn = document.createElement('canvas'); cn.width = W; cn.height = H;
-  const gc = cc.getContext('2d'), gn = cn.getContext('2d');
-  const ic = gc.createImageData(W, H), inn = gn.createImageData(W, H);
+  const ch = document.createElement('canvas'); ch.width = W; ch.height = H;
+  const gc = cc.getContext('2d'), gn = cn.getContext('2d'), gh = ch.getContext('2d');
+  const ic = gc.createImageData(W, H), inn = gn.createImageData(W, H), ih = gh.createImageData(W, H);
   const at = (x, y) => h[((y + H) % H) * W + ((x + W) % W)];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = (y * W + x) * 4, v = h[y * W + x];
@@ -25,12 +26,15 @@ function bake(W, H, heightFn, { tint = [0.80, 0.84, 0.92], alphaFn }) {
     const k = 1 - d * 0.42;
     ic.data[i] = 255 * k * (1 - d * (1 - tint[0]) * 0.6); ic.data[i + 1] = 255 * k * (1 - d * (1 - tint[1]) * 0.6); ic.data[i + 2] = 255 * k * (1 - d * (1 - tint[2]) * 0.3);
     ic.data[i + 3] = 255 * alphaFn((x + 0.5) / W, (y + 0.5) / H, v);
+    // R — высота для параллакса (1 — поверхность снега, 0 — дно), G — шероховатость:
+    // утоптанное дно глаже и чуть блестит, как наст
+    ih.data[i] = 255 * Math.max(0, Math.min(1, (v + 1) / 1.35)); ih.data[i + 1] = 255 * (1 - d * 0.38); ih.data[i + 2] = 0; ih.data[i + 3] = 255;
   }
-  gc.putImageData(ic, 0, 0); gn.putImageData(inn, 0, 0);
+  gc.putImageData(ic, 0, 0); gn.putImageData(inn, 0, 0); gh.putImageData(ih, 0, 0);
   const map = new THREE.CanvasTexture(cc); map.colorSpace = THREE.SRGBColorSpace;
-  const nrm = new THREE.CanvasTexture(cn);
-  for (const t of [map, nrm]) { t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; }
-  return { map, nrm };
+  const nrm = new THREE.CanvasTexture(cn), hr = new THREE.CanvasTexture(ch);
+  for (const t of [map, nrm, hr]) { t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; }
+  return { map, nrm, hr };
 }
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 // поперечный профиль колеи: дно, стенки, бортики выдавленного снега по краям
@@ -66,23 +70,66 @@ function textures() {
       return -0.9 * (1 - smooth(0.75, 1.15, inS)) + ridge * (inS < 0.9 ? 1 : 0);
     }, { alphaFn: (u, v, h) => Math.min(0.95, Math.max(0, -h) * 2.2) }),
   };
-  TEX.boot.map.wrapT = TEX.boot.nrm.wrapT = THREE.ClampToEdgeWrapping;
+  TEX.boot.map.wrapT = TEX.boot.nrm.wrapT = TEX.boot.hr.wrapT = THREE.ClampToEdgeWrapping;
   return TEX;
 }
 
-// материал следа: свой цвет и рельеф, прозрачность угасает со временем (заметает снегом)
-function trailMat(t, U) {
+// материал следа: свой цвет и рельеф, прозрачность угасает со временем (заметает снегом).
+// Рельеф — параллакс с перекрытием (POM): луч взгляда идёт вглубь карты высот, стенки колеи
+// и отпечатка заслоняют дно, как настоящая выемка; pom — глубина в долях развёртки (u, v)
+function trailMat(t, U, pom, steps) {
   const m = new THREE.MeshStandardMaterial({
     color: new THREE.Color(0.94, 0.95, 0.97), map: t.map, normalMap: t.nrm, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.9, metalness: 0,
+    roughnessMap: t.hr,
     transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
+  m.defines = { POM_STEPS: steps };
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = U.uTime; sh.uniforms.uLife = U.uLife;
+    sh.uniforms.uHgt = { value: t.hr }; sh.uniforms.uPom = { value: new THREE.Vector2(pom[0], pom[1]) };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 aFade;\nuniform float uTime, uLife;\nvarying float vFade;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFade = aFade.y * clamp(1.0 - (uTime - aFade.x) / uLife, 0.0, 1.0);');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFade;')
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vFade;\nuniform sampler2D uHgt; uniform vec2 uPom;')
+      .replace('#include <map_fragment>', `
+  vec2 pUv = vMapUv;
+#if POM_STEPS > 0
+  {
+    vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition);
+    vec2 st0 = dFdx(vMapUv), st1 = dFdy(vMapUv);
+    vec3 Nf = normalize(vNormal);
+    vec3 q1p = cross(q1, Nf), q0p = cross(Nf, q0);
+    vec3 Tt = q1p * st0.x + q0p * st1.x, Bt = q1p * st0.y + q0p * st1.y;
+    float det = max(dot(Tt, Tt), dot(Bt, Bt));
+    float sc = det == 0.0 ? 0.0 : inversesqrt(det);
+    Tt *= sc; Bt *= sc;
+    vec3 Vv = normalize(vViewPosition);
+    vec3 Vt = vec3(dot(Vv, Tt), dot(Vv, Bt), dot(Vv, Nf));
+    float fadeP = clamp(1.0 - length(vViewPosition) / 45.0, 0.0, 1.0);
+    vec2 dlt = Vt.xy / max(Vt.z, 0.3) * uPom * fadeP / float(POM_STEPS);
+    float lay = 1.0 / float(POM_STEPS), cur = 0.0;
+    vec2 uvc = vMapUv;
+    float dep = 1.0 - texture2D(uHgt, uvc).r;
+    for (int i = 0; i < POM_STEPS; i++) {
+      if (cur >= dep) break;
+      uvc -= dlt; cur += lay;
+      dep = 1.0 - texture2D(uHgt, uvc).r;
+    }
+    vec2 prv = uvc + dlt;
+    float aft = dep - cur, bef = (1.0 - texture2D(uHgt, prv).r) - cur + lay;
+    pUv = mix(uvc, prv, clamp(aft / (aft - bef + 1e-5), 0.0, 1.0));
+  }
+#endif
+  vec4 sampledDiffuseColor = texture2D(map, pUv);
+  diffuseColor *= sampledDiffuseColor;`)
+      .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
+  roughnessFactor *= texture2D(roughnessMap, pUv).g;`)
+      .replace('#include <normal_fragment_maps>', `vec3 mapN = texture2D(normalMap, pUv).xyz * 2.0 - 1.0;
+  mapN.xy *= normalScale;
+  normal = normalize(tbn * mapN);`)
       .replace('#include <alphatest_fragment>', 'diffuseColor.a *= vFade;\n#include <alphatest_fragment>');
   };
+  m.customProgramCacheKey = () => 'trail' + steps;
   return m;
 }
 
@@ -160,9 +207,12 @@ export class SnowTrails {
     // в снегопад следы заметает за несколько минут, без снегопада — держатся (кольцевой буфер)
     this.U = { uTime: { value: 0 }, uLife: { value: snow > 0.12 ? 240 : snow > 0.03 ? 700 : 1e6 } };
     const T = textures();
-    this.tire = new Strips(m.scene, trailMat(T.tire, this.U), 4000);
-    this.track = new Strips(m.scene, trailMat(T.track, this.U), 3000);
-    this.boots = new Prints(m.scene, trailMat(T.boot, this.U), 5000);
+    const q = m.settings && m.settings.quality, steps = q === 'low' ? 0 : q === 'medium' ? 8 : 12;
+    // глубина в долях развёртки: колея ~10 см на ленте ~0,6 м (вдоль — на длину повтора),
+    // отпечаток ~4 см на подошве 0,13 × 0,31 м
+    this.tire = new Strips(m.scene, trailMat(T.tire, this.U, [0.16, 0.2], steps), 4000);
+    this.track = new Strips(m.scene, trailMat(T.track, this.U, [0.16, 0.42], steps), 3000);
+    this.boots = new Prints(m.scene, trailMat(T.boot, this.U, [0.3, 0.13], steps), 5000);
     this.vs = new Map(); this.ss = new Map();
     this.time = 0;
   }

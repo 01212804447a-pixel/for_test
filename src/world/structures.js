@@ -6,6 +6,7 @@ import { boxGeo, SNOW_MAT } from './world.js';
 import { mulberry32 } from '../core/math.js';
 import { spruceGeometry, birchGeometry, spruceMaterial } from './flora.js';
 import { pbr, hasAssets } from '../core/assets.js';
+import { weatheredWall } from './shaders.js';
 
 export function makeMats() {
   const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, ...o });
@@ -125,6 +126,8 @@ export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, materi
   // стойкость стены к пробитию, мм брони-эквивалента: дощатая ~3, бревенчатая ~7, кирпич 1,5 кирпича ~30, бетон ~38
   const pen = material === 'log' ? 7 : isWood ? 3 : isBrick ? th * 1000 * 0.08 : th * 1000 * 0.12;
   const opts = { mat: isWood ? 'wood' : isBrick ? 'brick' : 'concrete', dmat: material === 'log' ? 'log' : isWood ? 'wood' : isBrick ? 'brick' : 'concrete', pen, texScale: isBrick ? 1.5 : 2 };
+  // стены — выветренные: снег на подоконниках и сколах, потёки, сырой низ
+  const wmat = weatheredWall(mat, opts.texScale, isWood ? 'wood' : isBrick ? 'brick' : 'concrete');
   const sides = { s: [], n: [], e: [], w: [] };
   for (const dr of doors) sides[dr.side].push({ at: dr.at || 0, width: dr.width || 1.9, bottom: -1, top: 2.15 });
   // окна: по этажу на каждые ~2,8 м высоты (двухэтажные коробки — развалины без перекрытий)
@@ -139,13 +142,13 @@ export function building(world, m, { x, z, yaw = 0, w = 10, d = 6, h = 3, materi
   addWins('s', w); addWins('n', w);
   if (d > 7) { addWins('e', d); addWins('w', d); } else { sides.e.push(...[]); }
   // южная (+z) и северная (-z) стены — вдоль X
-  wall(world, x, z, yaw, y0, -w / 2, w / 2, d / 2 - th / 2, h, th, sides.s, mat, opts, frameMat);
-  wall(world, x, z, yaw, y0, -w / 2, w / 2, -d / 2 + th / 2, h, th, sides.n, mat, opts, frameMat);
+  wall(world, x, z, yaw, y0, -w / 2, w / 2, d / 2 - th / 2, h, th, sides.s, wmat, opts, frameMat);
+  wall(world, x, z, yaw, y0, -w / 2, w / 2, -d / 2 + th / 2, h, th, sides.n, wmat, opts, frameMat);
   // восточная и западная — вдоль Z: поворот на 90°
   const yaw2 = yaw + Math.PI / 2;
   const ce = l2w(x, z, yaw, w / 2 - th / 2, 0), cw = l2w(x, z, yaw, -w / 2 + th / 2, 0);
-  wall(world, ce.x, ce.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.e.map((o) => ({ ...o, at: -o.at })), mat, opts, frameMat);
-  wall(world, cw.x, cw.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.w.map((o) => ({ ...o, at: -o.at })), mat, opts, frameMat);
+  wall(world, ce.x, ce.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.e.map((o) => ({ ...o, at: -o.at })), wmat, opts, frameMat);
+  wall(world, cw.x, cw.z, yaw2, y0, -d / 2 + th, d / 2 - th, 0, h, th, sides.w.map((o) => ({ ...o, at: -o.at })), wmat, opts, frameMat);
   // пол
   world.addBox({ x, z, y0: y0 - 0.6, w: w - 0.1, d: d - 0.1, h: 0.62, yaw, material: m.woodDark, mat: 'wood', cover: false, castShadow: false });
   // крыша (в разрушенном доме её нет)
@@ -373,9 +376,17 @@ export function rock(world, m, { x, z, s = 1.5, seed = 1, collide = true }) {
 }
 
 // Ель со снегом (ярусы лап) и карликовая берёза
+// качание по ветру: размах растёт к вершине, фаза — от положения дерева
+function swayAttr(g, h, x, z, seed) {
+  const P = g.attributes.position, a = new Float32Array(P.count * 2), ph = x * 0.37 + z * 0.61 + seed * 1.3;
+  for (let i = 0; i < P.count; i++) { const k = Math.min(1, Math.max(0, P.getY(i) / h)); a[i * 2] = Math.pow(k, 1.7) * h * 0.025; a[i * 2 + 1] = ph; }
+  g.setAttribute('aSway', new THREE.BufferAttribute(a, 2));
+}
+
 export function spruce(world, m, { x, z, h = 7, seed = 1, lite = false }) {
   const y0 = world.terrain.heightAt(x, z);
   const g = spruceGeometry(h, seed, lite);
+  swayAttr(g, h, x, z, seed);
   g.rotateY(seed * 1.7);
   g.translate(x, y0 - 0.1, z);
   world.addStaticGeometry(m.spruce, g, true);
@@ -385,6 +396,7 @@ export function spruce(world, m, { x, z, h = 7, seed = 1, lite = false }) {
 export function birch(world, m, { x, z, h = 4, seed = 1 }) {
   const y0 = world.terrain.heightAt(x, z);
   const g = birchGeometry(h, seed);
+  swayAttr(g, h * 1.15, x, z, seed);
   g.translate(x, y0 - 0.05, z);
   world.addStaticGeometry(m.spruce, g, true);
 }

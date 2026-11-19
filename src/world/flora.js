@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mulberry32 } from '../core/math.js';
+import { addTreeSway, swayInstanced } from './shaders.js';
 
 function canvasTex(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -143,12 +144,21 @@ export function spruceAtlas() {
 // Материал хвойных: альфа-отсечение, снег на верхней стороне лап (по нормали), мягкое «объёмное» освещение
 export function spruceMaterial() {
   const m = new THREE.MeshStandardMaterial({ map: spruceAtlas(), alphaTest: 0.38, side: THREE.DoubleSide, vertexColors: true, roughness: 0.92 });
+  m.userData.keepAttrs = [['aSway', 2]];
   m.onBeforeCompile = (sh) => {
-    // мягкое просвечивание: обратная сторона лап не чернеет
+    addTreeSway(sh);
+    // просвечивание хвои: против солнца лапы светятся тёплым по краям, обратная сторона не чернеет
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-      reflectedLight.indirectDiffuse += diffuseColor.rgb * 0.12;`);
+      reflectedLight.indirectDiffuse += diffuseColor.rgb * 0.12;
+      #if NUM_DIR_LIGHTS > 0
+      {
+        vec3 Ld = directionalLights[0].direction;
+        float back = pow(max(dot(-normalize(vViewPosition), Ld), 0.0), 4.0); // солнце за деревом
+        reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * back * 0.35 * vec3(0.9, 1.0, 0.6);
+      }
+      #endif`);
   };
-  m.customProgramCacheKey = () => 'spruce3';
+  m.customProgramCacheKey = () => 'spruce4';
   return m;
 }
 
@@ -307,8 +317,8 @@ export function scatterGround(scene, terrain, world, { seed = 1, radius = 1050, 
     scene.add(im); out.push(im);
     return im;
   };
-  const grassMat = new THREE.MeshStandardMaterial({ map: grassTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1 });
-  const shrubMat = new THREE.MeshStandardMaterial({ map: shrubTex(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1 });
+  const grassMat = swayInstanced(new THREE.MeshStandardMaterial({ map: grassTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1 }), 0.55, 'g');
+  const shrubMat = swayInstanced(new THREE.MeshStandardMaterial({ map: shrubTex(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1 }), 0.12, 's');
   place(crossedPlanes(0.5, 0.42, 3), grassMat, grass, 0.45, 1.0, { cluster: true, sink: 0.08 });
   place(crossedPlanes(1.1, 0.9, 3), shrubMat, shrubs, 0.6, 1.5, { cluster: true, shadow: true });
   const st = new THREE.DodecahedronGeometry(0.5, 0);
@@ -331,8 +341,8 @@ export class GroundCover {
   constructor(scene, terrain, world, { density = 1, radius = 140 } = {}) {
     this.terrain = terrain; this.world = world; this.radius = radius;
     this.tile = 32; this.key = '';
-    const grassMat = new THREE.MeshStandardMaterial({ map: grassTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1 });
-    const shrubMat = new THREE.MeshStandardMaterial({ map: shrubTex(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1 });
+    const grassMat = swayInstanced(new THREE.MeshStandardMaterial({ map: grassTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 1 }), 0.55, 'g');
+    const shrubMat = swayInstanced(new THREE.MeshStandardMaterial({ map: shrubTex(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1 }), 0.12, 's');
     const st = new THREE.DodecahedronGeometry(0.5, 0);
     const sp = st.attributes.position;
     for (let i = 0; i < sp.count; i++) sp.setY(i, sp.getY(i) * 0.6);

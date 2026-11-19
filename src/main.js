@@ -1,5 +1,6 @@
 // N.E.G.S: Заполярье — точка входа: рендерер, режимы (меню / штаб / задание), цикл
 import * as THREE from 'three';
+import { Perf } from './ui/perf.js';
 import { Input } from './core/input.js';
 import { AudioSys } from './core/audio.js';
 import { loadSave, writeSave, resetSave } from './core/save.js';
@@ -65,6 +66,7 @@ class App {
     this.audio = new AudioSys();
     this.audio.setVolume(this.settings.volume);
     this.post = new PostFX(this.renderer);
+    this.perf = new Perf(this);
     this.applyQuality();
     this.hud = new HUD(document.getElementById('hud'));
     this.hud.hide();
@@ -110,7 +112,8 @@ class App {
     if (q === this._q) return;
     this._q = q;
     const pr = q === 'low' ? Math.min(devicePixelRatio, 0.85) : q === 'medium' ? Math.min(devicePixelRatio, 1) : Math.min(devicePixelRatio, 1.5);
-    this.renderer.setPixelRatio(pr);
+    if (this.perf) this.perf.basePR = pr;
+    this.renderer.setPixelRatio(pr * (this.perf ? this.perf.scale : 1));
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.type = q === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.shadowMap.needsUpdate = true;
@@ -277,6 +280,7 @@ class App {
 
   loop(t) {
     requestAnimationFrame((tt) => this.loop(tt));
+    this.perf.begin();
     let dt = (t - this.last) / 1000;
     this.last = t;
     if (dt > 0.1) dt = 0.1;
@@ -296,6 +300,7 @@ class App {
       this.mission.render();
     }
     this.input.endFrame();
+    this.perf.end();
   }
 }
 

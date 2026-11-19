@@ -121,8 +121,9 @@ export class UI {
       <label>Громкость <input type="range" id="vol" min="0" max="1" step="0.05" value="${st.volume}"></label>
       <label>Качество графики <select id="q"><option value="low">Низкое</option><option value="medium">Среднее</option><option value="high">Высокое</option></select></label>
       <label><input type="checkbox" id="inv" ${st.invertY ? 'checked' : ''}> Инвертировать ось Y</label>
+      <label><input type="checkbox" id="dyn" ${st.dynRes !== false ? 'checked' : ''}> Адаптивное разрешение: при нехватке кадров рендер становится мягче (до 50 %), чтобы держать ≈50 FPS</label>
       <div class="row"><button class="btn sec" id="keys">Управление: назначить клавиши</button></div>
-      <p class="note">Качество применяется при следующей загрузке задания.</p>
+      <p class="note">Качество применяется при следующей загрузке задания. Справа внизу — FPS, время кадра и сколько из него занимает процессор (ЦП): если ЦП близко к времени кадра — упираемся в процессор, иначе — в видеокарту, тогда помогает качество «Низкое» и адаптивное разрешение.</p>
       <div class="row"><button class="btn" id="b">Готово</button></div>`);
     const p = this.panel;
     p.querySelector('#q').value = st.quality;
@@ -131,6 +132,7 @@ export class UI {
     p.querySelector('#vol').oninput = (e) => { st.volume = +e.target.value; this.app.audio.setVolume(st.volume); };
     p.querySelector('#q').onchange = (e) => { st.quality = e.target.value; };
     p.querySelector('#inv').onchange = (e) => { st.invertY = e.target.checked; };
+    p.querySelector('#dyn').onchange = (e) => { st.dynRes = e.target.checked; if (!st.dynRes && this.app.perf) { this.app.perf.scale = 1; this.app.perf.apply(); } };
     this.bind('#b', () => { this.app.persist(); back ? back() : this.close(); });
     this.bind('#keys', () => this.keybinds(() => this.settings(back)));
   }

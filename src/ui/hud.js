@@ -39,10 +39,6 @@ export class HUD {
     this.mapCanvas = el('canvas', '', this.mapBox); this.mapCanvas.width = this.mapCanvas.height = 760;
     this.tab = el('div', 'tabbox', root);
     this.hint = el('div', 'hint', root);
-    // счётчик кадров: средний FPS и время кадра за полсекунды, внизу в углу
-    this.fps = el('div', 'fps', root);
-    this.fps.style.cssText = 'position:absolute;right:6px;bottom:3px;font:11px/1.2 monospace;color:#cfd8dc;background:rgba(10,14,18,0.45);padding:1px 5px;border-radius:3px;pointer-events:none;z-index:30';
-    this._fpsN = 0; this._fpsT0 = performance.now(); this._fpsLast = this._fpsT0; this._fpsMax = 0;
     this.msgT = 0; this.bigT = 0; this.dmgT = 0; this.grenT = 0;
     this.radioLines = [];
     this.resize();
@@ -92,21 +88,9 @@ export class HUD {
 
   grenade() { this.grenT = 2.5; }
 
-  tickFps() {
-    const t = performance.now(), d = t - this._fpsLast;
-    this._fpsLast = t;
-    if (d > 1500) { this._fpsN = 0; this._fpsT0 = t; this._fpsMax = 0; return; } // пауза/загрузка — не считать
-    this._fpsN++; this._fpsMax = Math.max(this._fpsMax, d);
-    if (t - this._fpsT0 >= 500) {
-      const fps = (this._fpsN * 1000) / (t - this._fpsT0);
-      this.fps.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} мс (макс ${Math.round(this._fpsMax)})`;
-      this.fps.style.color = fps >= 50 ? '#b9e6a4' : fps >= 30 ? '#ecd98a' : '#f09a8a';
-      this._fpsN = 0; this._fpsT0 = t; this._fpsMax = 0;
-    }
-  }
+
 
   update(m, dt) {
-    this.tickFps();
     const p = m.player, b = p.body;
     // таймеры
     this.msgT -= dt; if (this.msgT <= 0) this.msg.style.opacity = 0;

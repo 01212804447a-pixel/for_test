@@ -20,6 +20,8 @@ import { SmokeScreens } from '../fx/smoke.js';
 import { Flares } from '../fx/flare.js';
 import { AmmoPiles } from '../artillery/ammoPile.js';
 import { buildArmory } from './armory.js';
+import { precomputeTables } from '../core/bgTables.js';
+import { tankTable } from '../entities/tank.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -933,7 +935,9 @@ export class Mission {
     const h = this.hitcam;
     if (!h) return;
     // камера снаряда артиллерии работает на любой миссии (J — выключить)
-    const shell = p.ammo.kind === 'shell';
+    // авто-камера — только у артиллерии (Д-30, миномёт): танковый снаряд летит 1–3 с, а лишняя
+    // отрисовка сцены во врезке в прицеле танка только отнимает кадры (J — включить вручную)
+    const shell = p.ammo.kind === 'shell' && !(p.weapon && p.weapon.tankGun) && !p.ammo.apfsds;
     if (!(h.on || (shell && h.shellCam))) return;
     if (!shell && p.ammo.kind !== 'bullet' && p.ammo.kind !== 'rocket' && p.ammo.kind !== 'grenade') return;
     this.hitcam.proj = p; this.hitcam.hold = 0; this.hitcam.t = 0;
@@ -1296,7 +1300,17 @@ export class Mission {
   }
 
   // ===================== кадр =====================
+  // таблицы стрельбы — заранее: Д-30 и миномёт в фоновом потоке, танковые СУО — сразу (быстрые)
+  _precompute() {
+    const jobs = [];
+    if (this.guns.some((h) => h instanceof Howitzer)) { for (const ci of [5, 4, 3, 0, 1, 2]) jobs.push({ k: 'd30', ci }); jobs.push({ k: 'd30d', shell: 'bk' }, { k: 'd30d', shell: 'bm' }); }
+    if (this.guns.some((h) => h.kind === 'mortar')) for (const ci of [3, 2, 4, 1, 5, 0]) jobs.push({ k: 'mortar', ci });
+    precomputeTables(jobs);
+    if (this.vehicles.some((v) => v.tank)) for (const k of ['bm', 'bk', 'of']) tankTable(k);
+  }
+
   update(dt) {
+    if (!this._pre) { this._pre = true; this._precompute(); }
     this.frameDt = dt;
     this.frame++;
     this.time += dt;
@@ -1646,7 +1660,10 @@ export class Mission {
   }
 
   render() {
-    this.renderer.shadowMap.autoUpdate = true;
+    // тени солнца: на низком и среднем качестве — через кадр (камера тени следует за игроком плавно)
+    const sq = this.settings.quality;
+    this._shF = (this._shF || 0) + 1;
+    this.renderer.shadowMap.autoUpdate = sq === 'high' || (this._shF & 1) === 0;
     let fogD = this.scene.fog && this.scene.fog.density > 0 ? 2.0 / this.scene.fog.density : 1e9;
     if (this.wideMap) fogD = Math.min(fogD, this.settings.quality === 'low' ? 3500 : 6000);
     const dvOn = this._droneViewOn();

@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { AMMO, WEAPONS } from '../data/weapons.js';
 import { prepareAmmo } from '../physics/ballistics.js';
-import { fly, NORMAL_ENV } from '../artillery/d30.js';
+import { flatAngle, NORMAL_ENV } from '../artillery/d30.js';
 import { Soldier } from './soldier.js';
 import { clamp, rand, randn, wrapAngle } from '../core/math.js';
 import { T72 } from './t72Model.js';
@@ -77,12 +77,12 @@ export const TANK_SPECS = {
   t72b: {
     name: 'Т-72Б', fcs: '1А40-1', sight: 'Прицел наводчика 1А40-1', lead: false, armor: T72_ARMOR,
     car: { bm: 10, bk: 6, of: 6 }, rack: { bm: 9, bk: 6, of: 8 },
-    fcsNote: 'лазерный дальномер, ввод дальности в баллистический вычислитель — автоматически; упреждение — по шкалам',
+    fcsNote: 'лазерный дальномер по R, угол прицеливания — вычислитель; упреждение — по шкалам',
   },
   t80bv: {
     name: 'Т-80БВ', fcs: '1А33', sight: 'Прицел-дальномер 1Г42', lead: true, armor: T80_ARMOR,
     car: { bm: 12, bk: 8, of: 8 }, rack: { bm: 4, bk: 3, of: 3 },
-    fcsNote: 'дальность, угол прицеливания и упреждение по скорости слежения — автоматически (баллистический вычислитель 1В517)',
+    fcsNote: 'дальномер по R; угол прицеливания и упреждение по скорости слежения — вычислитель 1В517',
   },
 };
 const ZONE_NAMES = {
@@ -168,18 +168,8 @@ export class Tank {
   get driverOk() { return this.driver.alive; }
 
   // ---------- СУО: поправка на дальность для снаряда ----------
-  table(key) {
-    if (this._tables[key]) return this._tables[key];
-    const ammo = AMMO[ROUNDS[key].id], rows = [];
-    for (let D = 100; D <= 5000; D += 100) {
-      let lo = -0.002, hi = 0.15;
-      for (let k = 0; k < 22; k++) { const mid = (lo + hi) / 2; if (fly(ammo, NORMAL_ENV, mid, { dt: 1 / 120 }).x < D) lo = mid; else hi = mid; }
-      const a = (lo + hi) / 2;
-      rows.push({ a, t: fly(ammo, NORMAL_ENV, a, { dt: 1 / 120 }).t });
-    }
-    this._tables[key] = rows;
-    return rows;
-  }
+  // таблица угла прицеливания и времени полёта (одна на все танки, считается быстро — до дальности)
+  table(key) { return tankTable(key); }
   superFor(key, D) {
     if (!D) return 0;
     const T = this.table(key), f = clamp(D / 100 - 1, 0, T.length - 1), i = Math.floor(f);
@@ -191,12 +181,10 @@ export class Tank {
     return T[i].t + (T[Math.min(T.length - 1, i + 1)].t - T[i].t) * (f - i);
   }
 
-  // СУО: дальномер сам замеряет дальность по линии прицеливания (≈3 раза в секунду),
-  // баллистический вычислитель выставляет угол прицеливания для заряженного (заряжаемого)
-  // снаряда; у 1А33 (Т-80БВ) — ещё упреждение по угловой скорости слежения за целью
+  // СУО: дальность — замер лазерным дальномером по R (у ИИ — сам наводчик); баллистический
+  // вычислитель по ней выставляет угол прицеливания для заряженного (заряжаемого) снаряда;
+  // у 1А33 (Т-80БВ) — ещё упреждение по угловой скорости слежения за целью
   _fcs(dt) {
-    this.fcsT -= dt;
-    if (this.fcsT <= 0) { this.fcsT = 0.33; if (this.mod.sight > 0) this.measure(); }
     const key = this.loaded || (this.loading && this.loading.key) || this.sel;
     this.superEl = this.range ? this.superFor(key, this.range) : 0;
     if (this.spec.lead && dt > 0) {
@@ -442,7 +430,7 @@ export class Tank {
     if (this.mod.sight <= 0) { m.hud.message('Прицел-дальномер разбит', 1.5); return; }
     if (!this.gunnerOk && this.view !== 'gunner') { m.hud.message('Наводчик выбыл: дальность — по шкале ТКН-3', 1.5); return; }
     const ok = this.measure();
-    this.rangeT = 3; this.fcsT = 0.6;
+    this.rangeT = 3;
     m.audio.click();
     if (!ok) m.hud.message('Дальномер: нет отражения — дальность прежняя', 1.2);
   }
@@ -713,6 +701,21 @@ export class Tank {
   }
 }
 
+// ---------- таблицы СУО: угол прицеливания и время полёта на 100…5000 м ----------
+const TT = new Map();
+export function tankTable(key) {
+  if (TT.has(key)) return TT.get(key);
+  const ammo = AMMO[ROUNDS[key].id], rows = [];
+  for (let D = 100; D <= 5000; D += 100) {
+    const s = flatAngle(ammo, NORMAL_ENV, D);
+    rows.push(s ? { a: s.a, t: s.t } : rows[rows.length - 1] || { a: 0, t: 0 });
+  }
+  TT.set(key, rows);
+  return rows;
+}
+// готовая таблица из фонового потока
+export function primeTankTable(key, rows) { if (!TT.has(key)) TT.set(key, rows); }
+
 // ---------- экипаж ИИ: танк противника ----------
 // Обнаружение: цель должна быть в поле зрения приборов и на прямой видимости некоторое время
 // (технику видно быстрее, пехоту — дольше, лежачую — ещё дольше). Командир выбирает самую
@@ -821,6 +824,9 @@ class TankAI {
       if (this.burst > 0) t.fireCoax(owner);
       if (D < 220 || t.loaded !== 'of') return;
     }
+    // наводчик меряет дальность, когда ствол наведён (как игрок по R)
+    this.lrfT = (this.lrfT || 0) - dt;
+    if (this.lrfT <= 0 && t.layErr < 3 * MIL && t.mod.sight > 0) { t.measure(); this.lrfT = 1.2; }
     // пушка: заряжено, ствол согласован, дальномер «видит» цель
     const onTarget = t.range > 0 && Math.abs(t.range - D) < Math.max(30, D * 0.06);
     if (t.loaded && t.layErr < 0.8 * MIL && onTarget) {
@@ -860,7 +866,7 @@ class TankUI {
       <div class="gr"><span>Следующий (1–3)</span><b>${ROUNDS[t.sel].name}</b></div>
       <div class="gr"><span>Карусель АЗ</span><b>БР ${t.car.bm} · КС ${t.car.bk} · ОФ ${t.car.of}</b></div>
       <div class="gr"><span>Укладка</span><b>БР ${t.rack.bm} · КС ${t.rack.bk} · ОФ ${t.rack.of}</b></div>
-      <div class="gr"><span>Дальность (СУО ${t.spec.fcs})</span><b>${t.range ? t.range + ' м · авто' : '—'}</b></div>
+      <div class="gr"><span>Дальность (СУО ${t.spec.fcs})</span><b>${t.range ? t.range + ' м (R — замер)' : '— (R — замер)'}</b></div>
       ${t.spec.lead ? `<div class="gr"><span>Упреждение</span><b>${(t.leadY / MIL).toFixed(1)} тыс.</b></div>` : ''}
       <div class="gr"><span>ПКТ / НСВТ</span><b>${t.coax.ammo}+${t.coax.belts}×250 · ${t.nsvt.ammo}+${t.nsvt.boxes}×50</b></div>
       <div class="gr"><span>902Б «Туча» (G)</span><b>${t.smokes}</b></div>
@@ -871,7 +877,7 @@ class TankUI {
       <div class="gr"><span>Гусеницы Л/П</span><b>${tr[0]} / ${tr[1]}</b></div>
       ${Object.values(t.mod).some((x) => x <= 0) || t.fire ? `<div class="gr"><span>Повреждения</span><b>${md('engine', 'двигатель')}${md('gun', 'пушка')}${md('sight', 'прицел')}${md('traverse', 'привод башни')}${md('autoloader', 'АЗ')}${t.fire ? '<span class="bad">ПОЖАР</span>' : ''}</b></div>` : ''}
       <hr>
-      <div class="gk">Мышь — наводка (в прицелах) / обзор · ЛКМ — пушка · ПКМ — ПКТ · дальность и угол прицеливания — сами (R — замер сейчас) · 1–3 — снаряд<br>
+      <div class="gk">Мышь — наводка (в прицелах) / обзор · ЛКМ — пушка · ПКМ — ПКТ · R — дальномер (угол прицеливания СУО выставит сама) · 1–3 — снаряд<br>
       ↑ ↓ — вперёд/назад, быстрее/тише · ← → — левее/правее · Пробел — «Стой!» (мехвод выполняет с задержкой)<br>
       V — прицел наводчика / ТКН-3 / панорама / мехвод · Q — целеуказание по взгляду · C — люк (НСВТ) · G — дым · H — прицепить Д-30 · E — выйти</div>`;
   }

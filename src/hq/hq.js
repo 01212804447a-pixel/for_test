@@ -1,6 +1,7 @@
 // Штаб (ПВД «Полярный Лис»): 3D-помещение со стендом таблиц стрельбы, картой операций,
 // стендом личного состава, оружейной пирамидой и выходом в автопарк.
 import * as THREE from 'three';
+import { mergeStatic } from '../core/mergeStatic.js';
 import { buildFiringTable, TABLE_WEAPONS } from '../physics/firingTable.js';
 import { drawChart, drawTable } from '../ui/charts.js';
 import { woodTexture, textTexture } from '../world/textures.js';
@@ -314,8 +315,11 @@ export class HQ {
       if (f) f.traverse((m) => { if (m.isMesh && /tube|light|bulb|glass/i.test(m.material.name || m.name)) m.material = tubeM; });
       else this.box(1.2, 0.05, 0.22, tubeM, x, H - 0.05, z, false);
     }
-    for (const [x, z, i] of [[0, -2.0, 9], [0, 2.6, 7], [6, -0.5, 7]]) {
-      const l = new THREE.PointLight(0xf2f2ec, i, 11, 1.3); l.position.set(x, H - 0.45, z); S.add(l);
+    // каждый точечный источник утяжеляет расчёт каждого пикселя: на низком качестве — два, ярче
+    const lq = this.app.settings.quality || 'medium';
+    const ceil = lq === 'low' ? [[0, 0.2, 13], [6, -0.5, 8]] : [[0, -2.0, 9], [0, 2.6, 7], [6, -0.5, 7]];
+    for (const [x, z, i] of ceil) {
+      const l = new THREE.PointLight(0xf2f2ec, i, lq === 'low' ? 13 : 11, 1.3); l.position.set(x, H - 0.45, z); S.add(l);
     }
     this.hangLamp(0, 0.2, H);
     // ---------- стенд таблиц стрельбы ----------
@@ -377,8 +381,8 @@ export class HQ {
     this.prop('barrel_stove', 7.9, 0, 5.1, -0.6, { collide: 0.45 });
     const pipeM = std({ color: 0x2a2a2a, roughness: 0.6, metalness: 0.6 });
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, H - 0.9, 14), pipeM); pipe.position.set(7.9, 0.9 + (H - 0.9) / 2, 5.1); pipe.castShadow = true; S.add(pipe);
-    const fire = new THREE.PointLight(0xff8a3a, 2.5, 4, 2); fire.position.set(7.9, 0.45, 4.7); S.add(fire);
-    this.fire = fire;
+    const fire = new THREE.PointLight(0xff8a3a, 2.5, 4, 2); fire.position.set(7.9, 0.45, 4.7);
+    if (this.app.settings.quality !== 'low') { S.add(fire); this.fire = fire; }
     const logM = pbr('bark_brown_02', { roughness: 1 }) || std({ color: 0x5a4030 });
     for (let i = 0; i < 12; i++) { const lg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.5, 9), logM); lg.rotation.z = Math.PI / 2; lg.position.set(8.55, 0.08 + Math.floor(i / 4) * 0.14, 3.9 + (i % 4) * 0.16 + (Math.floor(i / 4) % 2) * 0.07); lg.castShadow = true; lg.receiveShadow = true; S.add(lg); }
     this.prop('drawer_cabinet', 8.6, 0, 2.6, -Math.PI / 2, { collide: 0.5 });
@@ -401,6 +405,8 @@ export class HQ {
     this.interact.push({ pos: new THREE.Vector3(4.5, 1.2, D / 2 - 0.5), r: 2.4, label: 'Автопарк — выбрать технику на задание', act: () => this.app.ui.motorPool() });
     // ---------- люди ----------
     this.buildPeople();
+    // неподвижное — в общие сетки по материалам (меньше вызовов отрисовки)
+    this.merged = mergeStatic(S);
   }
 
   hangLamp(x, z, H) {
@@ -441,7 +447,8 @@ export class HQ {
     bars.position.set(KX + 0.7, 0, -1.6); bars.rotation.y = 1.2; S.add(bars);
     const khoSign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.35), std({ map: textTexture(['КХО', 'комната хранения оружия'], { w: 512, h: 150, bg: '#7a1c14', fg: '#f3efe2', font: 'bold 38px Arial' }), roughness: 0.6 }));
     khoSign.position.set(KX + 0.1, 2.5, -0.9); khoSign.rotation.y = Math.PI / 2; S.add(khoSign);
-    const lampK = new THREE.PointLight(0xfff0d8, 5, 8, 1.6); lampK.position.set(-6.8, H - 0.35, -2); S.add(lampK);
+    if (this.app.settings.quality === 'high') { const lampK = new THREE.PointLight(0xfff0d8, 5, 8, 1.6); lampK.position.set(-6.8, H - 0.35, -2); S.add(lampK); }
+    else { const lampK = new THREE.PointLight(0xfff0d8, 4, 7, 1.6); lampK.position.set(-6.8, H - 0.35, -2); if (this.app.settings.quality === 'medium') S.add(lampK); }
     const tubeM = std({ color: 0xffffff, emissive: 0xf4f8ff, emissiveIntensity: 3 });
     if (!this.prop('mounted_fluorescent_lights', -6.8, H - 0.06, -2, 0, { shadow: false })) this.box(1.2, 0.05, 0.22, tubeM, -6.8, H - 0.05, -2, false);
     // оружейный щит: доска с крюками, оружие горизонтально
@@ -461,6 +468,7 @@ export class HQ {
       lbl.position.set(-W / 2 + 0.09, y - 0.21, z); lbl.rotation.y = Math.PI / 2; S.add(lbl);
       const mark = new THREE.Mesh(new THREE.CircleGeometry(0.035, 16), new THREE.MeshBasicMaterial({ color: 0x40ff60 }));
       mark.position.set(-W / 2 + 0.09, y - 0.21, z + 0.38); mark.rotation.y = Math.PI / 2; S.add(mark);
+      mark.userData.dyn = true;
       this.khoLabels.push({ id, mark });
       this.interact.push({ pos: new THREE.Vector3(-W / 2 + 0.6, y, z), r: 1.6, label: `Взять ${WEAPONS[id].name} (${WEAPONS[id].cls})`, act: () => { this.app.save.primary = id; this.app.persist(); this.updateKho(); this.app.ui.toast(`Основное оружие: ${WEAPONS[id].name}`); } });
     });
@@ -471,7 +479,7 @@ export class HQ {
     S.add(rpg);
     this.box(1.6, 0.05, 0.22, rackMat, -7.4, 1.3, -D / 2 + 0.16, false);
     this.rpgMark = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), new THREE.MeshBasicMaterial({ color: 0x40ff60 }));
-    this.rpgMark.position.set(-6.5, 1.28, -D / 2 + 0.28); this.scene.add(this.rpgMark);
+    this.rpgMark.position.set(-6.5, 1.28, -D / 2 + 0.28); this.rpgMark.userData.dyn = true; this.scene.add(this.rpgMark);
     this.interact.push({ pos: new THREE.Vector3(-7.4, 1.45, -D / 2 + 0.5), r: 1.8, label: 'Взять / сдать РПГ-7В (3 выстрела ПГ-7ВМ)', act: () => { this.app.save.launcher = !this.app.save.launcher; this.app.persist(); this.updateKho(); this.app.ui.toast(this.app.save.launcher ? 'РПГ-7В взят' : 'РПГ-7В сдан'); } });
     // стеллажи с ящиками, инструментальный ящик
     this.prop('worn_metal_rack', -5.3, 0, -5.55, 0, { collide: 0.4 });
@@ -502,7 +510,7 @@ export class HQ {
       this.interact.push({ pos: new THREE.Vector3(2.6, 1.5, -0.9), r: 2, label: 'Майор Волков — доклад', act: () => this.app.ui.commanderTalk() });
       return;
     }
-    const add = (a, x, z, ry) => { a.root.position.set(x, 0, z); a.root.rotation.y = ry; a.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } }); S.add(a.root); this.actors.push(a); return a; };
+    const add = (a, x, z, ry) => { a.root.userData.dyn = true; a.root.position.set(x, 0, z); a.root.rotation.y = ry; a.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } }); S.add(a.root); this.actors.push(a); return a; };
     // командир у карты
     add(new ClipActor('officer', 'Talking'), 2.75, -1.35, 0.55);
     this.interact.push({ pos: new THREE.Vector3(2.75, 1.5, -1.35), r: 2, label: 'Майор Волков — доклад', act: () => this.app.ui.commanderTalk() });

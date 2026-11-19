@@ -6,12 +6,15 @@ const pVert = /* glsl */`
 attribute float size;
 attribute vec4 pcolor;
 uniform float uScale;
+uniform float uMaxSize;
 varying vec4 vColor;
 varying float vDist;
 void main(){
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   vDist = -mv.z;
-  gl_PointSize = clamp(size * uScale / max(vDist, 0.05), 0.0, 1024.0);
+  // размер на экране ограничен: в прицелах с увеличением дым и огонь иначе разрастаются
+  // на весь экран сотнями слоёв и «вешают» видеокарту
+  gl_PointSize = clamp(size * uScale / max(vDist, 0.05), 0.0, uMaxSize);
   vColor = pcolor;
   gl_Position = projectionMatrix * mv;
 }`;
@@ -21,7 +24,7 @@ varying vec4 vColor; varying float vDist;
 void main(){
   vec2 c = gl_PointCoord - 0.5;
   float d = length(c);
-  float a = smoothstep(0.5, 0.05, d);
+  float a = smoothstep(0.5, 0.05, d) * smoothstep(0.4, 2.2, vDist); // вплотную к камере — не рисовать
   if (a * vColor.a < 0.004) discard;
   float fog = 1.0 - exp(-uFogDensity * uFogDensity * vDist * vDist);
   vec3 col = vColor.rgb;
@@ -46,7 +49,7 @@ class ParticlePool {
     this.aCol = new THREE.BufferAttribute(new Float32Array(max * 4), 4).setUsage(THREE.DynamicDrawUsage);
     g.setAttribute('position', this.aPos); g.setAttribute('size', this.aSize); g.setAttribute('pcolor', this.aCol);
     this.uniforms = {
-      uScale: { value: 500 }, uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0 },
+      uScale: { value: 500 }, uMaxSize: { value: 320 }, uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0 },
       uAdditive: { value: additive ? 1 : 0 }, uLight: { value: 1 },
     };
     this.mat = new THREE.ShaderMaterial({
@@ -156,6 +159,7 @@ export class Effects {
     const sc = height / 2 / Math.tan((camera.fov * Math.PI) / 360);
     for (const p of [this.smoke, this.glow]) {
       p.uniforms.uScale.value = sc;
+      p.uniforms.uMaxSize.value = Math.max(48, height * 0.3);
       if (fog) { p.uniforms.uFogColor.value.copy(fog.color); p.uniforms.uFogDensity.value = fog.density; }
       p.uniforms.uLight.value = this.light;
     }

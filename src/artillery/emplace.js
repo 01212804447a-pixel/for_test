@@ -4,7 +4,7 @@
 // В сети: начало переноса прячет оружие у остальных, установка — сообщает место.
 import * as THREE from 'three';
 
-const CAP = { tigr: 1, niva: 1, mtlb: 2 };                 // сколько такого оружия влезает
+const CAP = { tigr: 2, niva: 1, mtlb: 4 };                 // сколько комплектов влезает (кузов/десантное отделение)
 const NIVA_OK = { mortar: true, kpv: false, atgm: true };              // в «Ниву» КПВ на станке не влезает
 
 export function canCarry(v, kind) { return v.alive && !v.tank && (v.cargo || []).length < (CAP[v.typeId] || 1) && (v.typeId !== 'niva' || NIVA_OK[kind]); }
@@ -24,6 +24,12 @@ export function setupEmplace(E, m, { kind, name, speed = 2.0, front = 1.7 }) {
     for (const v of m.vehicles) { if (!canHold(v)) continue; const d = rearOf(v).distanceTo(p.pos.clone().setY(p.pos.y + 0.9)); if (d < bd) { bd = d; best = v; } }
     return best;
   };
+  // любая машина рядом с кормой (для подсказки, почему не грузится)
+  const nearAny = () => {
+    const p = P().body;
+    for (const v of m.vehicles) if (v.alive && rearOf(v).distanceTo(p.pos.clone().setY(p.pos.y + 0.9)) < 4.2) return v;
+    return null;
+  };
   E.moveIt = {
     pos: new THREE.Vector3(), r: 1.7, hold: 0.8,
     get label() { return `Переместить ${name} (E — поставить, рядом с машиной — погрузить)`; },
@@ -33,7 +39,12 @@ export function setupEmplace(E, m, { kind, name, speed = 2.0, front = 1.7 }) {
   // пока несёте: E — поставить здесь; рядом с машиной — погрузить в неё
   E.stowIt = {
     pos: new THREE.Vector3(), r: 3.0, hold: 0.5,
-    get label() { const v = nearVeh(); return v ? `Погрузить ${name} в ${v.type.name}` : `Поставить ${name} здесь`; },
+    get label() {
+      const v = nearVeh();
+      if (v) return `Погрузить ${name} в ${v.type.name} (${(v.cargo || []).length + 1}/${CAP[v.typeId] || 1})`;
+      const full = nearAny();
+      return full ? `Поставить ${name} здесь — ${full.tank ? 'в танк не грузится' : `в ${full.type.name} нет места`}` : `Поставить ${name} здесь`;
+    },
     enabled: () => E.moving && E.mover === P(),
     action: () => { const v = nearVeh(); if (v) E.stow(v); else E.tryPlace(); },
   };
@@ -110,7 +121,12 @@ export function setupEmplace(E, m, { kind, name, speed = 2.0, front = 1.7 }) {
       E.pos.copy(v.pos);
       // машину подбили — оружие вываливается рядом с остовом
       if (!v.alive) { v.cargo = (v.cargo || []).filter((c) => c !== E); const r = rearOf(v); E.placeAt(r.x + 1.5, r.z + 1.5, v.yaw, true); }
-      else rearOf(v, E.unloadIt.pos);
+      else {
+        // несколько комплектов в машине — у кормы рядом друг с другом (каждый можно выбрать)
+        rearOf(v, E.unloadIt.pos);
+        const n = v.cargo.length, i = v.cargo.indexOf(E), off = (i - (n - 1) / 2) * 1.1;
+        E.unloadIt.pos.x += Math.cos(v.yaw) * off; E.unloadIt.pos.z -= Math.sin(v.yaw) * off;
+      }
     }
     E.moveIt.pos.copy(E.pos).setY(E.pos.y + 0.8);
     E.stowIt.pos.copy(p.body.pos).setY(p.body.pos.y + 0.9);

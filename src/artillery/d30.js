@@ -94,7 +94,41 @@ export function fly(ammo, env, angle, { dt = 1 / 120, windX = 0, windZ = 0, unti
   return { x: s.p.x, z: s.p.z, t: s.t, top, fall: 0, vEnd: 0 };
 }
 
+// Настильная стрельба: лететь только до дальности D (без «досчёта» всей траектории до земли).
+// Возвращает высоту и время на дальности D — для быстрых таблиц прямой наводки и танковой СУО
+export function flyTo(ammo, env, angle, D, dt = 1 / 120) {
+  const e = { ...env, Oy: 0, Oz: 0, wind: { x: 0, y: 0, z: 0 } };
+  const s = { p: { x: 0, y: 0, z: 0 }, v: { x: ammo.v0 * Math.cos(angle), y: ammo.v0 * Math.sin(angle), z: 0 }, t: 0, rx: 0, rz: 1 };
+  let px = 0, py = 0, pt = 0;
+  while (s.t < 60) {
+    px = s.p.x; py = s.p.y; pt = s.t;
+    stepProjectile(s, ammo, e, dt);
+    if (s.p.x >= D) { const f = (D - px) / Math.max(1e-6, s.p.x - px); return { y: py + (s.p.y - py) * f, t: pt + (s.t - pt) * f, v: Math.hypot(s.v.x, s.v.y) }; }
+    if (s.v.x <= 1) break;
+  }
+  return { y: -1e9, t: s.t, v: 0 };
+}
+
+// угол прицеливания для попадания на дальности D (секущая: 3–4 коротких полёта вместо десятков полных)
+export function flatAngle(ammo, env, D) {
+  let a0 = 0, y0 = flyTo(ammo, env, a0, D).y;
+  if (y0 < -1e8) return null;
+  let a1 = -y0 / D, r1 = flyTo(ammo, env, a1, D);
+  for (let k = 0; k < 4 && Math.abs(r1.y) > 0.01; k++) {
+    const a2 = a1 - r1.y * (a1 - a0) / (r1.y - y0 || 1e-9);
+    a0 = a1; y0 = r1.y; a1 = a2; r1 = flyTo(ammo, env, a1, D);
+  }
+  return { a: a1, t: r1.t, v: r1.v };
+}
+
 const tables = new Map();
+
+// таблица, посчитанная в фоновом потоке (без объекта боеприпаса — его восстанавливаем здесь)
+export function primeFiringTable(key, T) {
+  if (tables.has(key)) return;
+  const id = typeof key === 'string' ? SHELLS[key].id() : 'of462_' + CHARGES[key].id;
+  tables.set(key, { ...T, ammo: prepareAmmo({ ...AMMO[id] }) });
+}
 
 // Таблица стрельбы для заряда (ленивый расчёт, кэш); shell — для выстрелов прямой наводкой
 // (БК-6М, «лом») своя таблица на специальном заряде
@@ -164,10 +198,11 @@ function directTable(shell) {
   const maxD = shell === 'bm' ? 3000 : 2000;
   const rows = [];
   for (let D = 100; D <= maxD; D += 100) {
-    let lo = 0, hi = 60;
-    for (let k = 0; k < 24; k++) { const mid = (lo + hi) / 2; if (fly(ammo, env, mid * MIL, { dt: 1 / 240 }).x < D) lo = mid; else hi = mid; }
-    const m = (lo + hi) / 2, r = fly(ammo, env, m * MIL, { dt: 1 / 240 });
-    rows.push({ D, sight: m, dXmil: 0, t: r.t, top: r.top, fall: r.fall / MIL, drift: 0, dXt: 0, dXw: 0, dZw: 0, vEnd: r.vEnd });
+    const s = flatAngle(ammo, env, D);
+    if (!s) break;
+    const m = s.a / MIL;
+    // высота траектории при настильной стрельбе ≈ g·t²/8
+    rows.push({ D, sight: m, dXmil: 0, t: s.t, top: 9.81 * s.t * s.t / 8, fall: 0, drift: 0, dXt: 0, dXw: 0, dZw: 0, vEnd: s.v });
   }
   const T = { charge: { ...SPECIAL_CHARGE, v0: ammo.v0 }, ci: -1, shell, rows, maxRange: maxD, maxSight: rows[rows.length - 1].sight, ammo, direct: true };
   tables.set(shell, T);

@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node tools/pack-assets.mjs && esbuild src/main.js --bundle --minify --format=iife --target=es2020 --outfile=dist/game.js",
-    "dev": "esbuild src/main.js --bundle --format=iife --target=es2020 --sourcemap --outfile=dist/game.js --servedir=. --watch",
+    "build": "node tools/pack-assets.mjs && esbuild src/workers/tables.worker.js --bundle --minify --format=iife --target=es2020 --outfile=dist/tables.worker.txt && esbuild src/main.js --bundle --minify --format=iife --target=es2020 --loader:.txt=text --outfile=dist/game.js",
+    "dev": "esbuild src/workers/tables.worker.js --bundle --minify --format=iife --target=es2020 --outfile=dist/tables.worker.txt && esbuild src/main.js --bundle --format=iife --target=es2020 --loader:.txt=text --sourcemap --outfile=dist/game.js --servedir=. --watch",
     "serve": "python3 -m http.server 8080",
     "single": "npm run build && node tools/single.mjs",
     "server": "node server/server.mjs"

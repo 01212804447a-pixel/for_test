@@ -38,6 +38,11 @@ WEAPONS.mortar82 = {
 };
 
 const tables = new Map();
+export function primeMortarTable(ci, T) {
+  if (tables.has(ci)) return;
+  tables.set(ci, { ...T, ammo: prepareAmmo({ ...AMMO['o832_' + CHARGES82[ci].id] }) });
+}
+
 export function mortarTable(ci) {
   if (tables.has(ci)) return tables.get(ci);
   const ch = CHARGES82[ci];

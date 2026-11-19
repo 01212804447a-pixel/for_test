@@ -26,15 +26,22 @@ for (const c of CHARGES) {
     explosive: { pen: 60, radius: 12, frag: 48, dmg: 420, fxSize: 3.4 },
   });
 }
+// Дымовой снаряд Д-462: та же баллистика (таблица общая), разрыв — дымовая завеса ≈ 1,5 мин
+for (const c of CHARGES) {
+  AMMO['d462_' + c.id] = prepareAmmo({
+    ...AMMO['of462_' + c.id], id: 'd462_' + c.id, name: `Д-462 (дымовой), заряд ${c.name}`, short: 'Д-462',
+    explosive: { pen: 0, radius: 2, frag: 0, dmg: 20, fxSize: 1.2, smoke: { dur: 90, size: 2.2 } },
+  });
+}
 WEAPONS.d30 = {
   id: 'd30', name: 'Д-30 (2А18)', cls: '122-мм гаубица', ammo: 'of462_full', mag: 1, mags: 40,
-  rpm: 7, modes: ['single'], disp: 0.12, sound: 'gun122',
+  rpm: 7, modes: ['single'], disp: 0.12, sound: 'gun122', artillery: true,
 };
 
 export const NORMAL_ENV = makeEnv({ tempC: 15, pressureHPa: 1000, coriolis: false });
 
 // Полёт по плоскости стрельбы: X — дальность, Y — высота, Z — вправо (деривация, боковой ветер)
-function fly(ammo, env, angle, { dt = 1 / 120, windX = 0, windZ = 0, until = 0 } = {}) {
+export function fly(ammo, env, angle, { dt = 1 / 120, windX = 0, windZ = 0, until = 0 } = {}) {
   const e = { ...env, Oy: 0, Oz: 0, wind: { x: windX, y: 0, z: windZ } };
   const s = { p: { x: 0, y: 0, z: 0 }, v: { x: ammo.v0 * Math.cos(angle), y: ammo.v0 * Math.sin(angle), z: 0 }, t: 0, rx: 0, rz: 1 };
   let px = 0, py = 0, pz = 0, pt = 0, top = 0;

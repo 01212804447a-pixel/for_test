@@ -53,6 +53,11 @@ export const AMMO = {
     mass: 0.0596, caliber: 0.0145, v0: 1005, spin: { sg: 1.7, dir: 1 }, pen: 8, dmgK: 1.0,
     explosive: { pen: 8, radius: 1.6, frag: 4, dmg: 170, fxSize: 0.6 },
   },
+  // 14,5×114 БЗТ (бронебойно-зажигательно-трассирующий) — в ленте КПВ каждый четвёртый
+  'kpv_bzt': {
+    id: 'kpv_bzt', name: '14,5×114 БЗТ (трассирующий)', short: 'БЗТ', cls: 'tracer', kind: 'bullet', model: 'G7', bc: 0.43,
+    mass: 0.0596, caliber: 0.0145, v0: 1000, spin: { sg: 1.8, dir: 1 }, pen: 32, dmgK: 1.0, tracer: true, tracerColor: [1, 0.3, 0.12],
+  },
   'pg7vm': {
     id: 'pg7vm', name: 'ПГ-7ВМ (кумулятивная)', kind: 'rocket', model: 'const', cd: 0.24,
     mass: 2.0, caliber: 0.07, v0: 140,
@@ -190,9 +195,17 @@ export const WEAPONS = {
   },
 };
 
+// КПВ на колёсном станке Харыкина (ПКП): лента 40 патронов, 600 выстр./мин
+WEAPONS.kpv = {
+  id: 'kpv', name: 'КПВ (ПКП) на станке', cls: '14,5-мм крупнокалиберный пулемёт', ammo: 'ptrd_b32', mag: 40, mags: 8,
+  rpm: 600, modes: ['auto'], disp: 0.32, sound: 'ptrd', reload: 6,
+};
+
 export const HAND_GRENADES = {
   f1: { id: 'f1', name: 'Ф-1', ammo: 'f1', fuse: [3.2, 4.2] },
   rgd5: { id: 'rgd5', name: 'РГД-5', ammo: 'rgd5', fuse: [3.2, 4.2] },
+  // ручная дымовая граната: терочный запал, через 1,5–2 с — плотный белый дым ≈ 60–100 с
+  rdg2: { id: 'rdg2', name: 'РДГ-2', ammo: null, fuse: [1.5, 2.1], smoke: { dur: 75, size: 1 } },
 };
 
 export const PRIMARY_CHOICES = ['ak74m', 'ak74m_gp', 'ak74m_1p78', 'akm', 'svd', 'pkm'];

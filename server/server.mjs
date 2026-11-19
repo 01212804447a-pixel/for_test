@@ -89,6 +89,9 @@ function cleanKit(k) {
     squad: Array.isArray(k.squad) ? k.squad.filter((x) => KIT_ROLES.includes(x)).slice(0, 6) : [],
     howitzer: !!k.howitzer,
     tow: KIT_TOW.includes(k.tow) ? k.tow : 'tigr',
+    smokes: Math.max(0, Math.min(4, Math.round(+(k.smokes ?? 2) || 0))),
+    mortar: !!k.mortar,
+    kpv: !!k.kpv,
   };
 }
 

@@ -33,7 +33,7 @@ export function defaultKit(save = {}, room = {}) {
   return {
     weapon: PVP_WEAPONS.includes(save.primary) ? save.primary : 'ak74m',
     heavy: save.launcher === true ? 'rpg7' : save.launcher || null,
-    grenades: 3, squad: sq, howitzer: false, tow: 'tigr',
+    grenades: 3, smokes: 2, squad: sq, howitzer: false, tow: 'tigr', mortar: false, kpv: false,
   };
 }
 export function kitOf(pl, room) {

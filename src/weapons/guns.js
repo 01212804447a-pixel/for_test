@@ -654,6 +654,22 @@ function grenadeF1(P) {
   P.add('steelBright', torus(0.011, 0.0013, { x: -0.022, y: 0.047, z: -0.002, axis: 'z' }));
 }
 
+// ручная дымовая граната РДГ-2: картонный корпус цвета хаки, тёрочный запал с колпачком
+function smokeRDG2(P) {
+  P.add('olive', lathe([[0.0, -0.085], [0.0225, -0.085], [0.0228, -0.08], [0.0228, 0.08], [0.0225, 0.085], [0.0, 0.085]], { seg: 24 }).rotateX(Math.PI / 2));
+  P.add('paintWhite', lathe([[0.0228, -0.02], [0.0231, -0.02], [0.0231, 0.02], [0.0228, 0.02]], { seg: 24 }).rotateX(Math.PI / 2));
+  P.add('steelDark', cylY(0.0235, 0.084, 0.092, { seg: 24 }));
+  P.add('black', cylY(0.016, 0.092, 0.11, { seg: 20 }));
+  P.add('rubber', torus(0.0165, 0.0015, { y: 0.103, axis: 'y', seg: 20 }));
+}
+export function smokeGrenadeModel() {
+  const P = new Parts();
+  smokeRDG2(P);
+  const g = P.build(gunMats());
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
 // Граната Ф-1 для мира (брошенная): та же модель, что в руках
 export function grenadeModel() {
   const P = new Parts();
@@ -680,6 +696,7 @@ export const GUN_INFO = {
   gp25: { R: 0.06, h: 0.1, muzzle: [0.055, -0.1, -0.3], hip: [0.12, -0.1, -0.32], ads: [0, 0, -0.26], quadrant: true },
   b8: { R: 0.1, h: 0, muzzle: [0, 0, -0.3], hip: [0.0, -0.22, -0.3], ads: [0, 0, -0.06] },
   grenade: { R: 0.1, h: 0, muzzle: [0, 0, -0.3], hip: [0.17, -0.2, -0.35], ads: [0.17, -0.2, -0.35] },
+  rdg2: { R: 0.1, h: 0, muzzle: [0, 0, -0.3], hip: [0.17, -0.2, -0.35], ads: [0.17, -0.2, -0.35] },
 };
 
 // Модель в системе «прорезь целика» (y = 0 — линия прицеливания)
@@ -713,6 +730,7 @@ function assemble(kind, P) {
     else rpgIron(B, { sx: -t[0], sy: -t[1], dz: 0.06 });
   } else if (kind === 'b8') binocular(B);
   else if (kind === 'grenade') grenadeF1(B);
+  else if (kind === 'rdg2') smokeRDG2(B);
   return B;
 }
 
@@ -729,7 +747,7 @@ function offsetFor(kind) {
   const I = GUN_INFO[kind];
   if (kind === 'rpg7') return [I.muzzle[0], I.muzzle[1], 0];
   if (kind === 'rpg7iron') return [I.muzzle[0], I.muzzle[1], -0.06];
-  if (kind === 'b8' || kind === 'grenade') return [0, 0, 0];
+  if (kind === 'b8' || kind === 'grenade' || kind === 'rdg2') return [0, 0, 0];
   return [0, -I.h, 0];
 }
 

@@ -16,6 +16,7 @@ export function fpArmsAvailable() { return charAvailable('negs'); }
 const SPECIAL = {
   b8: { R: [0.07, -0.03, -0.06], L: [-0.07, -0.03, -0.06], qR: [0.3, -0.2, -1.35], qL: [0.3, 0.2, 1.35] },
   grenade: { R: [0, -0.005, 0.02], L: [-0.25, -0.45, 0.2], qR: [-0.3, 0.2, 0.0], qL: [0, 0, 0] },
+  rdg2: { R: [0, -0.01, 0.0], L: [-0.25, -0.45, 0.2], qR: [-0.3, 0.2, 0.0], qL: [0, 0, 0] },
 };
 
 export class FPArms {
@@ -99,7 +100,7 @@ export class FPArms {
       } else if (kRet > 0) { p.lerp(tL, kRet); q.slerp(qL, kRet); }
       tL = p; qL = q;
     }
-    if (G.special && st.kind === 'grenade') wL = 0.0;
+    if (G.special && (st.kind === 'grenade' || st.kind === 'rdg2')) wL = 0.0;
     this._arm('Right', tR, qR, 1);
     this._arm('Left', tL, qL, 1, wL < 0.5);
   }

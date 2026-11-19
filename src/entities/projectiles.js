@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { Parts } from '../weapons/gunkit.js';
 import { shellGeometry } from '../artillery/d30model.js';
-import { grenadeModel } from '../weapons/guns.js';
+import { grenadeModel, smokeGrenadeModel } from '../weapons/guns.js';
 import { stepProjectile, SIM_DT } from '../physics/ballistics.js';
 import { AMMO, HAND_GRENADES } from '../data/weapons.js';
 import { randn, rand, clamp } from '../core/math.js';
@@ -416,6 +416,14 @@ export class Projectiles {
   // хосту (только техника и объекты). Клиент кооператива отправляет хосту урон технике/объектам.
   explode(pos, ex, owner, directVehicle = null, directDestructible = null, opts = {}) {
     const g = this.game;
+    if (ex.smoke) {
+      // дымовой снаряд/мина: хлопок вышибного заряда и облако, сносимое ветром
+      if (opts.net) return;
+      g.fx.explosion(pos, ex.fxSize || 0.8, true);
+      g.audio.explosion(pos, 0.5);
+      if (g.smokeScreens) g.smokeScreens.add(new THREE.Vector3(pos.x, g.world.terrain.heightAt(pos.x, pos.z) + 0.3, pos.z), { dur: ex.smoke.dur, size: ex.smoke.size, burst: true });
+      return;
+    }
     const visual = opts.visual || g.netVisual;
     const fx = opts.fx !== false, doSoldiers = opts.soldiers !== false && !visual, doProps = opts.props !== false;
     let doWorld = opts.world !== false && !visual;
@@ -482,10 +490,11 @@ export class Projectiles {
   throwGrenade(owner, pos, vel, type = 'f1', { visual = false, fuse = null } = {}) {
     const def = HAND_GRENADES[type];
     if (!this._f1Proto) { try { this._f1Proto = grenadeModel(); } catch (e) { this._f1Proto = new THREE.Mesh(this.grenadeGeo, this.grenadeMat); } }
-    const mesh = this._f1Proto.clone();
+    if (def.smoke && !this._rdgProto) { try { this._rdgProto = smokeGrenadeModel(); } catch (e) { this._rdgProto = this._f1Proto; } }
+    const mesh = (def.smoke ? this._rdgProto : this._f1Proto).clone();
     mesh.position.copy(pos);
     this.game.scene.add(mesh);
-    const gr = { owner, pos: pos.clone(), vel: vel.clone(), fuse: fuse ?? rand(def.fuse[0], def.fuse[1]), mesh, ammo: AMMO[def.ammo], visual, rest: false, warned: false, spin: new THREE.Vector3(rand(-10, 10), rand(-10, 10), rand(-10, 10)) };
+    const gr = { owner, type, smoke: def.smoke || null, pos: pos.clone(), vel: vel.clone(), fuse: fuse ?? rand(def.fuse[0], def.fuse[1]), mesh, ammo: def.ammo ? AMMO[def.ammo] : null, visual, rest: false, warned: false, spin: new THREE.Vector3(rand(-10, 10), rand(-10, 10), rand(-10, 10)) };
     this.grenades.push(gr);
     this.game.audio.pin();
     return gr;
@@ -517,6 +526,15 @@ export class Projectiles {
         gr.mesh.rotation.x += gr.spin.x * dt; gr.mesh.rotation.y += gr.spin.y * dt;
       }
       gr.mesh.position.copy(gr.pos);
+      // дымовая: после запала шипит и дымит, дым идёт от гранаты (катится — тянет шлейф)
+      if (gr.smoke) {
+        if (gr.fuse <= 0 && !gr.screen && g.smokeScreens) {
+          gr.screen = g.smokeScreens.add(gr.pos, { dur: gr.smoke.dur, size: gr.smoke.size });
+          if (g.audio.hiss) g.audio.hiss(gr.pos); else g.audio.impact(gr.pos, 'snow');
+        }
+        if (gr.screen) { gr.screen.p.copy(gr.pos); if (gr.screen.t >= gr.screen.dur) { g.scene.remove(gr.mesh); gr.done = true; } }
+        continue;
+      }
       // предупреждение
       if (!gr.warned && gr.fuse < 2.5 && gr.owner && gr.owner.team === 'denter') {
         const pd = g.player.body.pos.distanceTo(gr.pos);

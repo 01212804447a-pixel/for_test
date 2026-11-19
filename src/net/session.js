@@ -332,7 +332,7 @@ export class NetSession {
     const w = WEAPONS[e[2]];
     if (!w) return;
     const pos = new THREE.Vector3(e[4], e[5], e[6]), vel = new THREE.Vector3(e[7], e[8], e[9]);
-    if (e[2] === 'd30') {
+    if (w.artillery) {
       const gun = m.guns[e[10]];
       const p = m.projectiles.spawn({ weapon: w, pos, dir: vel.clone().normalize(), owner: owner || m.player.body, team: owner ? owner.team : 'negs', ammoId: e[3] || undefined, visual: true, vel });
       if (gun) gun.remoteFire(p);

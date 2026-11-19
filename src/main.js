@@ -155,7 +155,7 @@ class App {
     setTimeout(() => {
       try {
         const squad = def.noSquad ? [] : this.save.squad.filter((x) => !(this.save.hospital[x] > 0));
-        const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer });
+        const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv });
         this.hud.reset();
         m.build();
         this.mission = m;
@@ -211,7 +211,7 @@ class App {
         const kit = kitOf(me, room);
         const primary = WEAPONS[kit.weapon] ? kit.weapon : 'ak74m';
         const n = room.players.length;
-        const m = new Mission(this, def, { squad: [], primary, launcher: kit.heavy || null, grenades: kit.grenades, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: false, net: session });
+        const m = new Mission(this, def, { squad: [], primary, launcher: kit.heavy || null, grenades: kit.grenades, smokes: kit.smokes ?? 2, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: false, net: session });
         this.hud.reset();
         m.build();
         this.mission = m;

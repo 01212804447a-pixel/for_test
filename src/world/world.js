@@ -333,6 +333,7 @@ export class World {
   }
 
   los(a, b, ignoreVehicle = null, ignore2 = null) {
+    if (this.smoke && this.smoke.blocks(a, b)) return false; // плотный дым
     return !this.raycast(a, b, { mask: 'sight', vehicles: true, ignore: ignoreVehicle, ignore2 });
   }
 

@@ -504,7 +504,7 @@ export class UI {
     const summary = (p) => {
       const k = kitOf(p, r);
       const w = (WEAPONS[k.weapon] || {}).name || '';
-      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}`;
+      return `${escH(w)}${k.heavy ? ' + ' + WEAPONS[k.heavy].name : ''} · отделение ${k.squad.length}${k.howitzer ? ` · Д-30 (${VEHICLE_TYPES[k.tow] ? VEHICLE_TYPES[k.tow].name.replace(/ГАЗ-233014 /, '') : k.tow})` : ''}${k.mortar ? ' · миномёт' : ''}${k.kpv ? ' · КПВ' : ''}`;
     };
     this.show(`<h1>${escH(r.name)}</h1><div class="opc">${pvp ? `Противостояние · ${escH(title)} · до ${r.scoreLimit} побед или ${r.timeLimit} мин` : `Кооператив · ${escH(title)}`}</div>
       <div id="nerr" class="bad"></div>
@@ -515,9 +515,12 @@ export class UI {
         <label>Оружие ${sel('kw', PVP_WEAPONS.map((w) => [w, WEAPONS[w].name]), kit.weapon)}</label>
         <label>Тяжёлое оружие ${sel('kh', [['', 'нет'], ['rpg7', WEAPONS.rpg7.name], ['ptrd', WEAPONS.ptrd.name + ' (тяжёлое, медленнее ходьба)']], kit.heavy || '')}</label>
         <label>Гранаты Ф-1 ${sel('kg', [0, 1, 2, 3, 4].map((n) => [n, n]), kit.grenades)}</label>
+        <label>Дымовые РДГ-2 ${sel('ksm', [0, 1, 2, 3, 4].map((n) => [n, n]), kit.smokes ?? 2)}</label>
         <label>Патроны <button class="btn sec" id="kl">Снаряжение магазинов…</button></label>
         <label>Отделение ИИ <span class="sq">${[0, 1, 2, 3, 4, 5].map((i) => sel('ks' + i, roleOpts, kit.squad[i] || '')).join('')}</span></label>
         <label><input type="checkbox" id="kd" ${kit.howitzer ? 'checked' : ''} ${lobby ? '' : 'disabled'}> Д-30 с расчётом на прицепе — тягач ${sel('kt', TOW_CHOICES.map((t) => [t, VEHICLE_TYPES[t].name]), kit.tow)}</label>
+        <label><input type="checkbox" id="kmo" ${kit.mortar ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 82-мм миномёт 2Б14 с расчётом</label>
+        <label><input type="checkbox" id="kkp" ${kit.kpv ? 'checked' : ''} ${lobby ? '' : 'disabled'}> 14,5-мм КПВ на станке</label>
       </div>
       ${owner ? `<div class="netform"><label>Карта <select id="ms">${(pvp ? PVP_MAPS : MISSIONS).map((m) => `<option value="${m.id}" ${m.id === r.mission ? 'selected' : ''}>${m.title}</option>`).join('')}</select></label></div>` : ''}
       <p class="note">${pvp ? 'Каждый выбирает своё: оружие, РПГ или ПТРД, гранаты, состав отделения ИИ, нужна ли ему Д-30 и на каком тягаче.' : `На старте у всех — «Тигр»${r.players.length > 2 ? ' и «Нива»' : ''}; Д-30 — у тех, кто её взял. Хост (создатель комнаты) считает противника и задачи.`}</p>
@@ -539,8 +542,11 @@ export class UI {
     on('#kw', (e) => { kit.weapon = e.value; });
     on('#kh', (e) => { kit.heavy = e.value || null; });
     on('#kg', (e) => { kit.grenades = +e.value; });
+    on('#ksm', (e) => { kit.smokes = +e.value; });
     for (let i = 0; i < 6; i++) on('#ks' + i, () => { kit.squad = [0, 1, 2, 3, 4, 5].map((k) => this.panel.querySelector('#ks' + k).value).filter(Boolean); });
     on('#kd', (e) => { kit.howitzer = e.checked; });
+    on('#kmo', (e) => { kit.mortar = e.checked; });
+    on('#kkp', (e) => { kit.kpv = e.checked; });
     on('#kt', (e) => { kit.tow = e.value; });
     this.bind('#kl', () => { this._netClear(); this.magLoader(LOADABLE.includes(kit.weapon) ? kit.weapon : null, () => this.netRoom()); });
     if (lobby) sendKit();
@@ -627,7 +633,13 @@ export class UI {
           <div class="cn">Скорость до ${(v.maxSpeed * 3.6).toFixed(0)} км/ч · мест ${v.seats} · броня ${v.armor.front}/${v.armor.side} мм${v.gun ? ' · ' + WEAPONS[v.gun].name : ''}</div><div class="cb">${v.desc}</div></div>`).join('')}
           <div class="card ${s.howitzer ? 'on' : ''}" id="d30"><div class="ct">122-мм гаубица Д-30</div><div class="cr">Буксируемое орудие</div>
           <div class="cn">Масса 3,2 т · дальность до 15,2 км · ${s.vehicles.length ? 'на прицепе у ' + VEHICLE_TYPES[s.vehicles[0]].name : 'нужен тягач — выберите машину'}</div>
-          <div class="cb">Выезжает в походном положении на прицепе у первой машины. На огневой позиции: отцепить (E у проушины), привести в боевое положение (E справа у колеса, ≈16 с), затем E слева — место наводчика.</div></div></div>
+          <div class="cb">Выезжает в походном положении на прицепе у первой машины. На огневой позиции: отцепить (E у проушины), привести в боевое положение (E справа у колеса, ≈16 с), затем E слева — место наводчика.</div></div>
+          <div class="card ${s.mortar ? 'on' : ''}" id="mor"><div class="ct">82-мм миномёт 2Б14-1 «Поднос»</div><div class="cr">Переносной, с расчётом из двух номеров</div>
+          <div class="cn">Масса 42 кг · дальность 85 м – 4 км · 40 осколочных и 10 дымовых мин</div>
+          <div class="cb">Едет в кузове ${s.vehicles.length ? VEHICLE_TYPES[s.vehicles[0]].name : '(без машины — стоит у места выдвижения)'}. E у кормы — выгрузить и нести, E — поставить. Наводчик — слева у прицела МПМ-44М (E), R — заряжать, Пробел — мину в ствол.</div></div>
+          <div class="card ${s.kpv ? 'on' : ''}" id="kpv"><div class="ct">14,5-мм КПВ на станке</div><div class="cr">Пулемёт на колёсном станке со щитом</div>
+          <div class="cn">600 выстр./мин · Б-32 пробивает «Тигр» и кирпич · 8 лент по 40 патронов</div>
+          <div class="cb">Едет в кузове «Тигра» или МТ-ЛБ (в «Ниву» не входит). E у кормы — выгрузить и катить, E — поставить где нужно, E у пулемёта — лечь за него.</div></div></div>
         <div class="row"><button class="btn" id="b">Готово</button></div>`, { wide: true });
       this.bind('.card[data-id]', (e) => {
         const id = e.dataset.id;
@@ -636,6 +648,8 @@ export class UI {
         this.app.persist(); render();
       });
       this.bind('#d30', () => { s.howitzer = !s.howitzer; this.app.persist(); render(); });
+      this.bind('#mor', () => { s.mortar = !s.mortar; this.app.persist(); render(); });
+      this.bind('#kpv', () => { s.kpv = !s.kpv; this.app.persist(); render(); });
       this.bind('#b', () => this.close());
     };
     render();

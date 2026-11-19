@@ -12,7 +12,7 @@ import { WEAPONS } from '../data/weapons.js';
 import { charAvailable } from '../entities/charRig.js';
 import { CrewSoldier, crewItems as crewItemsLazy } from './crew.js';
 import { Parts } from '../weapons/gunkit.js';
-import { GunUI } from './gunUI.js';
+import { GunUI, D30_SPEC } from './gunUI.js';
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const EL_MIN = -117, EL_MAX = 1167; // −7° … +70°
@@ -47,6 +47,7 @@ export class Howitzer {
     this.level = 3000;      // уровень (тыс.)
     this.ci = 5;            // заряд (индекс в CHARGES), по умолчанию — четвёртый
     this.fuze = 'О';        // взрыватель РГМ-2: «О» — осколочное, «Ф» — фугасное
+    this.shellType = 'of';  // снаряд: «of» — ОФ-462, «d» — Д-462 дымовой (Z)
     this.loaded = null; this.load = null; this.recoilT = 9; this.breech = 1; this.shots = 0;
     this.shells = BOX_N; this.charges = BOX_N;
     this.view = 'pano';
@@ -115,6 +116,7 @@ export class Howitzer {
   }
 
   get ready() { return this.tr === 0 && this.trTarget === 0 && !this.towBy; }
+  get spec() { return D30_SPEC; }
 
   // Препятствия орудия: щит (впереди наводчика, тонкая броня) и верхний станок с люлькой.
   // Наводчик слева-сзади и расчёт стоят СНАРУЖИ — их можно поразить сбоку, сзади и сверху.
@@ -225,7 +227,7 @@ export class Howitzer {
     else if (op === 'c') { if (this.towBy) this.unhitch(true); this.startDeploy(true, e[3]); }
     else if (op === 'h') { const v = this.m.vehicles[e[3]]; if (v && !this.towBy) { if (this.tr !== 1) { this.tr = this.trTarget = 1; this._dropCollider(); } this.hitch(v, false, true); } }
     else if (op === 'u') this.unhitch(true, [e[3], e[4], e[5]]);
-    else if (op === 'l') this.orderLoad(true, e[3], e[4] ? 'Ф' : 'О');
+    else if (op === 'l') this.orderLoad(true, e[3], e[4] ? 'Ф' : 'О', e[5] ? 'd' : 'of');
     else if (op === 'k') this.manualPick(null, true, e[3]);
     else if (op === 'n') this.manualInsert(null, true, e[3], e[4], e[5] ? 'Ф' : 'О');
   }
@@ -465,7 +467,7 @@ export class Howitzer {
   manualInsert(p, fromNet = false, item = null, ci = null, fuze = null) {
     const it = item || (p.carry && p.carry.item);
     if (!it) return;
-    if (!this.load) this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shellIn: false, chargeIn: false, closeT: 0 };
+    if (!this.load) this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shell: this.shellType, shellIn: false, chargeIn: false, closeT: 0 };
     this.load[it + 'In'] = true;
     this.m.audio.mech(it === 'shell' ? 'reload' : 'switch');
     if (fromNet) return;
@@ -475,19 +477,19 @@ export class Howitzer {
   }
 
   // команда «Заряжай!» (наводчик, R)
-  orderLoad(fromNet = false, ci = null, fuze = null) {
+  orderLoad(fromNet = false, ci = null, fuze = null, shell = null) {
     const m = this.m;
     const say = (t, d = 1.5) => { if (!fromNet) m.hud.message(t, d); };
     if (this.loaded) return say('Орудие заряжено');
     if (this.load) return say('Уже заряжают');
     if (this.recoilT < 1.4) return say('Ствол накатывается…', 1.2);
     if (!this.box.alive || this.shells <= 0 || this.charges <= 0) return say('Боеприпасы кончились', 2.5);
-    this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shellIn: false, chargeIn: false, closeT: 0 };
+    this.load = { ci: ci ?? this.ci, fuze: fuze ?? this.fuze, shell: shell ?? this.shellType, shellIn: false, chargeIn: false, closeT: 0 };
     if (!fromNet) {
       if (!this.crewAlive()) m.hud.message(`Расчёт выбыл: снаряд и заряд носите сами — ящик в ${BOX_DIST} м за орудием (E), затем к казённику справа (E)`, 5);
-      else m.hud.radio('Командир орудия', `Заряжай! Осколочно-фугасным, заряд ${CHARGES[this.load.ci].name}, взрыватель ${this.load.fuze === 'О' ? 'осколочный' : 'фугасный'}`);
+      else m.hud.radio('Командир орудия', this.load.shell === 'd' ? `Заряжай! Дымовым, заряд ${CHARGES[this.load.ci].name}` : `Заряжай! Осколочно-фугасным, заряд ${CHARGES[this.load.ci].name}, взрыватель ${this.load.fuze === 'О' ? 'осколочный' : 'фугасный'}`);
       m.audio.mech('reload');
-      this._net(['l', this.load.ci, this.load.fuze === 'О' ? 0 : 1]);
+      this._net(['l', this.load.ci, this.load.fuze === 'О' ? 0 : 1, this.load.shell === 'd' ? 1 : 0]);
     }
   }
 
@@ -521,7 +523,7 @@ export class Howitzer {
       L.closeT += dt;
       this.breech = Math.max(0, 1 - L.closeT / 0.6);
       if (L.closeT >= 0.6) {
-        this.loaded = { ci: L.ci, fuze: L.fuze }; this.load = null; this.breech = 0;
+        this.loaded = { ci: L.ci, fuze: L.fuze, shell: L.shell || 'of' }; this.load = null; this.breech = 0;
         if (this.m.player.gun === this) this.m.hud.radio(this.crewAlive() ? 'Замковый' : this.name, 'Готово!');
         this.m.audio.mech('switch');
       }
@@ -620,6 +622,10 @@ export class Howitzer {
       if (this.loaded || this.load) m.hud.message('Орудие уже заряжают — заряд сменить нельзя', 2);
       else { this.ci = i; m.hud.message(`Заряд ${CHARGES[i].name}`, 1.5); m.audio.click(); }
     }
+    if (inp.hit('KeyZ')) {
+      if (this.loaded || this.load) m.hud.message('Снаряд выбирается до заряжания', 2);
+      else { this.shellType = this.shellType === 'd' ? 'of' : 'd'; m.hud.message(this.shellType === 'd' ? 'Снаряд Д-462 — дымовой (завеса ≈ 1,5 мин)' : 'Снаряд ОФ-462 — осколочно-фугасный', 2); m.audio.click(); }
+    }
     if (inp.hit('KeyX')) {
       if (this.loaded || this.load) m.hud.message('Взрыватель устанавливается до заряжания', 2);
       else { this.fuze = this.fuze === 'О' ? 'Ф' : 'О'; m.hud.message(this.fuze === 'О' ? 'Взрыватель РГМ-2: осколочное действие' : 'Взрыватель РГМ-2: фугасное действие (замедление)', 2); m.audio.click(); }
@@ -674,12 +680,13 @@ export class Howitzer {
     const L = this.loaded;
     this.loaded = null;
     const pos = this.muzzleWorld(), dir = this.boreDir();
-    const p = m.projectiles.spawn({ weapon: WEAPONS.d30, pos, dir, owner: m.player.body, team: m.player.body.team, ammoId: 'of462_' + CHARGES[L.ci].id });
+    const ammoId = (L.shell === 'd' ? 'd462_' : 'of462_') + CHARGES[L.ci].id;
+    const p = m.projectiles.spawn({ weapon: WEAPONS.d30, pos, dir, owner: m.player.body, team: m.player.body.team, ammoId });
     p.fuze = L.fuze; p.gun = this; p.shotNo = ++this.shots; p.charge = L.ci;
     // фугасное действие (замедление): снаряд углубляется — меньше осколков, сильнее по укрытиям
-    if (L.fuze === 'Ф') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
+    if (L.fuze === 'Ф' && L.shell !== 'd') p.ammo = { ...p.ammo, explosive: { ...p.ammo.explosive, pen: 140, radius: 9, frag: 20, dmg: 520 } };
     p.onLand = (pp) => this.report(pp);
-    if (m.net) m.net.onLocalShot({ weapon: WEAPONS.d30, owner: m.player.body, ammoId: 'of462_' + CHARGES[L.ci].id, gun: this }, p);
+    if (m.net) m.net.onLocalShot({ weapon: WEAPONS.d30, owner: m.player.body, ammoId, gun: this }, p);
     this.recoilT = 0;
     // дульное пламя, ударная волна, пыль и снег с грунта
     m.fx.muzzleBlast(pos, dir);

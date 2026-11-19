@@ -33,7 +33,22 @@ export function crewItems() {
   charge.add(new THREE.Mesh(cg, brass));
   const lid = new THREE.CylinderGeometry(0.06, 0.06, 0.02, 18); lid.rotateX(Math.PI / 2); lid.translate(0, 0, -0.22);
   charge.add(new THREE.Mesh(lid, new THREE.MeshStandardMaterial({ color: 0x3a3a30, roughness: 0.8 })));
-  ITEMS = { shell, charge };
+  // 82-мм мина О-832ДУ: корпус каплевидный, взрыватель М-12, хвостовик с перьями (ось — Z, нос к −Z)
+  const mine = new THREE.Group();
+  const olive = new THREE.MeshStandardMaterial({ color: 0x4a5636, roughness: 0.55, metalness: 0.3 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x5a5d61, metalness: 0.85, roughness: 0.4 });
+  const bodyP = [[0.0, -0.17], [0.008, -0.168], [0.016, -0.155], [0.03, -0.12], [0.039, -0.07], [0.041, -0.03], [0.04, 0.0], [0.034, 0.04], [0.02, 0.07], [0.012, 0.08], [0.0, 0.08]];
+  const bg = new THREE.LatheGeometry(bodyP.map(([r, z]) => new THREE.Vector2(Math.max(r, 1e-4), z)), 18); bg.rotateX(Math.PI / 2);
+  mine.add(new THREE.Mesh(bg, olive));
+  const fz = new THREE.CylinderGeometry(0.004, 0.014, 0.035, 12); fz.rotateX(-Math.PI / 2); fz.translate(0, 0, -0.185);
+  mine.add(new THREE.Mesh(fz, steel));
+  const tail = new THREE.CylinderGeometry(0.011, 0.011, 0.1, 10); tail.rotateX(Math.PI / 2); tail.translate(0, 0, 0.12);
+  mine.add(new THREE.Mesh(tail, steel));
+  for (let i = 0; i < 6; i++) { const f = new THREE.BoxGeometry(0.002, 0.04, 0.06); f.translate(0, 0.028, 0.14); f.rotateZ((i / 6) * Math.PI * 2); mine.add(new THREE.Mesh(f, steel)); }
+  // дополнительные заряды — пучки между перьями
+  const ring = new THREE.TorusGeometry(0.016, 0.006, 6, 14); ring.translate(0, 0, 0.1);
+  mine.add(new THREE.Mesh(ring, new THREE.MeshStandardMaterial({ color: 0xc8b88a, roughness: 0.8 })));
+  ITEMS = { shell, charge, mine };
   return ITEMS;
 }
 
@@ -52,7 +67,7 @@ export class CrewMan {
     this.ikW = 0; this.tick = 0; this.dying = false;
     // предметы в руках
     const I = crewItems();
-    this.items = { shell: I.shell.clone(), charge: I.charge.clone() };
+    this.items = { shell: I.shell.clone(), charge: I.charge.clone(), mine: I.mine.clone() };
     for (const o of Object.values(this.items)) { o.visible = false; o.traverse((q) => { if (q.isMesh) q.castShadow = true; }); m.scene.add(o); }
   }
 
@@ -109,7 +124,7 @@ export class CrewMan {
     if (it) {
       this._placeItem(it, tg);
       const ax = _b.copy(Z).applyQuaternion(it.quaternion);
-      const len = tg.item === 'shell' ? 0.2 : 0.17;
+      const len = tg.item === 'shell' ? 0.2 : tg.item === 'mine' ? 0.09 : 0.17;
       hands = [it.position.clone().addScaledVector(ax, len).add(_a.set(0, -0.05, 0)), it.position.clone().addScaledVector(ax, -len).add(_a.set(0, -0.05, 0))];
       // левая рука — ближе к левому боку
       const right = _c.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));

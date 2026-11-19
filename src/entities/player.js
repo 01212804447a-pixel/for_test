@@ -46,7 +46,8 @@ export class Player {
     this.slots.push(heavy && WEAPONS[heavy] ? makeState(heavy, loads) : null);
     const ng = loadout.grenades ?? 3;
     this.body.grenades = ng;
-    this.slots.push({ id: 'grenade', grenade: true, count: ng });
+    // слот гранат: осколочные Ф-1 и дымовые РДГ-2; повторное нажатие 3 (или X) — сменить тип
+    this.slots.push({ id: 'grenade', grenade: true, count: ng, smoke: loadout.smokes ?? 2, type: ng > 0 || !(loadout.smokes ?? 2) ? 'f1' : 'rdg2' });
     this.slots.push({ id: 'b8', binocular: true });
     this.cur = 0;
     this.aim = false; this.aimT = 0;
@@ -103,7 +104,7 @@ export class Player {
     if (this.vehicle && this.seat === 1 && this.vehicle.type.gunExposed) return 'pkm';
     const s = this.state;
     if (!s) return 'ak74';
-    if (s.grenade) return 'grenade';
+    if (s.grenade) return s.type === 'rdg2' ? 'rdg2' : 'grenade';
     if (s.binocular) return 'b8';
     if (this.uglMode && s.ugl) return 'gp25';
     if (s.id === 'rpg7') return s.optic ? 'rpg7' : 'rpg7iron';
@@ -222,7 +223,7 @@ export class Player {
     const hv = this.slots[1] && this.slots[1].def.heavy;
     if (hv) { speed *= this.cur === 1 ? 0.7 : 0.86; if (wantSprint) this.stamina = Math.max(0, this.stamina - dt * 0.07); }
     // снаряд 22 кг или гильза с зарядом в руках: только шагом
-    if (this.carry) { speed = Math.min(speed, this.carry.item === 'shell' ? 1.9 : 2.2); if (b.stance === 'prone') b.stance = 'crouch'; }
+    if (this.carry) { speed = Math.min(speed, this.carry.speed || (this.carry.item === 'shell' ? 1.9 : 2.2)); if (b.stance === 'prone') b.stance = 'crouch'; }
     if (this.aimT > 0.5) speed *= 0.55;
     if (iz > 0) speed *= 0.75;
     if (b.health < 40) speed *= 0.8;
@@ -281,7 +282,7 @@ export class Player {
     // руки заняты снарядом: оружие за спиной; G — бросить груз
     if (this.carry) {
       this.aim = false; this.aimT = lerp(this.aimT, 0, 1 - Math.exp(-11 * dt)); this.scoped = false;
-      if (inp.hit('KeyG')) { this.game.hud.message('Груз брошен', 1.5); this.carry = null; }
+      if (inp.hit('KeyG')) { if (this.carry.onDrop) this.carry.onDrop(); else { this.game.hud.message('Груз брошен', 1.5); this.carry = null; } }
       return;
     }
     // смена оружия
@@ -291,6 +292,12 @@ export class Player {
       let n = this.cur;
       for (let k = 0; k < 4; k++) { n = (n + (inp.wheel > 0 ? 1 : 3)) % 4; if (this.slots[n]) break; }
       want = n;
+    }
+    // повторное нажатие «гранаты» — сменить тип (Ф-1 ↔ РДГ-2)
+    const gs = this.slots[2];
+    if ((want === 2 && this.cur === 2) || (this.cur === 2 && inp.hit('KeyX'))) {
+      if (gs && gs.count > 0 && gs.smoke > 0) { gs.type = gs.type === 'f1' ? 'rdg2' : 'f1'; this.switchT = 0.4; this.game.audio.mech('switch'); this.game.hud.message(gs.type === 'f1' ? 'Граната Ф-1' : 'Дымовая граната РДГ-2', 1.2); }
+      want = -1;
     }
     if (want >= 0 && want !== this.cur && this.slots[want] && this.reloadT <= 0) {
       this.cur = want; this.switchT = 0.6; this.uglMode = false; this.binocQuick = false; this.game.audio.mech('switch');
@@ -490,7 +497,11 @@ export class Player {
 
   handleGrenade(dt, inp, ws) {
     const g = this.game, b = this.body;
-    if (ws.count <= 0 || this.switchT > 0) return;
+    const smoke = ws.type === 'rdg2';
+    // кончились выбранные — на другие
+    if (!smoke && ws.count <= 0 && ws.smoke > 0) ws.type = 'rdg2';
+    else if (smoke && ws.smoke <= 0 && ws.count > 0) ws.type = 'f1';
+    if ((ws.type === 'rdg2' ? ws.smoke : ws.count) <= 0 || this.switchT > 0) return;
     const long = inp.bu('fire'), short = inp.bu('aim');
     if (inp.bd('fire') || inp.bd('aim')) this.cook = (this.cook || 0) + dt; else if (!long && !short) this.cook = 0;
     if (long || short) {
@@ -498,12 +509,13 @@ export class Player {
       const pitch = this.pitch + (long ? 0.18 : 0.05);
       const dir = new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(this.yaw) * Math.cos(pitch));
       const pos = g.lookCam.position.clone().add(new THREE.Vector3(Math.cos(this.yaw) * 0.25, -0.1, -Math.sin(this.yaw) * 0.25));
-      const gr = g.projectiles.throwGrenade(b, pos, dir.multiplyScalar(v).add(b.vel), 'f1');
-      gr.fuse -= Math.min(2.2, this.cook || 0);
-      if (g.net) g.net.onLocalGrenade(b, gr, 'f1');
-      ws.count--; b.grenades = ws.count;
+      const type = ws.type === 'rdg2' ? 'rdg2' : 'f1';
+      const gr = g.projectiles.throwGrenade(b, pos, dir.multiplyScalar(v).add(b.vel), type);
+      if (type === 'f1') gr.fuse -= Math.min(2.2, this.cook || 0);
+      if (g.net) g.net.onLocalGrenade(b, gr, type);
+      if (type === 'f1') { ws.count--; b.grenades = ws.count; } else ws.smoke--;
       this.switchT = 0.8; this.cook = 0;
-      g.hud.message(long ? 'Граната — бросок' : 'Граната — катнул', 1);
+      g.hud.message(type === 'rdg2' ? (long ? 'Дымовая — бросок' : 'Дымовая — под ноги') : long ? 'Граната — бросок' : 'Граната — катнул', 1);
     }
   }
 
@@ -690,7 +702,7 @@ export class Player {
     const prim = this.slots[0] ? this.slots[0].id : 'ak74m';
     this.slots[0] = makeState(prim, loads);
     if (this.slots[1]) this.slots[1] = makeState(this.slots[1].id, loads);
-    this.slots[2].count = 3; b.grenades = 3; b.medkits = 2;
+    this.slots[2].count = 3; this.slots[2].smoke = Math.max(this.slots[2].smoke || 0, 2); b.grenades = 3; b.medkits = 2;
     this.cur = 0;
     this.updateHitboxes();
   }
@@ -702,7 +714,7 @@ export class Player {
       if (s.pouch) { const f = makeState(s.id, (this.game.app && this.game.app.save && this.game.app.save.loads) || null); s.pouch = f.pouch; if (s.mag === 0) { s.chamber = f.chamber; } else s.pouch.pop(); }
       if (s.ugl) s.ugl.spare = Array(s.ugl.def.mags).fill(1);
     }
-    this.slots[2].count = 3; this.body.grenades = 3;
+    this.slots[2].count = 3; this.slots[2].smoke = Math.max(this.slots[2].smoke || 0, 2); this.body.grenades = 3;
     this.body.medkits = Math.max(this.body.medkits, 2);
     this.game.hud.message('Боекомплект пополнен');
   }

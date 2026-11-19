@@ -16,6 +16,7 @@ import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
 import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.js';
 import { SnowTrails } from '../world/trails.js';
 import { WIND } from '../world/shaders.js';
+import { SmokeScreens } from '../fx/smoke.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -26,8 +27,11 @@ import { WEAPONS, SCOPES, PRIMARY_CHOICES } from '../data/weapons.js';
 import { ROSTER, toSkill } from '../data/squad.js';
 import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/math.js';
 import { Howitzer } from '../artillery/howitzer.js';
+import { Mortar } from '../artillery/mortar.js';
+import { Kpv } from '../artillery/kpv.js';
+import { canCarry } from '../artillery/emplace.js';
 import { pvpMap, NET_ROLES, kitOf } from '../data/pvp.js';
-import { grenadeModel } from '../weapons/guns.js';
+import { grenadeModel, smokeGrenadeModel } from '../weapons/guns.js';
 import { Drone, DRONE_RESPAWN } from '../entities/drone.js';
 import { crewItems } from '../artillery/crew.js';
 
@@ -182,6 +186,12 @@ export class Mission {
     add(PR.shellMesh()); add(PR.rocketProto.clone()); add(new THREE.Mesh(PR.grenadeGeo, PR.grenadeMat));
     if (!PR._f1Proto) { try { PR._f1Proto = grenadeModel(); } catch (e) { /* запасная модель */ } }
     if (PR._f1Proto) add(PR._f1Proto.clone());
+    // спрятанные в кузове миномёт/КПВ и мины в руках расчёта — тоже прогреть
+    const hidden = [];
+    for (const h of this.guns) if (h.model && h.model.root && !h.model.root.visible) { h.model.root.visible = true; hidden.push(h.model.root); }
+    { const I = crewItems(); add(I.mine.clone()); }
+    if (!PR._rdgProto) { try { PR._rdgProto = smokeGrenadeModel(); } catch (e) { /* запасная */ } }
+    if (PR._rdgProto) add(PR._rdgProto.clone());
     const snap = { smoke: fx.smoke.n, glow: fx.glow.n, tracers: fx.tracers.length, emitters: fx.emitters.slice(), di: fx._di, dc: fx.decals.count };
     fx.muzzle(P, fwd); fx.impact(P, UP, 'snow'); fx.impact(P, UP, 'metal'); fx.impact(P, UP, 'concrete');
     fx.explosion(P, 1); fx.muzzleBlast(P, fwd); fx.shellBurst(P); fx.rocketSmoke(P, fwd); fx.rocketFlame(P);
@@ -193,6 +203,7 @@ export class Mission {
     this.scene.fog = null;
     r.setRenderTarget(null); r.render(this.scene, cam);
     this.scene.fog = fog;
+    for (const o of hidden) o.visible = false;
     // окно камеры БПЛА: рендер в текстуру и вывод с эффектом видеокамеры
     if (this.myDrone) {
       const dvPrev = this.droneView;
@@ -279,6 +290,8 @@ export class Mission {
     this.world = new World(this.scene, this.terrain);
     this.world.destr.game = this;
     this.trails = new SnowTrails(this); // колея техники и следы бойцов на снегу
+    this.smokeScreens = new SmokeScreens(this); // дымовые завесы: картинка и перекрытие взгляда ИИ
+    this.world.smoke = this.smokeScreens;
     this.mats = ST.makeMats();
     this.fx = new Effects(this.scene);
     this.fx.night = e.time === 'night' || e.time === 'dusk';
@@ -293,7 +306,7 @@ export class Mission {
     // игрок
     const st = def.start;
     const sp = this.net ? this.net.spawnPoint(def) : st;
-    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: this.setup.launcher === true ? 'rpg7' : this.setup.launcher || null, grenades: this.setup.grenades, x: sp.x, z: sp.z, yaw: sp.yaw });
+    this.player = new Player(this, { primary: this.setup.primary || 'ak74m', launcher: this.setup.launcher === true ? 'rpg7' : this.setup.launcher || null, grenades: this.setup.grenades, smokes: this.setup.smokes, x: sp.x, z: sp.z, yaw: sp.yaw });
     if (this.pvp) this.player.setTeam(this.net.team);
     this.soldiers.push(this.player.body);
     // скрипт миссии
@@ -330,10 +343,33 @@ export class Mission {
       return h;
     };
     if (!this.net && this.setup.howitzer && def.id !== 'artillery' && startV.length) towGun(startV[0], 'Д-30 № 1');
+    // миномёт и КПВ на станке: едут в кузове (выгрузить — E у кормы машины), без машины — стоят у старта
+    const carrier = (kind) => startV.find((v) => canCarry(v, kind));
+    const nearStart = (lx, lz) => { const c = Math.cos(st.yaw), s = Math.sin(st.yaw); return { x: st.x + c * lx + s * lz, z: st.z - s * lx + c * lz }; };
+    if (!this.net && this.setup.mortar) {
+      const v = carrier('mortar'), q = nearStart(-6, 4);
+      this.guns.push(new Mortar(this, { x: q.x, z: q.z, dir: (((-st.yaw) / MIL) % 6000 + 6000) % 6000, name: '2Б14 № 1', stowIn: v || null }));
+    }
+    if (!this.net && this.setup.kpv) {
+      const v = carrier('kpv'), q = nearStart(6, -3);
+      this.guns.push(new Kpv(this, { x: q.x, z: q.z, yaw: st.yaw, name: 'КПВ № 1', stowIn: v || null }));
+    }
     if (this.net && def.id !== 'artillery') {
       // сетевая игра: Д-30 с расчётом и выбранный тягач — у каждого, кто их взял
       const room = this.net.room;
       const perTeam = { negs: 0, denter: 0 };
+      const perTeam2 = { negs: 0, denter: 0 };
+      room.players.forEach((pl) => {
+        const k = kitOf(pl, room);
+        if (!k.mortar && !k.kpv) return;
+        const team = this.pvp ? pl.team : 'negs';
+        const sp = this.pvp ? pvpMap(def.id).spawns[team] : { x: st.x, z: st.z, yaw: st.yaw };
+        const n = perTeam2[team]++;
+        const c = Math.cos(sp.yaw), s = Math.sin(sp.yaw);
+        const at = (lx, lz) => ({ x: sp.x + c * lx + s * lz, z: sp.z - s * lx + c * lz });
+        if (k.mortar) { const q = at(-8 - n * 5, 6); this.guns.push(new Mortar(this, { x: q.x, z: q.z, dir: (((-sp.yaw) / MIL) % 6000 + 6000) % 6000, name: `2Б14 (${pl.name})`, team })); }
+        if (k.kpv) { const q = at(-4 - n * 5, -4); this.guns.push(new Kpv(this, { x: q.x, z: q.z, yaw: sp.yaw, name: `КПВ (${pl.name})`, team })); }
+      });
       room.players.forEach((pl) => {
         const k = kitOf(pl, room);
         if (!k.howitzer) return;
@@ -464,6 +500,8 @@ export class Mission {
       weaponRack: (x, z) => self.addWeaponRack(x, z),
       ammoCrate: (x, z) => self.addAmmoCrate(x, z),
       howitzer: (o) => { const h = new Howitzer(self, o); self.guns.push(h); return h; },
+      mortar: (o) => { const h = new Mortar(self, o); self.guns.push(h); return h; },
+      kpv: (o) => { const h = new Kpv(self, o); self.guns.push(h); return h; },
       artTarget: (o) => self.addArtTarget(o),
     };
     return ctx;
@@ -1247,6 +1285,7 @@ export class Mission {
     for (const v of this.vehicles) v.update(dt);
     updateFlyingParts(this, dt);
     this.trails.update(dt);
+    this.smokeScreens.update(dt);
     WIND.uTime.value += dt;
     for (const h of this.guns) h.update(dt);
     for (const d of this.drones) d.update(dt, host);
@@ -1386,7 +1425,7 @@ export class Mission {
     const carry = p.carry && !v && !p.gun ? p.carry.item : null;
     if (!this.vmCarry && carry) {
       const I = crewItems();
-      this.vmCarry = { shell: I.shell.clone(), charge: I.charge.clone() };
+      this.vmCarry = { shell: I.shell.clone(), charge: I.charge.clone(), mine: I.mine.clone() };
       for (const o of Object.values(this.vmCarry)) { o.rotation.set(0.15, Math.PI / 2, 0); this.vmScene.add(o); }
     }
     if (this.vmCarry) for (const [k, o] of Object.entries(this.vmCarry)) {

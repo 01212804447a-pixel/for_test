@@ -4,6 +4,18 @@ import { MIL, CHARGES, firingTable, fmtDiv, fmtSigned, dirAngle, toGrid, GRID } 
 
 const CARD = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'];
 
+// Описание орудия для интерфейса (по умолчанию — Д-30); у миномёта своё (mortar.js)
+export const D30_SPEC = {
+  title: 'Д-30', charges: CHARGES, table: firingTable, panoFov: 10.7, panoName: 'ПГ-1М',
+  shell: () => 'ОФ-462',
+  fuzeRow: (h) => `<div class="gr"><span>Взрыватель (X)</span><b>${h.fuze === 'О' ? 'осколочное' : 'фугасное'}</b></div><div class="gr"><span>Снаряд (Z)</span><b>${h.shellType === 'd' ? 'Д-462 дымовой' : 'ОФ-462'}</b></div>`,
+  loadedText: (L) => `заряд ${CHARGES[L.ci].name}, ${L.shell === 'd' ? 'дым.' : L.fuze === 'О' ? 'оск.' : 'фуг.'}`,
+  views: { eye: 'обзор', pano: 'ПГ-1М', op4m: 'ОП4М-45', side: 'со стороны' },
+  keysExtra: ' · X — взрыватель · Z — дымовой',
+  tableTitle: 'Таблица стрельбы 122-мм гаубицы Д-30',
+  tableNote: (T) => `Снаряд ОФ-462, взрыватель РГМ-2. Заряд <b>${T.charge.name}</b> (V₀ = ${T.charge.v0} м/с). Наибольшая дальность ${Math.round(T.maxRange).toLocaleString('ru')} м при прицеле ${T.maxSight}.`,
+};
+
 export class GunUI {
   constructor(h) {
     this.h = h; this.m = h.m;
@@ -17,24 +29,27 @@ export class GunUI {
 
   show(on) { this.panel.style.display = on ? 'block' : 'none'; this.ret.style.display = on ? 'block' : 'none'; this.m.hud.root.classList.toggle('gunner', on); if (on) this.update(1); }
 
+  get spec() { return this.h.spec || D30_SPEC; }
+
   update(dt) {
     this.acc += dt;
     this.drawReticle();
     if (this.acc < 0.12) return;
     this.acc = 0;
-    const h = this.h;
+    const h = this.h, S = this.spec;
     const ch = h.charge;
     const diff = h.elM - h.wantEl;
     const bub = Math.max(-1, Math.min(1, diff / 12));
     const ok = Math.abs(diff) < 0.6;
     const ls = h.loadStatus();
-    const st = h.loaded ? `<b class="ok">ЗАРЯЖЕНО</b> (заряд ${CHARGES[h.loaded.ci].name}, ${h.loaded.fuze === 'О' ? 'оск.' : 'фуг.'})` : ls ? `заряжают: ${ls}` : '<span class="warn">не заряжено</span> — R';
+    const st = h.loaded ? `<b class="ok">ЗАРЯЖЕНО</b> (${S.loadedText(h.loaded)})` : ls ? `заряжают: ${ls}` : '<span class="warn">не заряжено</span> — R';
     this.panel.innerHTML = `
       <div class="gt">${h.name} · наводчик</div>
-      <div class="gr"><span>Снаряд</span><b>ОФ-462</b></div>
-      <div class="gr"><span>Заряд (1–6)</span><b>${ch.name}</b></div>
-      <div class="gr"><span>Взрыватель (X)</span><b>${h.fuze === 'О' ? 'осколочное' : 'фугасное'}</b></div>
-      <div class="gr"><span>Орудие</span>${st}</div>
+      <div class="gr"><span>Боеприпас</span><b>${S.shell(h)}</b></div>
+      <div class="gr"><span>Заряд (1–${S.charges.length})</span><b>${ch.name}</b></div>
+      ${S.fuzeRow ? S.fuzeRow(h) : ''}
+      ${S.extraRows ? S.extraRows(h) : ''}
+      <div class="gr"><span>${S.title === 'Д-30' ? 'Орудие' : 'Миномёт'}</span>${st}</div>
       <hr>
       <div class="gr big"><span>Угломер</span><b>${fmtDiv(h.az)}</b></div>
       <div class="gr big"><span>Прицел ([ ])</span><b>${Math.round(h.drum)}</b></div>
@@ -44,7 +59,7 @@ export class GunUI {
       <div class="gr"><span>Возвышение ствола</span><b>${fmtDiv(h.elM)}</b></div>
       <hr>
       <div class="gk">A/D, мышь — поворотный маховик · W/S, мышь — подъёмный · Shift — быстро<br>
-      ЛКМ/Пробел — выстрел · R — заряжать · V — вид (${{ eye: 'обзор', pano: 'ПГ-1М', op4m: 'ОП4М-45', side: 'со стороны' }[h.view]})<br>
+      ЛКМ/Пробел — выстрел · R — заряжать · V — вид (${S.views[h.view]})${S.keysExtra || ''}<br>
       M — карта огня · T — таблица стрельбы · G — гайд · E — выйти</div>`;
   }
 
@@ -66,7 +81,7 @@ export class GunUI {
     g.fillStyle = vg; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
     g.strokeStyle = '#111'; g.fillStyle = '#111'; g.lineWidth = 1.6;
     g.font = '12px Arial'; g.textAlign = 'center';
-    const fov = h.view === 'pano' ? 10.7 : 9;
+    const fov = h.view === 'pano' ? this.spec.panoFov : 9;
     const pxPerMil = (H / 2) / Math.tan((fov * Math.PI) / 360) * MIL;
     if (h.view === 'pano') {
       // ПГ-1М: перекрестие со шкалой 0-10 … 0-50 влево и вправо
@@ -90,7 +105,7 @@ export class GunUI {
         g.beginPath(); g.moveTo(x, cy); g.lineTo(x, cy + (k % 10 === 0 ? 10 : 5)); g.stroke();
         if (k % 20 === 0) g.fillText(String(Math.abs(k) / 10), x, cy + 22);
       }
-      const T = firingTable(h.loaded ? h.loaded.ci : h.ci);
+      const T = this.spec.table(h.loaded ? h.loaded.ci : h.ci);
       g.textAlign = 'left';
       for (const r of T.rows) {
         if (r.D > 4000) break;
@@ -102,7 +117,7 @@ export class GunUI {
       }
       g.textAlign = 'center';
       g.fillStyle = 'rgba(10,14,18,0.75)'; g.fillRect(cx - 120, cy + R * 0.72, 240, 26);
-      g.fillStyle = '#e8f0d0'; g.font = '13px Arial'; g.fillText(`шкала дальностей: заряд ${CHARGES[h.loaded ? h.loaded.ci : h.ci].name}, ×100 м`, cx, cy + R * 0.72 + 17);
+      g.fillStyle = '#e8f0d0'; g.font = '13px Arial'; g.fillText(`шкала дальностей: заряд ${this.spec.charges[h.loaded ? h.loaded.ci : h.ci].name}, ×100 м`, cx, cy + R * 0.72 + 17);
     }
     g.restore();
     // окно камеры снаряда не закрываем маской окуляра
@@ -203,13 +218,13 @@ export class GunUI {
 
   // ---------- таблица стрельбы ----------
   table(ci) {
-    const m = this.m, ui = m.app.ui;
-    const T = firingTable(ci);
+    const m = this.m, ui = m.app.ui, S = this.spec;
+    const T = S.table(ci);
     const e = m.def.env;
     const rows = T.rows.map((r) => `<tr><td>${r.D.toLocaleString('ru')}</td><td><b>${r.sight.toFixed(0)}</b></td><td>${r.dXmil.toFixed(0)}</td><td>${r.t.toFixed(1)}</td><td>${r.drift.toFixed(0)}</td><td>${r.dZw.toFixed(1)}</td><td>${r.dXw.toFixed(0)}</td><td>${r.dXt.toFixed(0)}</td><td>${Math.round(r.top)}</td></tr>`).join('');
-    ui.show(`<h1>Таблица стрельбы 122-мм гаубицы Д-30</h1>
-      <div class="opc">Снаряд ОФ-462, взрыватель РГМ-2. Заряд <b>${T.charge.name}</b> (V₀ = ${T.charge.v0} м/с). Наибольшая дальность ${Math.round(T.maxRange).toLocaleString('ru')} м при прицеле ${T.maxSight}.</div>
-      <div class="row chs">${CHARGES.map((c, i) => `<button class="btn ${i === ci ? '' : 'sec'}" data-ci="${i}">${c.name}</button>`).join('')}</div>
+    ui.show(`<h1>${S.tableTitle}</h1>
+      <div class="opc">${S.tableNote(T)}</div>
+      <div class="row chs">${S.charges.map((c, i) => `<button class="btn ${i === ci ? '' : 'sec'}" data-ci="${i}">${c.name}</button>`).join('')}</div>
       <div class="tblwrap"><table class="ft">
       <tr><th>Д, м</th><th>Прицел, тыс.</th><th>ΔX<sub>тыс</sub>, м</th><th>t<sub>c</sub>, с</th><th>Z (деривация), тыс.</th><th>Z<sub>w</sub> (бок. ветер 10 м/с), тыс.</th><th>ΔX<sub>w</sub> (встречн. ветер 10 м/с), м</th><th>ΔX<sub>T</sub> (t на −10°), м</th><th>Y<sub>s</sub>, м</th></tr>
       ${rows}</table></div>
@@ -219,5 +234,5 @@ export class GunUI {
     ui.bind('[data-ci]', (b) => this.table(+b.dataset.ci));
   }
 
-  guide() { this.m.app.ui.d30Guide(); }
+  guide() { if (this.spec.guide) this.spec.guide(this.m); else this.m.app.ui.d30Guide(); }
 }

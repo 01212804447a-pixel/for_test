@@ -108,12 +108,16 @@ export class HUD {
     // оружие
     const ws = p.state;
     let wh = '';
-    if (p.vehicle && p.seat === 1 && p.vehicle.type.turret) {
+    if (p.gun && p.gun.hudText) {
+      wh = p.gun.hudText;
+    } else if (p.vehicle && p.seat === 1 && p.vehicle.type.turret) {
       const vv = p.vehicle;
       wh = `<div class="wn">ПКТ (башня МТ-ЛБ)</div><div>Лента: ${magWord(vv.gunAmmo, vv.gunWeapon.mag)} · коробов: ${vv.gunMags}</div><div class="ws">Прицел ПП-61АМ, пристрелка 200 м${p.gunnerSight ? '' : ' (ПКМ — прицел)'}</div>`;
     } else if (p.vehicle && p.seat !== 1) {
       wh = '';
-    } else if (ws && ws.grenade) wh = `<div class="wn">Ручная граната Ф-1</div><div>Осталось: ${ws.count}</div><div class="ws">ЛКМ — бросок, ПКМ — катнуть. Удерживайте для «выдержки».</div>`;
+    } else if (ws && ws.grenade) wh = ws.type === 'rdg2'
+      ? `<div class="wn">Дымовая граната РДГ-2</div><div>Осталось: ${ws.smoke} · Ф-1: ${ws.count}</div><div class="ws">ЛКМ — бросок, ПКМ — под ноги. Дым ≈ 75 с, сносит ветром; противник не видит сквозь него. 3 или X — Ф-1.</div>`
+      : `<div class="wn">Ручная граната Ф-1</div><div>Осталось: ${ws.count} · РДГ-2: ${ws.smoke || 0}</div><div class="ws">ЛКМ — бросок, ПКМ — катнуть. Удерживайте для «выдержки». 3 или X — дымовая.</div>`;
     else if (ws && ws.binocular) wh = `<div class="wn">Бинокль Б-8 (8×)</div><div class="ws">ПКМ — смотреть. Угломерная сетка: D = H×1000 / тыс.${m.squadGroup && m.squadGroup.members.some((x) => x.role === 'sniper' && x.alive) ? '<br>ЛКМ — запросить дальность у наблюдателя' : ''}</div>`;
     else {
       const aw = p.activeWeapon;

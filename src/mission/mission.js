@@ -14,6 +14,7 @@ import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
 import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.js';
+import { SnowTrails } from '../world/trails.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -276,6 +277,7 @@ export class Mission {
     this.vmScene.add(fill);
     this.world = new World(this.scene, this.terrain);
     this.world.destr.game = this;
+    this.trails = new SnowTrails(this); // колея техники и следы бойцов на снегу
     this.mats = ST.makeMats();
     this.fx = new Effects(this.scene);
     this.fx.night = e.time === 'night' || e.time === 'dusk';
@@ -1239,6 +1241,7 @@ export class Mission {
     if (host) for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
     updateFlyingParts(this, dt);
+    this.trails.update(dt);
     for (const h of this.guns) h.update(dt);
     for (const d of this.drones) d.update(dt, host);
     this.world.destr.update(dt);

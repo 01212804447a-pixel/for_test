@@ -214,7 +214,10 @@ export function gripOffset(gun) {
   lib.poseObjs(c, 0);
   const R = palm(lib, 'Right'), L = palm(lib, 'Left');
   // ось в системе оружия (−Z вперёд) и в мире
-  const vw = _v.subVectors(gun.gripL, gun.gripR).normalize();
+  // опорная линия наклона: от правой кисти к левой под углом, как у АК-74 (одинаково для вида
+  // от первого и от третьего лица; иначе оружие с низкой точкой хвата смотрит вверх или вниз)
+  const aimL = gun.aimL || new THREE.Vector3(gun.gripL.x, gun.gripR.y + 0.188 * (gun.gripR.z - gun.gripL.z), gun.gripL.z);
+  const vw = _v.subVectors(aimL, gun.gripR).normalize();
   const vr = _v2.subVectors(L.pos, R.pos).normalize();
   const q = new THREE.Quaternion().setFromUnitVectors(vw, vr);
   // крен: верх оружия как можно ближе к вертикали

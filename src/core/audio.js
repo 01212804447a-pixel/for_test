@@ -166,6 +166,15 @@ export class AudioSys {
       const o = this.ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 1800 + Math.random() * 1500;
       const g = this.ctx.createGain(); g.gain.setValueAtTime(0.25, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
       o.connect(g); g.connect(out); o.start(t0); o.stop(t0 + 0.4);
+    } else if (mat === 'glass') {
+      // звон и осыпь стекла: несколько коротких высоких звонов и шорох
+      for (let k = 0; k < 5; k++) {
+        const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 3200 + Math.random() * 4200;
+        const g = this.ctx.createGain(); const t = t0 + k * (0.02 + Math.random() * 0.05);
+        g.gain.setValueAtTime(0.12, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18 + Math.random() * 0.2);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.45);
+      }
+      this._noiseBurst(out, t0, 0.35, { type: 'highpass', freq: 3500, gain: 0.35 });
     } else if (mat === 'target') {
       const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 900 + Math.random() * 100;
       const g = this.ctx.createGain(); g.gain.setValueAtTime(0.5, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.9);

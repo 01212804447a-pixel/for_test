@@ -7,11 +7,23 @@ import { blobShadow } from '../world/flora.js';
 import { WEAPONS } from '../data/weapons.js';
 import { clamp, rand, randn, wrapAngle } from '../core/math.js';
 import { solverFor } from './soldier.js';
+import { VehicleDamage } from './vehicleDamage.js';
+
+const _tc = new THREE.Vector3();
+
+// Грунт под машиной (маска рельефа: 0 снег, 1 накатанная дорога, 2 лёд, 3 берег/наст).
+// μ — коэффициент сцепления, crr — сопротивление качению; crrTow — для колёс прицепа.
+const SURF = {
+  wheel: [{ mu: 0.38, crr: 0.05 }, { mu: 0.48, crr: 0.025 }, { mu: 0.13, crr: 0.015 }, { mu: 0.34, crr: 0.065 }],
+  track: [{ mu: 0.62, crr: 0.07 }, { mu: 0.68, crr: 0.05 }, { mu: 0.26, crr: 0.035 }, { mu: 0.56, crr: 0.08 }],
+  tow: [0.06, 0.03, 0.015, 0.075],
+};
 
 export const VEHICLE_TYPES = {
   tigr: {
     id: 'tigr', name: 'ГАЗ-233014 «Тигр»', cls: 'Бронеавтомобиль', len: 5.7, width: 2.4, height: 2.4,
-    wheelbase: 3.3, track: 1.84, wheelR: 0.56, maxSpeed: 23, accel: 3.6, brake: 7, steerMax: 0.55, grip: 3.4,
+    wheelbase: 3.3, track: 1.84, wheelR: 0.56, maxSpeed: 23, brake: 7, steerMax: 0.55, grip: 3.4,
+    mass: 7400, power: 158, eta: 0.8, cda: 3.0, tyre: 1.1, // ЯМЗ-534 215 л. с., полная масса 7,4 т
     seats: 9, gun: 'pkp_mount', gunExposed: true, armor: { front: 7, side: 6, top: 3 }, hp: 300,
     engine: 'diesel', camo: ['#e7eaed', '#b6bdc4', '#8e979e'],
     susp: { droop: 0.15, comp: 0.17, zeta: 0.38, hcg: 0.95 }, hitch: 3.05,
@@ -19,7 +31,8 @@ export const VEHICLE_TYPES = {
   },
   niva: {
     id: 'niva', name: 'ВАЗ-2121 «Нива»', cls: 'Лёгкий внедорожник', len: 3.74, width: 1.68, height: 1.64,
-    wheelbase: 2.2, track: 1.4, wheelR: 0.34, maxSpeed: 27, accel: 3.4, brake: 7.5, steerMax: 0.62, grip: 2.8,
+    wheelbase: 2.2, track: 1.4, wheelR: 0.34, maxSpeed: 27, brake: 7.5, steerMax: 0.62, grip: 2.8,
+    mass: 1450, power: 59, eta: 0.82, cda: 1.35, tyre: 1.0, // ВАЗ-2121: 80 л. с., 1,15 т + экипаж
     seats: 4, gun: null, armor: { front: 1, side: 0.8, top: 0.6 }, hp: 120,
     engine: 'car', camo: ['#3e4d33', '#34422b', '#4a5a3d'],
     susp: { droop: 0.13, comp: 0.14, zeta: 0.34, hcg: 0.62 }, hitch: 2.0,
@@ -27,7 +40,8 @@ export const VEHICLE_TYPES = {
   },
   mtlb: {
     id: 'mtlb', name: 'МТ-ЛБ', cls: 'Многоцелевой тягач (гусеничный)', len: 6.45, width: 2.85, height: 1.87,
-    wheelbase: 4.6, track: 2.4, wheelR: 0.3, maxSpeed: 15, accel: 2.4, brake: 6, turnRate: 0.85, grip: 7,
+    wheelbase: 4.6, track: 2.4, wheelR: 0.3, maxSpeed: 16.5, brake: 6, turnRate: 0.85, grip: 7,
+    mass: 11900, power: 176, eta: 0.66, cda: 5.0, // ЯМЗ-238В 240 л. с., боевая масса 11,9 т, крюк до 6,5 т
     tracked: true, seats: 13, gun: 'pkt', turret: true, armor: { front: 11, side: 7, top: 5 }, hp: 460,
     engine: 'tracked', camo: ['#55613f', '#dde1e3', '#3e4a31'],
     susp: { droop: 0.08, comp: 0.13, zeta: 0.55, hcg: 0.8 }, hitch: 3.35,
@@ -78,6 +92,7 @@ export class Vehicle {
     this.ai = null; // { route, idx, speed, stopped }
     this.burnT = 0;
     this.wheelRot = 0;
+    this.dmg = new VehicleDamage(this);
     this._updateCollider();
   }
 
@@ -127,6 +142,14 @@ export class Vehicle {
     if (!this.alive) return;
     const g = this.game;
     if (g.net && !g.net.isHost && !fromNet) { g.net.fwdVehicleHit(this, pen, pt, owner, heat, ex); return; }
+    // ходовая: пробитое/оторванное колесо, перебитая гусеница
+    const wi = pt ? this.dmg.onHit(pt, pen, heat, ex) : -1;
+    if (wi >= 0 && !heat) {
+      this.hp -= Math.min(6, pen * 0.15);
+      if (this.ai) this.ai.alerted = true;
+      if (this.hp <= 0) this.destroy(owner);
+      return;
+    }
     if (heat) {
       const armor = this.type.armor.side;
       if (pen > armor * 3) {
@@ -142,9 +165,10 @@ export class Vehicle {
     if (this.hp <= 0) this.destroy(owner);
   }
 
-  damageBlast(ex, d, owner) {
+  damageBlast(ex, d, owner, pos = null) {
     if (!this.alive) return;
     if (this.game.net && !this.game.net.isHost) return;
+    if (pos) this.dmg.onBlast(pos, ex);
     const k = Math.max(0, 1 - d / (ex.radius * 2.2));
     const vuln = this.typeId === 'niva' ? 1 : 0.15;
     this.hp -= ex.dmg * k * vuln;
@@ -167,9 +191,9 @@ export class Vehicle {
       if (s.alive) { this.unboard(s); s.damage(rand(10, 30), 'leg', by, null); }
       else { this.removeOccupant(s); s.vehicle = null; s.hidden = false; s.pos.copy(this.pos); s.pos.x += rand(-2, 2); s.pos.z += rand(-2, 2); s.pos.y = g.world.groundAt(s.pos.x, s.pos.z); }
     }
-    const burnt = new THREE.MeshStandardMaterial({ color: 0x1c1b1a, roughness: 0.95 });
-    this.mesh.traverse((o) => { if (o.isMesh) o.material = burnt; });
-    this.mesh.rotation.z += rand(-0.05, 0.05);
+    // остов: выгоревшая краска, выбитые стёкла, сгоревшие шины, вмятины и пробоины,
+    // сорванная башня, слетевшая гусеница или оторванное колесо
+    this.dmg.wreck();
     if (this.engine) { this.engine.stop(); this.engine = null; }
     if (g.onVehicleDestroyed) g.onVehicleDestroyed(this, by);
   }
@@ -201,31 +225,45 @@ export class Vehicle {
     const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
     let vF = this.vel.x * fx + this.vel.z * fz;
     let vR = this.vel.x * rx + this.vel.z * rz;
-    let aF = 0;
     const th = ctl.throttle;
-    const deep = T.tracked ? 0.15 : 0.45;
     // сцепление только у колёс, касающихся грунта: в полёте газ, тормоз и руль не работают
     const gc = this.contact ?? 1;
-    // с орудием на прицепе (3,2 т) разгон и максимальная скорость ниже
-    const tow = this.towing ? (T.tracked ? 0.85 : this.typeId === 'niva' ? 0.5 : 0.7) : 1;
-    const acc = T.accel * tow, vmax = T.maxSpeed * (this.towing ? 0.75 : 1);
-    if (th > 0) aF = vF < -0.3 ? th * T.brake : th * acc * Math.max(0, 1 - Math.max(0, vF) / vmax);
-    else if (th < 0) aF = vF > 0.3 ? th * T.brake : th * acc * 0.6 * Math.max(0, 1 - Math.max(0, -vF) / 6);
-    aF += -9.81 * Math.sin(this.pitch) * 0.85;
-    const roll = (deep * gc + 0.0011 * vF * vF) * Math.sign(vF);
-    if (ctl.brake) aF -= Math.sign(vF) * T.brake;
-    aF *= gc;
-    const before = vF;
+    // Тяговый расчёт в ньютонах по паспортным массам и мощностям:
+    // тяга = min(КПД·мощность/скорость, μ·сцепной вес) против уклона, качения и воздуха.
+    // Прицеп (Д-30, 3210 кг) добавляет массу, скатывающую силу и своё сопротивление качению.
+    const surf = this._surface();
+    const mu = surf.mu * (this.gripK ?? 1), cosP = Math.cos(this.pitch), sinP = Math.sin(this.pitch);
+    const mTow = this.towing ? (this.towing.mass || 3210) : 0;
+    const M = T.mass + mTow;
+    const N = T.mass * 9.81 * cosP;                      // сцепной вес тягача (все оси/гусеницы ведущие)
+    const v = Math.abs(vF);
+    this.thrA = (this.thrA || 0) + (Math.abs(th) - (this.thrA || 0)) * Math.min(1, dt * 3.5); // отклик двигателя
+    const vmax = T.maxSpeed * (this.speedK ?? 1);
+    let Fd = 0, Fres = 0;                                 // движущая и тормозящая (против движения) силы
+    if (th !== 0 && vF * th < -0.3) Fres += Math.abs(th) * Math.min(T.brake * T.mass, (mu + 0.15) * N); // встречный газ — торможение
+    else if (th !== 0) {
+      const vlim = th > 0 ? vmax : T.reverse || 6;
+      const gov = clamp((vlim - v) / (0.06 * vlim + 0.4), 0, 1);   // ограничение оборотов/передачи
+      const Fpow = T.eta * T.power * 1000 / Math.max(v, 0.9);
+      Fd = Math.sign(th) * this.thrA * Math.min(Fpow, mu * N) * gov;
+      this.slip = Fpow > mu * N ? 1 : 0;
+    }
+    if (ctl.brake) Fres += Math.min(T.brake * T.mass, (mu + 0.15) * N) + (mTow ? 0.5 * mu * mTow * 9.81 * cosP : 0);
+    const Fg = -M * 9.81 * sinP;                          // скатывающая сила на уклоне
+    const Froll = 9.81 * cosP * (surf.crr * T.mass * (this.rollK ?? 1) + (mTow ? surf.crrTow * mTow : 0));
+    const Fair = 0.5 * 1.25 * T.cda * vF * v;
+    const aF = (Fd + Fg - Fair) / M * gc;
+    const decel = (Froll + Fres) / M * gc;
     vF += aF * dt;
-    vF -= roll * dt;
-    if (th === 0 && Math.sign(vF) !== Math.sign(before) && Math.abs(before) < 1) vF = 0;
-    if (ctl.brake && Math.abs(vF) < 0.5) vF = 0;
-    // боковая составляющая веса на поперечном склоне и сцепление со снегом
-    const muLat = (T.tracked ? 0.75 : 0.42) * (ctl.brake && !T.tracked ? 0.8 : 1);
+    if (Math.abs(vF) <= decel * dt) vF = 0; else vF -= Math.sign(vF) * decel * dt;
+    // стоянка: машина на тормозах держится на склоне, пока уклон не превысит сцепление
+    if ((th === 0 || ctl.brake) && v < 0.5 && Math.abs(Fg) < (mu + 0.1) * N + Froll) vF = 0;
+    // боковая составляющая веса на поперечном склоне и сцепление с грунтом
+    const muLat = (T.tracked ? 0.75 : 0.42) * (ctl.brake && !T.tracked ? 0.8 : 1) * Math.min(1.1, surf.mu / surf.mu0) * (this.gripK ?? 1);
     vR += -9.81 * Math.sin(this.groundRoll || 0) * dt * gc;
     const fric = Math.min(Math.abs(vR), (muLat * 9.81 * Math.cos(this.groundRoll || 0) * dt + Math.abs(vR) * (1 - Math.exp(-T.grip * dt)) * 0.6) * gc);
     vR -= Math.sign(vR) * fric;
-    this.accF = aF;
+    this.accF = aF - Math.sign(vF) * decel;
     let yawRate;
     if (T.tracked) {
       yawRate = ctl.steer * T.turnRate * (vF < -0.2 ? -1 : 1) * (1 - 0.45 * Math.min(1, Math.abs(vF) / T.maxSpeed));
@@ -234,6 +272,8 @@ export class Vehicle {
       this.steer += (target - this.steer) * Math.min(1, dt * 5);
       yawRate = (vF * Math.tan(this.steer)) / T.wheelbase;
     }
+    // спущенное/оторванное колесо или разорванная гусеница уводят машину в сторону
+    if (this.pull) yawRate += this.pull * vF / (T.wheelbase * 3) * gc;
     // в воздухе машина сохраняет вращение по курсу
     yawRate = yawRate * gc + (this._yawRate || 0) * (1 - gc) * Math.exp(-0.5 * dt);
     this._yawRate = yawRate;
@@ -258,9 +298,23 @@ export class Vehicle {
     // колёса
     // колёса: качение вокруг своей оси, руль — отдельной группой
     this.wheelRot += vF * dt;
-    for (const wh of this.model.wheels) wh.spin.rotation.x = -this.wheelRot / wh.r;
-    for (const wh of this.model.steerWheels) wh.steer.rotation.y = this.steer;
-    if (this.model.trackTex) this.model.trackTex.offset.y -= vF * dt * 0.42;
+    const TR = this.model.tracks;
+    if (TR) {
+      // гусеницы: скорость каждого борта = скорость машины ± поворот (при развороте на месте — встречно)
+      const yr = dt > 0 && this._lastYaw !== undefined ? wrapAngle(this.yaw - this._lastYaw) / dt : 0;
+      const hw = T.track / 2, ts = this.trackS || (this.trackS = [0, 0]);
+      ts[0] += (vF - yr * hw) * dt; ts[1] += (vF + yr * hw) * dt;
+      const near = g.camPos ? this.pos.distanceToSquared(g.camPos) < 260 * 260 : true;
+      for (let k = 0; k < 2; k++) {
+        const sd = TR.sides[k];
+        if (sd.broken || !near) continue;
+        const off = -ts[k];
+        if (Math.abs(off - sd.last) > 0.003) TR.place(sd, off);
+      }
+      for (const wh of this.model.wheels) if (!wh.lost) wh.spin.rotation.x = -(wh.side < 0 ? ts[0] : ts[1]) / (wh.r + 0.025);
+    } else for (const wh of this.model.wheels) if (!wh.lost) wh.spin.rotation.x = -this.wheelRot / wh.r;
+    this._lastYaw = this.yaw;
+    for (const wh of this.model.steerWheels) if (!wh.lost) wh.steer.rotation.y = this.steer;
     // звук двигателя
     if (this.driver && this.driver.alive) {
       if (!this.engine) this.engine = g.audio.createEngine(T.engine);
@@ -310,6 +364,14 @@ export class Vehicle {
     this._place(dt);
     this.netPose = false;
     this._tail(dt, this.speed, Math.abs(this.speed) > 0.5 ? 0.5 : 0);
+  }
+
+  _surface() {
+    const m = this.game.world.terrain.maskAt(this.pos.x, this.pos.z) | 0;
+    const tab = this.type.tracked ? SURF.track : SURF.wheel, k = m < tab.length ? m : 0;
+    const r = this._surf || (this._surf = { mu: 0, crr: 0, crrTow: 0, mu0: 0 });
+    r.mu = tab[k].mu * (this.type.tyre || 1); r.crr = tab[k].crr; r.crrTow = SURF.tow[k]; r.mu0 = tab[0].mu * (this.type.tyre || 1);
+    return r;
   }
 
   // Точки опоры подвески: колёса (у гусеничной — опорные катки)
@@ -371,7 +433,7 @@ export class Vehicle {
       // грунт под точками опоры (за кадр смещение мало)
       for (const p of cps) {
         const yA = this.pos.y - Math.sin(this.pitch) * p.lz + Math.sin(this.roll) * p.lx;
-        p.g = this._groundUnder(this.pos.x + c * p.lx + s * p.lz, this.pos.z - s * p.lx + c * p.lz, yA + 0.35);
+        p.g = this._groundUnder(this.pos.x + c * p.lx + s * p.lz, this.pos.z - s * p.lx + c * p.lz, yA + 0.35) - (p.wh && p.wh.drop || 0);
       }
       let contacts = 0, landV = 0;
       const wasAir = (this.contact || 0) === 0;
@@ -435,12 +497,13 @@ export class Vehicle {
     }
     // ход колёс по сжатию подвески
     for (const p of cps) {
-      if (!p.wh) continue;
+      if (!p.wh || p.wh.lost) continue;
       const off = clamp(p.x - S.droop, -S.droop, S.comp);
       p.wh.steer.position.y = p.baseY + off;
     }
     if (w.terrain.hasSea && gy < -1.2 && this.alive) { this.game.hud && this.game.hud.message(`${T.name} провалился под воду`); this.destroy(null); }
     this.mesh.position.copy(this.pos);
+    if (this.drop) this.mesh.position.y -= this.drop; // остов осел на разбитой подвеске
     this.mesh.rotation.set(0, 0, 0);
     this.mesh.rotation.order = 'YXZ';
     this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = this.pitch; this.mesh.rotation.z = this.roll;
@@ -483,6 +546,30 @@ export class Vehicle {
       if (o.y1 < this.pos.y + 0.7 || o.y0 > this.pos.y + T.height) return;
       const r = sat(o);
       if (!r) return;
+      const spd = Math.abs(this.speed);
+      // забор: пролёт валится под машиной
+      if (o.owner && o.owner.kind === 'fence') {
+        if (spd > 1.2) { w.destr.breakFence(o.owner, new THREE.Vector3(-Math.sin(this.yaw) * Math.sign(this.speed || 1), 0, -Math.cos(this.yaw) * Math.sign(this.speed || 1))); this.vel.multiplyScalar(0.92); return; }
+      }
+      // стена с проломами: плитки в пятне контакта; деревянную стену тяжёлая машина проламывает
+      if (o.dw) {
+        const dw = o.dw, D = w.destr, hit = [];
+        for (let idx = 0; idx < dw.alive.length; idx++) {
+          if (!dw.alive[idx]) continue;
+          const c = D._tileCenter(dw, idx, _tc);
+          if (c.y > this.pos.y + T.height || c.y < this.pos.y + 0.15) continue;
+          if (w.pointObstacleDist(me, c.x, c.z) < 0.35) hit.push(idx);
+        }
+        if (!hit.length) return; // в пятне контакта стены уже нет — проезжаем в пролом
+        const heavy = T.tracked || this.typeId === 'tigr';
+        if ((dw.mat === 'wood' && spd > (heavy ? 2.5 : 5)) || (dw.mat === 'log' && heavy && spd > 4)) {
+          const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)).multiplyScalar(Math.sign(this.speed || 1));
+          for (const idx of hit) D.destroyTile(dw, idx, fwd, spd * 0.8);
+          this.vel.multiplyScalar(dw.mat === 'log' ? 0.6 : 0.8);
+          this.hp -= dw.mat === 'log' ? 6 : 2;
+          return;
+        }
+      }
       const share = other ? 0.5 : 1;
       this.pos.x += r.nx * r.depth * share; this.pos.z += r.nz * r.depth * share;
       if (other) { other.pos.x -= r.nx * r.depth * 0.5; other.pos.z -= r.nz * r.depth * 0.5; }

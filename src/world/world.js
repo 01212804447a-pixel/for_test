@@ -3,9 +3,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { NavGrid } from './navgrid.js';
+import { Destruction } from './destruct.js';
 import { clamp } from '../core/math.js';
 
 const CELL = 16;
+const _rp = new THREE.Vector3();
 
 // Box с UV, масштабированными по размеру (метры / texScale)
 export function boxGeo(w, h, d, texScale = 2) {
@@ -35,6 +37,7 @@ export class World {
     this._stamp = 1;
     this._static = new Map(); // material -> {geos:[], cast:boolean}
     this.staticTiles = []; // плитки статической геометрии 400×400 м — для отсечения по дальности
+    this.destr = new Destruction(this); // разрушаемые стены, стёкла, заборы, обломки
     this.interactables = [];
     this.targets = []; // мишени полигона
     this.smokes = []; // дымы из труб
@@ -304,6 +307,8 @@ export class World {
           // быстрый отсев по AABB
           if (o.maxX < minx || o.minX > maxx || o.maxZ < minz || o.minZ > maxz) continue;
           const h = this.segObstacle(o, p0, p1);
+          // разрушаемая стена: сквозь выбитую плитку луч проходит
+          if (h && o.dw && !this.destr.solidAt(o, _rp.set(p0.x + (p1.x - p0.x) * h.t, p0.y + (p1.y - p0.y) * h.t, p0.z + (p1.z - p0.z) * h.t))) continue;
           if (h && (!best || h.t < best.t)) { best = h; best.obstacle = o; best.mat = o.mat; best.terrain = false; }
         }
       }
@@ -349,6 +354,7 @@ export class World {
     const resolve = (o) => {
       if (!o.blocksMove) return;
       if (o.y1 <= yFeet + step || o.y0 >= yFeet + height) return;
+      if (o.dw && this.destr.passable(o, pos.x, pos.z, yFeet)) return; // пролом в стене
       if (o.kind === 1) {
         const dx = pos.x - o.x, dz = pos.z - o.z, d = Math.hypot(dx, dz), m = o.r + r;
         if (d < m && d > 1e-6) { pos.x = o.x + (dx / d) * m; pos.z = o.z + (dz / d) * m; }

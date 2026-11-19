@@ -207,8 +207,16 @@ export class Projectiles {
     if (p.visual && best.kind !== 'static') {
       // чужой выстрел: только картинка, урон считает стрелок
       const dir = p.v.clone().normalize();
-      if (p.ammo.explosive) { this.explode(pt, p.ammo.explosive, p.owner, null, null, { visual: true }); }
-      else g.fx.impact(pt, dir.negate(), best.kind === 'soldier' ? 'blood' : 'metal');
+      if (p.ammo.explosive) { this.explode(pt, p.ammo.explosive, p.owner, best.kind === 'vehicle' ? best.hit.vehicle : null, null, { visual: true }); }
+      else {
+        if (best.kind === 'vehicle') {
+          // след на чужой технике рисуем и у себя (урон считает стрелок/хост)
+          const v = best.hit.vehicle, sp = p.v.length(), cap = p.ammo.pen * (sp / p.ammo.v0) ** 2;
+          if (v.dmg.wheelAt(pt) >= 0) v.dmg.tireMark(pt, dir);
+          else v.dmg.bulletMark(pt, dir, cap > v.armorAt(best.hit.normal) / Math.max(0.3, Math.abs(dir.dot(best.hit.normal))) ? 'hole' : 'scuff', p.ammo.caliber);
+        }
+        g.fx.impact(pt, dir.negate(), best.kind === 'soldier' ? 'blood' : 'metal');
+      }
       p.alive = false; return;
     }
     if (best.kind === 'soldier') this._hitSoldier(p, best.s, best.zone, pt, best.idx);
@@ -291,8 +299,17 @@ export class Projectiles {
     }
     const sp = p.v.length();
     const cap = p.ammo.pen * (sp / p.ammo.v0) * (sp / p.ammo.v0);
+    // шина: пробивается любой пулей (у «Тигра» — с вставкой для движения на спущенной)
+    if (v.dmg.wheelAt(pt) >= 0) {
+      v.damageHit(cap, pt, p.owner, false);
+      v.dmg.tireMark(pt, dir);
+      g.fx.impact(pt, hit.normal, 'snow', 0.5);
+      if (p.byPlayer) g.stats.hits++;
+      p.alive = false; return;
+    }
     const cosI = Math.abs(dir.dot(hit.normal));
     const armor = v.armorAt(hit.normal) / Math.max(0.3, cosI);
+    v.dmg.bulletMark(pt, dir, cap > armor ? 'hole' : 'scuff', p.ammo.caliber);
     if (cap > armor) {
       v.damageHit(cap, pt, p.owner, false);
       g.fx.impact(pt, hit.normal, 'metal');
@@ -328,8 +345,13 @@ export class Projectiles {
     }
     const o = hit.obstacle;
     const camD = pt.distanceTo(g.camPos);
+    const D = g.world.destr;
+    // стекло бьётся от любого попадания, пуля летит дальше
+    if (o && o.owner && o.owner.kind === 'glass') { D.shatter(o.owner, dir); }
+    // материал для эффектов и звука
+    const fxMat = mat === 'armor' ? 'metal' : mat === 'brick' ? 'concrete' : mat;
     if (p.ammo.explosive) {
-      if (p.dist >= (p.ammo.armDist || 0) && mat !== 'water') this.explode(pt.clone().addScaledVector(hit.normal, 0.1), p.ammo.explosive, p.owner, null, o && o.owner, { visual: !!p.visual });
+      if (p.dist >= (p.ammo.armDist || 0) && mat !== 'water') this.explode(pt.clone().addScaledVector(hit.normal, 0.1), p.ammo.explosive, p.owner, null, o && o.owner, { visual: !!p.visual, wall: o && o.dw ? o.dw : null });
       else { g.fx.impact(pt, hit.normal, mat === 'water' ? 'snow' : mat, 1.5); }
       p.alive = false; return;
     }
@@ -350,28 +372,42 @@ export class Projectiles {
     }
     const cosI = Math.abs(dir.dot(n));
     // рикошет от твёрдых поверхностей по касательной
-    if ((mat === 'metal' || mat === 'concrete' || mat === 'rock' || mat === 'ice' || mat === 'water') && cosI < 0.2 && Math.random() < 0.65) {
+    if ((mat === 'metal' || mat === 'armor' || mat === 'concrete' || mat === 'brick' || mat === 'rock' || mat === 'ice' || mat === 'water') && cosI < 0.2 && Math.random() < 0.65) {
       if (mat === 'water' || mat === 'ice') g.fx.impact(pt, n, 'snow', 0.7);
-      else g.fx.impact(pt, n, mat, 0.6);
+      else g.fx.impact(pt, n, fxMat, 0.6);
       this._ricochet(p, n, pt);
       return;
     }
-    // пробитие
+    const E = this.energy(p);
+    // пробитие: стойкость препятствия (мм брони-эквивалента: толщина × коэффициент материала)
+    // против бронепробития пули на текущей скорости. Пуля выходит с другой стороны — выходное
+    // отверстие, щепа/крошка, потеря скорости; так прошивается дощатая стена, контейнер, кузов
     if (o && o.pen > 0) {
       const sp = p.v.length();
-      const cap = p.ammo.pen * 5 * (sp / p.ammo.v0) * (sp / p.ammo.v0);
+      const cap = p.ammo.pen * (sp / p.ammo.v0) * (sp / p.ammo.v0);
       if (cap > o.pen) {
+        const far = pt.clone().addScaledVector(dir, 8);
+        const ex = g.world.segObstacle(o, far, pt);
+        const exitP = ex ? far.clone().lerp(pt, ex.t) : pt.clone().addScaledVector(dir, 0.35);
+        const exitN = ex ? new THREE.Vector3(ex.nx, ex.ny, ex.nz) : dir.clone();
+        if (o.dw) D.bulletHit(o, pt, dir, E * (o.pen / cap));
         p.v.multiplyScalar(Math.sqrt(1 - o.pen / cap));
-        p.v.x += randn() * 8; p.v.y += randn() * 8; p.v.z += randn() * 8;
-        p.p.copy(pt).addScaledVector(dir, 0.35);
-        g.fx.impact(pt, n, mat, 0.8);
-        if (camD < 150) g.fx.addDecal(pt, n, 0.02, 0x150f08);
+        const dev = 6 * (o.pen / cap);
+        p.v.x += randn() * dev; p.v.y += randn() * dev; p.v.z += randn() * dev;
+        p.p.copy(exitP).addScaledVector(dir, 0.02);
+        if (fxMat !== 'glass') {
+          g.fx.impact(pt, n, fxMat, 0.7);
+          g.fx.impact(exitP, exitN, fxMat, 0.9); // выходное: щепа/крошка наружу
+          if (camD < 150) { g.fx.addDecal(pt, n, 0.012 + p.ammo.caliber, 0x120c06); g.fx.addDecal(exitP, exitN, 0.02 + p.ammo.caliber * 1.6, 0x100a05); }
+          if (camD < 60) g.audio.impact(pt, fxMat);
+        }
         return;
       }
     }
-    g.fx.impact(pt, n, mat === 'water' ? 'snow' : mat, mat === 'snow' ? 1 + Math.min(1.5, camD / 300) : 1);
-    if (camD < 60) g.audio.impact(pt, mat);
-    if (camD < 180 && mat !== 'snow' && mat !== 'water') g.fx.addDecal(pt, n, mat === 'metal' ? 0.018 : 0.03, mat === 'metal' ? 0x2a2a2a : 0x1a1612);
+    if (o && o.dw) D.bulletHit(o, pt, dir, E);
+    g.fx.impact(pt, n, fxMat === 'water' ? 'snow' : fxMat, mat === 'snow' ? 1 + Math.min(1.5, camD / 300) : 1);
+    if (camD < 60) g.audio.impact(pt, fxMat);
+    if (camD < 180 && mat !== 'snow' && mat !== 'water') g.fx.addDecal(pt, n, fxMat === 'metal' ? 0.018 : 0.03, fxMat === 'metal' ? 0x2a2a2a : 0x1a1612);
     p.alive = false;
   }
 
@@ -393,6 +429,10 @@ export class Projectiles {
       if (pos.y - ground < 0.6) g.fx.addDecal(new THREE.Vector3(pos.x, ground, pos.z), g.world.terrain.normalAt(pos.x, pos.z), ex.radius * 0.9, 0x202020);
     }
     const src = new THREE.Vector3(pos.x, pos.y + 0.25, pos.z);
+    // проломы в стенах, стёкла, заборы (у всех — по своему снаряду; повтор у хоста не нужен)
+    if (!opts.net) g.world.destr.blast(pos, ex, opts.wall || null, owner);
+    // копоть, осколочные отметины, вмятины и пробоины на технике рядом (вид — у всех)
+    if (!opts.net) for (const v of g.vehicles) if (v === directVehicle || v.pos.distanceTo(pos) < ex.radius * 1.6 + v.type.len * 0.6) v.dmg.blastMarks(pos, ex, v === directVehicle);
     // осколки по дрону рядом с разрывом
     if (!visual) for (const d of g.drones || []) if (d.alive && d.pos.distanceTo(pos) < ex.frag * 0.8) g.hitDrone(d, 999, owner);
     if (fx || doSoldiers) for (const s of g.soldiers) {
@@ -427,7 +467,7 @@ export class Projectiles {
     for (const v of g.vehicles) {
       if (!v.alive || v === directVehicle) continue;
       const d = v.pos.distanceTo(pos);
-      if (d < ex.radius * 2.2) v.damageBlast(ex, d, owner);
+      if (d < ex.radius * 2.2) v.damageBlast(ex, d, owner, pos);
     }
     for (const dd of g.world.destructibles) {
       if (!dd.alive || dd.stowed) continue;

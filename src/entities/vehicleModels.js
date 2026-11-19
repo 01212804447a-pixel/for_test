@@ -5,6 +5,7 @@
 // Колесо = группа поворота (ось Y) → группа вращения (ось X): руль и качение не смешиваются.
 import * as THREE from 'three';
 import { side, loft, lathe, cylZ, cylX, cylY, rbox, torus, tube, xf, Parts } from '../weapons/gunkit.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const cache = {};
 function tex(key, w, h, draw, repeat = true) {
@@ -334,6 +335,101 @@ export function buildNiva(camoCols) {
 }
 
 // ---------- МТ-ЛБ ----------
+// Контур гусеницы в плоскости (z, y): ремень вокруг окружностей по часовой стрелке
+// (низ — вперёд, перед — вверх, верх — назад). Вогнутые перегибы (верх на катках) — излом.
+function trackPath() {
+  const t = 0.025, rw = 0.28 + t, rs = 0.25 + t;
+  const W = (i, top) => ({ c: [-2.2 + i * 0.88, 0.33], r: rw, top });
+  const C = [W(5), W(4), W(3), W(2), W(1), W(0), { c: [-2.85, 0.66], r: rs }, W(0, 1), W(1, 1), W(2, 1), W(3, 1), W(4, 1), W(5, 1), { c: [2.88, 0.6], r: rs }];
+  const n = C.length, beta = [];
+  for (let i = 0; i < n; i++) {
+    const A = C[i], B = C[(i + 1) % n];
+    const dx = B.c[0] - A.c[0], dy = B.c[1] - A.c[1], L = Math.hypot(dx, dy);
+    beta.push(Math.atan2(dy, dx) + Math.acos(Math.max(-1, Math.min(1, (A.r - B.r) / L))));
+  }
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const A = C[i], bin = beta[(i + n - 1) % n];
+    let bout = beta[i];
+    while (bout > bin) bout -= Math.PI * 2;
+    while (bin - bout > Math.PI * 2) bout += Math.PI * 2;
+    const arc = bin - bout;
+    if (arc > Math.PI * 1.2) { // вогнутый перегиб: лента касается катка сверху в одной точке
+      pts.push([A.c[0] + A.r * Math.cos(bin), A.c[1] + A.r * Math.sin(bin)]);
+      pts.push([A.c[0] + A.r * Math.cos(bout + Math.PI * 2), A.c[1] + A.r * Math.sin(bout + Math.PI * 2)]);
+      continue;
+    }
+    const k = Math.max(1, Math.ceil(arc / 0.12));
+    for (let j = 0; j <= k; j++) { const a = bin - (arc * j) / k; pts.push([A.c[0] + A.r * Math.cos(a), A.c[1] + A.r * Math.sin(a)]); }
+  }
+  // провис верхней ветви между катками
+  // равномерная выборка по длине
+  const seg = []; let len = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; const d = Math.hypot(b[0] - a[0], b[1] - a[1]); seg.push(len); len += d; }
+  const N = 720, P = new Float32Array(N * 2), T = new Float32Array(N * 2);
+  let j = 0;
+  for (let i = 0; i < N; i++) {
+    const u = (i / N) * len;
+    while (j < pts.length - 1 && seg[j + 1] <= u) j++;
+    const a = pts[j], b = pts[(j + 1) % pts.length];
+    const d = (j + 1 < pts.length ? seg[j + 1] : len) - seg[j], f = d > 1e-6 ? (u - seg[j]) / d : 0;
+    P[i * 2] = a[0] + (b[0] - a[0]) * f; P[i * 2 + 1] = a[1] + (b[1] - a[1]) * f;
+  }
+  for (let i = 0; i < N; i++) {
+    const a = (i + N - 2) % N, b = (i + 2) % N;
+    const dz = P[b * 2] - P[a * 2], dy = P[b * 2 + 1] - P[a * 2 + 1], l = Math.hypot(dz, dy) || 1;
+    T[i * 2] = dz / l; T[i * 2 + 1] = dy / l;
+  }
+  return { N, P, T, len };
+}
+
+let _linkGeo = null;
+function linkGeometry(pitch) {
+  if (_linkGeo) return _linkGeo;
+  const parts = [
+    new THREE.BoxGeometry(0.42, 0.035, pitch * 0.86),                 // башмак
+    new THREE.BoxGeometry(0.42, 0.022, 0.03).translate(0, 0.026, -pitch * 0.18), // грунтозацеп
+    new THREE.BoxGeometry(0.035, 0.06, pitch * 0.5).translate(-0.03, -0.045, 0), // гребень (направляющий)
+    new THREE.CylinderGeometry(0.012, 0.012, 0.44, 6).rotateZ(Math.PI / 2).translate(0, 0, pitch * 0.45), // палец
+  ];
+  _linkGeo = mergeGeometries(parts.map((g) => { const n = g.index ? g.toNonIndexed() : g; const o = new THREE.BufferGeometry(); o.setAttribute('position', n.attributes.position); o.setAttribute('normal', n.attributes.normal); return o; }));
+  return _linkGeo;
+}
+
+function buildTracks(g, M) {
+  const path = trackPath();
+  const count = Math.round(path.len / 0.118), pitch = path.len / count;
+  const mat = M.links || (M.links = new THREE.MeshStandardMaterial({ color: 0x3b3d40, roughness: 0.72, metalness: 0.55 }));
+  const geo = linkGeometry(pitch);
+  const sides = [];
+  for (const s of [-1, 1]) {
+    const im = new THREE.InstancedMesh(geo, mat, count);
+    im.castShadow = true; im.receiveShadow = true;
+    im.frustumCulled = false;
+    g.add(im);
+    sides.push({ im, x: s * 1.24, s, off: 0, last: NaN, broken: false });
+  }
+  const m4 = new THREE.Matrix4();
+  // переставить траки борта по смещению ленты off (м)
+  const place = (sd, off) => {
+    const { N, P, T, len } = path;
+    for (let i = 0; i < count; i++) {
+      let u = (off + i * pitch) % len; if (u < 0) u += len;
+      const fi = (u / len) * N, i0 = Math.floor(fi) % N, i1 = (i0 + 1) % N, f = fi - Math.floor(fi);
+      const z = P[i0 * 2] + (P[i1 * 2] - P[i0 * 2]) * f, y = P[i0 * 2 + 1] + (P[i1 * 2 + 1] - P[i0 * 2 + 1]) * f;
+      let tz = T[i0 * 2] + (T[i1 * 2] - T[i0 * 2]) * f, ty = T[i0 * 2 + 1] + (T[i1 * 2 + 1] - T[i0 * 2 + 1]) * f;
+      const l = Math.hypot(tz, ty) || 1; tz /= l; ty /= l;
+      // оси: X — поперёк, Z — по ходу (касательная), Y — наружу = Z × X
+      m4.set(1, 0, 0, sd.x, 0, tz, ty, y, 0, -ty, tz, z, 0, 0, 0, 1);
+      sd.im.setMatrixAt(i, m4);
+    }
+    sd.im.instanceMatrix.needsUpdate = true;
+    sd.last = off;
+  };
+  for (const sd of sides) place(sd, 0);
+  return { sides, place, pitch, count, path };
+}
+
 export function buildMTLB(camoCols) {
   const M = materials(camoCols, { scale: 0.32, dirtTop: 1.05, snow: 0.95, gloss: 0.75, metal: 0.35 });
   const g = new THREE.Group();
@@ -353,23 +449,21 @@ export function buildMTLB(camoCols) {
     P.add('dark', rbox(0.2, 0.15, 0.14, s * 0.85, 1.54, -2.25, 0.02));
     P.add('lens', lathe([[0, -2.34], [0.05, -2.335], [0.055, -2.32], [0, -2.32]], { x: s * 0.85, y: 1.54, seg: 16 }));
     for (let i = 0; i < 3; i++) P.add('metal', cylY(0.006, 1.46, 1.64, { x: s * 0.85 - 0.06 + i * 0.06, z: -2.35, seg: 5 }));
-    // гусеница
-    const tr = new THREE.Shape();
-    tr.moveTo(-3.05, 0.62); tr.lineTo(-2.7, 0.9); tr.lineTo(2.85, 0.9); tr.lineTo(3.05, 0.62); tr.lineTo(2.85, 0.06); tr.lineTo(-2.7, 0.06); tr.closePath();
-    const tg = new THREE.ExtrudeGeometry(tr, { depth: 0.42, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.05, bevelSegments: 2 });
-    tg.translate(0, 0, -0.21); tg.rotateY(-Math.PI / 2);
-    const uv = tg.attributes.uv, p = tg.attributes.position;
-    for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) * 2, (p.getZ(i) + p.getY(i)) * 2.4);
-    const track = new THREE.Mesh(tg, M.track); track.position.x = s * 1.2; track.castShadow = true; g.add(track);
-    res.track = res.track || []; res.track.push(track);
-    // траки-грунтозацепы поверх ленты (рельеф)
-    for (let i = 0; i < 46; i++) P.add('dark', rbox(0.44, 0.03, 0.05, s * 1.2, 0.045, -2.65 + i * 0.12, 0.008));
-    for (let i = 0; i < 46; i++) P.add('dark', rbox(0.44, 0.03, 0.05, s * 1.2, 0.915, -2.65 + i * 0.12, 0.008));
     // катки, ленивец, ведущее колесо
-    for (let i = 0; i < 6; i++) res.wheels.push(makeWheel(g, 0.28, 0.14, s * 1.43, 0.33, -2.2 + i * 0.88, M, { hubs: 6, lugs: 0, rimR: 0.84 }));
-    res.wheels.push(makeWheel(g, 0.25, 0.13, s * 1.43, 0.66, -2.85, M, { hubs: 10, lugs: 0, rimR: 0.8 }));
-    res.wheels.push(makeWheel(g, 0.25, 0.13, s * 1.43, 0.6, 2.88, M, { hubs: 6, lugs: 0, rimR: 0.84 }));
+    for (let i = 0; i < 6; i++) res.wheels.push(makeWheel(g, 0.28, 0.14, s * 1.36, 0.33, -2.2 + i * 0.88, M, { hubs: 6, lugs: 0, rimR: 0.84 }));
+    const spr = makeWheel(g, 0.24, 0.13, s * 1.36, 0.66, -2.85, M, { hubs: 10, lugs: 0, rimR: 0.8 });
+    // зубья ведущего колеса (13), входят между траками
+    const TP = new Parts();
+    for (let i = 0; i < 13; i++) { const a = (i / 13) * Math.PI * 2; TP.add('metal', rbox(0.1, 0.07, 0.06, 0, 0, 0, 0.01).translate(0, 0.25, 0).applyMatrix4(new THREE.Matrix4().makeRotationX(a))); }
+    spr.spin.add(TP.build(M));
+    res.wheels.push(spr);
+    res.wheels.push(makeWheel(g, 0.25, 0.13, s * 1.36, 0.6, 2.88, M, { hubs: 6, lugs: 0, rimR: 0.84 }));
+    for (const w of res.wheels) if (w.side === undefined) w.side = s;
   }
+  // Гусеницы: отдельные траки (инстансы) по контуру ведущее колесо — катки — ленивец.
+  // Верхняя ветвь лежит на катках (у МТ-ЛБ нет поддерживающих роликов). Траки бегут по
+  // контуру со скоростью своего борта — при повороте гусеницы вращаются с разной скоростью.
+  res.tracks = buildTracks(g, M);
   // приборы наблюдения водителя, люки, кормовые двери, выхлоп
   for (let i = 0; i < 3; i++) P.add('glass', rbox(0.2, 0.08, 0.07, -0.75 + i * 0.32, 1.72, -1.98, 0.01).rotateX(-0.3));
   P.add('paint', rbox(0.75, 0.08, 0.55, -0.6, 1.82, -1.3, 0.03));
@@ -400,7 +494,6 @@ export function buildMTLB(camoCols) {
   g.add(tur);
   res.turret = tur; res.gun = gun;
   res.steerWheels = [];
-  res.trackTex = M.track.map;
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   return res;
 }

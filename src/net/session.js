@@ -288,6 +288,7 @@ export class NetSession {
       if (!veh) continue;
       veh.hp = v[9];
       if (!v[10] && veh.alive) { m.netVisual = true; veh.destroy(null); m.netVisual = false; }
+      if (v[14] && (v[14] & ~veh.dmg.applied)) veh.dmg.apply(v[14] | veh.dmg.applied); // ходовая: колёса, гусеницы
       if (v[11]) {
         const vi = this.vehInterp[v[0]] || (this.vehInterp[v[0]] = { src: null, buf: new Interp([3]) });
         if (vi.src !== 'host') { vi.src = 'host'; vi.buf.reset(); }
@@ -568,7 +569,7 @@ export class NetSession {
       const fl = (s.alive ? 1 : 0) | (s.brain && s.brain.aiming ? 2 : 0) | (s.reloadT > 0 ? 4 : 0) | (s.hidden ? 8 : 0);
       ai.push([i, r2(s.pos.x), r2(s.pos.y), r2(s.pos.z), r3(s.yaw), r3(s.aimYaw), r3(s.aimPitch), Math.max(0, STANCES.indexOf(s.stance)), r2(s.vel.x), r2(s.vel.z), fl, s.vehicle ? m.vehicles.indexOf(s.vehicle) : -1, s.vehicle ? s.seat : -1]);
     }
-    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll)]);
+    const vh = m.vehicles.map((v, i) => [i, r2(v.pos.x), r2(v.pos.y), r2(v.pos.z), r3(v.yaw), r2(v.speed), r3(v.steer), r3(v.turretYaw), r3(v.gunPitch), Math.round(v.hp), v.alive ? 1 : 0, v.netPuppet ? 0 : 1, r3(v.pitch), r3(v.roll), v.dmg.state]);
     const st = m.stages[m.stageIdx];
     this.net.send({
       t: 'ws', ts: Math.round(performance.now()), st: m.stageIdx, od: st ? st.objs.map((o) => (o.done ? '1' : '0')).join('') : '',

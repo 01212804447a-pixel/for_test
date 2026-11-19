@@ -273,3 +273,45 @@ export function logTexture() {
     return toTex(c);
   });
 }
+
+// Кирпичная кладка (силикатный/красный кирпич на растворе), 512 px ≈ 1,5 м; bump — та же раскладка
+export function brickTexture(kind = 'red') {
+  return cached('brick' + kind, () => {
+    const S = 512, c = canvas(S), g = c.getContext('2d');
+    const b = canvas(S), gb = b.getContext('2d');
+    const rnd = mulberry32(kind === 'red' ? 31 : 37);
+    const n = new Noise2D(kind === 'red' ? 5 : 6);
+    const rows = 22, bh = S / rows, bw = bh * 2.6;
+    g.fillStyle = kind === 'red' ? '#8e8478' : '#9a978f'; g.fillRect(0, 0, S, S);
+    gb.fillStyle = '#202020'; gb.fillRect(0, 0, S, S);
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * bw * 0.5;
+      for (let x = -bw; x < S + bw; x += bw) {
+        const x0 = x + off + 1.5, y0 = r * bh + 1.5, w = bw - 3, h = bh - 3;
+        const t = rnd();
+        let col;
+        if (kind === 'red') {
+          // старый советский кирпич: приглушённый терракотовый, часть пережжённых тёмных и выцветших
+          const k = rnd(), dk = k < 0.1 ? 0.62 : k > 0.9 ? 1.12 : 1;
+          const R = (108 + t * 40) * dk, G = (64 + t * 22) * dk, B = (52 + t * 16) * dk;
+          col = `rgb(${R | 0},${G | 0},${B | 0})`;
+        }
+        else { const L = 190 + t * 35; col = `rgb(${L | 0},${(L - 4) | 0},${(L - 10) | 0})`; }
+        g.fillStyle = col; g.fillRect(x0, y0, w, h);
+        // сколы и копоть
+        if (rnd() < 0.15) { g.fillStyle = 'rgba(40,30,25,0.35)'; g.fillRect(x0 + rnd() * w * 0.6, y0, w * 0.3, h); }
+        gb.fillStyle = `rgb(${(170 + rnd() * 50) | 0},0,0)`; gb.fillRect(x0, y0, w, h);
+      }
+    }
+    // потёки, выветривание
+    const img = g.getImageData(0, 0, S, S);
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      const v = tileNoise(n, x, y, S, 7) * 18 - Math.max(0, tileNoise(n, x * 0.5 + 99, y * 0.15, S, 3)) * 22 * (y / S);
+      const i = (y * S + x) * 4;
+      img.data[i] += v; img.data[i + 1] += v; img.data[i + 2] += v;
+    }
+    g.putImageData(img, 0, 0);
+    const map = toTex(c), bump = toTex(b, { srgb: false });
+    return { map, bump };
+  });
+}

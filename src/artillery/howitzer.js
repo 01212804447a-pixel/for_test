@@ -40,6 +40,7 @@ export class Howitzer {
     this.tr = mode === 'travel' ? 1 : 0; this.trTarget = this.tr;
     this.rootYaw = heading ?? 0; this.rootPitch = 0; this.rootRoll = 0;
     this.towBy = null; this.snapT = 0;
+    this.mass = 3210; // боевая масса Д-30, кг
     this.az = dir;          // угломер (тыс.)
     this.elM = 0;           // возвышение ствола (тыс.)
     this.drum = 0;          // прицел на барабане (тыс.)
@@ -124,8 +125,8 @@ export class Howitzer {
     const at = (lx, lz) => ({ x: P.x + lx * c + lz * s, z: P.z - lx * s + lz * c });
     const sh = at(0, -0.6);
     this.colliders = [
-      W.addBoxCollider({ x: sh.x, z: sh.z, y0: P.y + 0.55, w: 2.1, d: 0.12, h: 1.08, yaw, mat: 'metal', pen: 7, cover: true, owner: { kind: 'gun', gun: this } }),
-      W.addCylCollider({ x: P.x, z: P.z, y0: P.y, r: 0.42, h: 1.35, mat: 'metal', pen: 35, cover: true, owner: { kind: 'gun', gun: this } }),
+      W.addBoxCollider({ x: sh.x, z: sh.z, y0: P.y + 0.55, w: 2.1, d: 0.12, h: 1.08, yaw, mat: 'armor', pen: 18, cover: true, owner: { kind: 'gun', gun: this } }), // щит: противопульная броня — 5,45/7,62 не берут, 14,5 прошивает
+      W.addCylCollider({ x: P.x, z: P.z, y0: P.y, r: 0.42, h: 1.35, mat: 'armor', pen: 60, cover: true, owner: { kind: 'gun', gun: this } }),
     ];
     this.collider = this.colliders[1];
     this._colAz = this.az;
@@ -415,7 +416,7 @@ export class Howitzer {
     d.pos.set(b.x, y + 0.35, b.z); d.yaw = b.yaw;
     d.mesh.position.set(b.x, y, b.z); d.mesh.rotation.y = b.yaw; d.mesh.visible = true;
     if (d.collider) W.removeObstacle(d.collider);
-    d.collider = W.addBoxCollider({ x: b.x, z: b.z, y0: y, w: 1.7, d: 1.0, h: 0.72, yaw: b.yaw, mat: 'wood', pen: 25, owner: d, cover: true });
+    d.collider = W.addBoxCollider({ x: b.x, z: b.z, y0: y, w: 1.7, d: 1.0, h: 0.72, yaw: b.yaw, mat: 'wood', pen: 8, owner: d, cover: true });
     d.stowed = false;
   }
   _stowBox() {

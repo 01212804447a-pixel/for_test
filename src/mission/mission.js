@@ -13,6 +13,7 @@ import { hdr as hdrAsset, texture as texAsset, hasAssets, model as modelAsset } 
 import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
+import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { Brain, Group } from '../ai/brain.js';
 import { ViewModel } from '../weapons/viewmodel.js';
@@ -79,10 +80,10 @@ function planOutskirts(seed, feats, boundary) {
   const nearRoad = (x, z, m) => roads.some((f) => distPoly(x, z, f.pts) < m);
   const ring = (r0, r1) => { const a = rnd() * Math.PI * 2, d = r0 + rnd() * (r1 - r0); return [Math.cos(a) * d, Math.sin(a) * d]; };
   const sites = [], hills = [], lakes = [];
-  for (let tries = 0; tries < 400 && sites.length < 4; tries++) {
+  for (let tries = 0; tries < 600 && sites.length < 6; tries++) {
     const [x, z] = ring(1700, boundary - 500);
     if (!onLand(x, z, 220) || nearRoad(x, z, 110)) continue;
-    if (sites.some((s) => Math.hypot(s.x - x, s.z - z) < 900)) continue;
+    if (sites.some((s) => Math.hypot(s.x - x, s.z - z) < (sites.length < 4 ? 900 : 650))) continue;
     sites.push({ x: Math.round(x), z: Math.round(z), yaw: rnd() * Math.PI * 2 });
   }
   for (let tries = 0; tries < 300 && hills.length < 9; tries++) {
@@ -227,7 +228,7 @@ export class Mission {
       this.outskirts = plan.sites;
       // холмы и озёра — до остальных особенностей (дороги и площадки миссии ложатся поверх)
       feats.unshift(...plan.hills, ...plan.lakes);
-      this.outskirts.forEach((s, i) => feats.push({ type: 'flat', x: s.x, z: s.z, r: i === 0 ? 85 : 40, fall: 60, dh: 0 }));
+      this.outskirts.forEach((s, i) => feats.push({ type: 'flat', x: s.x, z: s.z, r: [85, 60, 40, 40, 60, 45][i] || 40, fall: 60, dh: 0 }));
     }
     this.terrain = new Terrain({
       seed: tdef.seed, amp: tdef.amp, features: feats,
@@ -274,6 +275,7 @@ export class Mission {
     fill.position.set(-0.6, 0.8, 0.5);
     this.vmScene.add(fill);
     this.world = new World(this.scene, this.terrain);
+    this.world.destr.game = this;
     this.mats = ST.makeMats();
     this.fx = new Effects(this.scene);
     this.fx.night = e.time === 'night' || e.time === 'dusk';
@@ -555,7 +557,7 @@ export class Mission {
     const idx = this.netItems.length; this.netItems.push(it);
     this.interactables.push({ pos: it.pos, r: 2.2, label, hold, enabled: () => !it.done, action: () => { if (this.net && !this.net.isHost) { this.net.interactItem(idx); this.hud.message('Передано хосту…', 1); } else it.localTake(); } });
     // небольшая подставка-стол
-    this.world.addBox({ x, z, y0: gy, w: 1.2, d: 0.7, h: 0.78, material: this.mats.wood, mat: 'wood', pen: 20 });
+    this.world.addBox({ x, z, y0: gy, w: 1.2, d: 0.7, h: 0.78, material: this.mats.wood, mat: 'wood', pen: 5 });
     return it;
   }
 
@@ -566,7 +568,7 @@ export class Mission {
 
   addWeaponRack(x, z) {
     const y0 = this.terrain.heightAt(x, z);
-    this.world.addBox({ x, z, y0, w: 2.6, d: 0.5, h: 1.3, material: this.mats.woodDark, mat: 'wood', pen: 15 });
+    this.world.addBox({ x, z, y0, w: 2.6, d: 0.5, h: 1.3, material: this.mats.woodDark, mat: 'wood', pen: 3 });
     const opts = [...PRIMARY_CHOICES, 'rpg7'];
     opts.forEach((id, i) => {
       const px = x - 1.2 + (i / (opts.length - 1)) * 2.4;
@@ -677,9 +679,16 @@ export class Mission {
         POI.village(W, M, { x: s.x, z: s.z, yaw: s.yaw, n: 6, seed: 40, name });
         this.landmarks.push({ x: s.x, z: s.z, name: name.replace(' (нежил.)', '') });
       } else if (i === 1) {
-        POI.ruin(W, M, { x: s.x, z: s.z, yaw: s.yaw, seed: 41 });
-        POI.ruin(W, M, { x: s.x + 20, z: s.z + 9, yaw: s.yaw + 0.4, w: 9, d: 7, seed: 42 });
+        POI.ruinedBlock(W, M, { x: s.x, z: s.z, yaw: s.yaw, seed: 41 + (def.terrain.seed || 0) });
         this.landmarks.push({ x: s.x, z: s.z, name: 'развалины' });
+      } else if (i === 4) {
+        POI.farm(W, M, { x: s.x, z: s.z, yaw: s.yaw, seed: 51 + (def.terrain.seed || 0) });
+        this.landmarks.push({ x: s.x, z: s.z, name: 'ферма (нежил.)' });
+      } else if (i === 5) {
+        POI.hamlet(W, M, { x: s.x, z: s.z, yaw: s.yaw, seed: 61 });
+        const h2 = { x: s.x + Math.cos(s.yaw) * 34, z: s.z - Math.sin(s.yaw) * 34 };
+        if (POI.freeSpot(W, h2.x, h2.z, 12)) POI.hamlet(W, M, { x: h2.x, z: h2.z, yaw: s.yaw + 0.2, seed: 62 });
+        this.landmarks.push({ x: s.x, z: s.z, name: 'хутор' });
       } else if (i === 2) {
         POI.chum(W, M, { x: s.x, z: s.z, seed: 43 }); POI.chum(W, M, { x: s.x + 11, z: s.z - 7, seed: 44 });
         this.landmarks.push({ x: s.x, z: s.z, name: 'стойбище' });
@@ -689,6 +698,21 @@ export class Mission {
         this.landmarks.push({ x: s.x, z: s.z, name: 'брош. техника' });
       }
     });
+    // хутора и одиночные развалины между районом задания и окраинами — только на свободных
+    // ровных местах вдали от дорог, позиций противника и техники
+    const busy = [...this.soldiers.map((o) => o.pos), ...this.vehicles.map((o) => o.pos), new THREE.Vector3(def.start.x, 0, def.start.z)];
+    let placed = 0;
+    for (let k = 0; k < 120 && placed < 7; k++) {
+      const p = pick(1250, 1700, 0.9);
+      if (!p || busy.some((b) => Math.hypot(b.x - p.x, b.z - p.z) < 260)) continue;
+      if (sites.some((s2) => Math.hypot(s2.x - p.x, s2.z - p.z) < 300)) continue;
+      if (!POI.freeSpot(W, p.x, p.z, 26)) continue;
+      const yaw = rnd() * Math.PI * 2;
+      if (placed % 3 === 2) POI.ruin(W, M, { x: p.x, z: p.z, yaw, w: 10 + rnd() * 4, d: 7 + rnd() * 2, seed: 80 + k });
+      else POI.hamlet(W, M, { x: p.x, z: p.z, yaw, seed: 90 + k });
+      busy.push(new THREE.Vector3(p.x, 0, p.z));
+      placed++;
+    }
     // брошенные грузовики на продолжениях дорог
     for (const f of T.features) {
       if (f.type !== 'road') continue;
@@ -1214,8 +1238,10 @@ export class Mission {
     for (const s of this.soldiers) s.update(dt);
     if (host) for (const g of this.groups) g.update(dt);
     for (const v of this.vehicles) v.update(dt);
+    updateFlyingParts(this, dt);
     for (const h of this.guns) h.update(dt);
     for (const d of this.drones) d.update(dt, host);
+    this.world.destr.update(dt);
     if (host) this._droneRespawn();
     this.projectiles.update(dt);
     if (this.props) this.props.update(dt);
@@ -1571,6 +1597,7 @@ export class Mission {
   }
 
   dispose() {
+    clearFlyingParts();
     for (const d of this.drones || []) d.dispose();
     if (this.dv) { this.dv.rt.dispose(); this.dv.box.remove(); }
     if (this.net) this.net.dispose();

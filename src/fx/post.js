@@ -7,6 +7,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 
 const GradeShader = {
   uniforms: {
@@ -61,19 +62,25 @@ export class PostFX {
     this.composer.addPass(this.bloom);
     this.composer.addPass(this.grade);
     this.composer.addPass(this.out);
+    // FXAA на среднем качестве вместо MSAA: на слабых видеокартах дешевле в разы
+    this.fxaa = new ShaderPass(FXAAShader);
+    this.fxaa.enabled = false;
+    this.composer.addPass(this.fxaa);
     this.t = 0;
     addEventListener('resize', () => this.resize());
   }
 
   resize() {
-    const s = this.renderer.getSize(new THREE.Vector2());
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    const s = this.renderer.getSize(new THREE.Vector2()), pr = this.renderer.getPixelRatio();
+    this.composer.setPixelRatio(pr);
     this.composer.setSize(s.x, s.y);
+    if (this.fxaa) this.fxaa.material.uniforms.resolution.value.set(1 / (s.x * pr), 1 / (s.y * pr));
   }
 
   // Пресет цветокоррекции по времени суток
   preset(time) {
     const u = this.grade.uniforms;
+    this.time = time;
     if (time === 'night') { u.uLift.value.set(0.0, 0.004, 0.012); u.uGain.value.set(0.92, 1.0, 1.12); u.uSat.value = 0.85; u.uContrast.value = 1.08; this.bloom.strength = 0.6; this.bloom.threshold = 0.6; }
     else if (time === 'dusk') { u.uLift.value.set(0.006, 0.0, 0.01); u.uGain.value.set(1.04, 0.97, 1.02); u.uSat.value = 1.05; u.uContrast.value = 1.06; this.bloom.strength = 0.4; this.bloom.threshold = 0.8; }
     else { u.uLift.value.set(0.0, 0.0, 0.004); u.uGain.value.set(1.04, 1.01, 0.96); u.uSat.value = 1.0; u.uContrast.value = 1.12; this.bloom.strength = 0.28; this.bloom.threshold = 0.9; }
@@ -84,7 +91,8 @@ export class PostFX {
 
   setQuality(q) {
     this.quality = q;
-    const samples = q === 'high' ? 4 : q === 'medium' ? 2 : 0;
+    const samples = q === 'high' ? 4 : 0;
+    this.fxaa.enabled = q === 'medium';
     for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
       if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); }
     }
@@ -93,8 +101,25 @@ export class PostFX {
     this.resize();
   }
 
-  render(scene, camera, vmScene, vmCamera, dt = 0.016) {
+  // clip — квадрат окуляра {x, y, w, h} в CSS-пикселях (y сверху): сцена и все проходы
+  // постобработки считаются только в нём, остальное закрыто маской прицела
+  render(scene, camera, vmScene, vmCamera, dt = 0.016, clip = null) {
+    const r = this.renderer, rts = [this.composer.renderTarget1, this.composer.renderTarget2];
+    if (clip) {
+      const pr = r.getPixelRatio(), S = r.getSize(this._sz || (this._sz = new THREE.Vector2()));
+      const x = Math.max(0, Math.floor(clip.x)), w = Math.min(S.x - x, Math.ceil(clip.w));
+      const yTop = Math.max(0, Math.floor(clip.y)), h = Math.min(S.y - yTop, Math.ceil(clip.h)), y = S.y - yTop - h;
+      for (const rt of rts) { rt.scissor.set(x * pr, y * pr, w * pr, h * pr); rt.scissorTest = true; }
+      r.setScissor(x, y, w, h); r.setScissorTest(true);
+    }
+    this._render(scene, camera, vmScene, vmCamera, dt);
+    if (clip) { for (const rt of rts) rt.scissorTest = false; r.setScissorTest(false); }
+  }
+
+  _render(scene, camera, vmScene, vmCamera, dt) {
     this.t += dt;
+    // днём на среднем качестве bloom почти не виден (порог 0,9) — не считаем
+    if (this.quality !== 'low' && !this.keepBloom) this.bloom.enabled = this.quality === 'high' || this.time !== 'day';
     if (this.ao.enabled) { this.ao.scene = scene; this.ao.camera = camera; }
     this.grade.uniforms.uTime.value = this.t % 100;
     this.main.scene = scene; this.main.camera = camera;

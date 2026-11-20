@@ -39,3 +39,17 @@ export function mergeStatic(root) {
   }
   return { before, after };
 }
+
+// Заморозка матриц неподвижных объектов: three.js каждый кадр пересчитывает матрицы всех
+// объектов сцены (в задании ≈2600, ≈4 мс ЦП). Объекты верхнего уровня, которые не двигаются,
+// получают готовые матрицы и выпадают из обхода (matrixWorldAutoUpdate = false — обход в них
+// даже не спускается). dynamic(o) — объекты, которые двигаются (техника, бойцы, свет, небо…)
+export function freezeStatic(root, dynamic) {
+  root.updateMatrixWorld(true);
+  let n = 0;
+  for (const o of root.children) {
+    if (dynamic(o)) continue;
+    o.traverse((c) => { c.updateMatrix(); c.matrixAutoUpdate = false; c.matrixWorldAutoUpdate = false; n++; });
+  }
+  return n;
+}

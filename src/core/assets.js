@@ -44,11 +44,35 @@ export async function preload(onProgress) {
     try {
       const url = blobURL(n);
       if (n.startsWith('tex/')) tex.set(n, await texLoader.loadAsync(url));
-      else if (n.startsWith('models/')) gltfs.set(n, await gl.loadAsync(url));
+      else if (n.startsWith('models/')) { const g = await gl.loadAsync(url); cheapGlass(g.scene); gltfs.set(n, g); }
       else if (n.startsWith('hdr/')) hdrs.set(n, await hl.loadAsync(url));
     } catch (e) { console.warn('asset', n, e); }
     step();
   }));
+}
+
+// Стекло моделей Poly Haven (transmission) заставляет three.js рисовать всю непрозрачную сцену
+// ещё раз в отдельную цель — на GTX 1050 Ti это −8,6 мс за кадр в штабе. Заменяем обычной
+// прозрачностью до первой компиляции шейдеров
+export function cheapGlass(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material || [])) {
+      if (!m || !(m.transmission > 0)) continue;
+      m.transmission = 0; m.thickness = 0;
+      m.transparent = true; m.opacity = Math.min(m.opacity ?? 1, 0.25); m.depthWrite = false;
+      m.forceSinglePass = true;
+    }
+  });
+}
+
+// Прозрачные двусторонние материалы three.js рисует в два прохода и каждый раз помечает
+// изменёнными (material.needsUpdate) — лишняя перепроверка шейдера на каждом объекте каждый
+// кадр. Один проход — дешевле и без этого
+export function singlePassTransparent(root) {
+  root.traverse((o) => {
+    for (const m of [].concat(o.material || [])) if (m && m.transparent && m.side === THREE.DoubleSide) m.forceSinglePass = true;
+  });
 }
 
 // Текстура (клон с собственными настройками повторения)

@@ -97,7 +97,14 @@ class ParticlePool {
       C[i * 4 + 3] = this.a0[i] + (this.a1[i] - this.a0[i]) * t;
     }
     this.points.geometry.setDrawRange(0, this.n);
-    this.aPos.needsUpdate = this.aSize.needsUpdate = this.aCol.needsUpdate = true;
+    // в видеокарту — только живые частицы, а не весь буфер; пустой буфер не трогаем
+    if (this.n === 0 && this._nUp === 0) return;
+    this._nUp = this.n;
+    for (const [A, w] of [[this.aPos, 3], [this.aSize, 1], [this.aCol, 4]]) {
+      A.clearUpdateRanges();
+      A.addUpdateRange(0, Math.max(1, this.n) * w);
+      A.needsUpdate = true;
+    }
   }
 }
 
@@ -351,7 +358,12 @@ export class Effects {
       n++;
     }
     this.tracerMesh.geometry.setDrawRange(0, n * 6);
-    this.tPos.needsUpdate = this.tCol.needsUpdate = true;
+    if (n > 0 || this._tUp) {
+      this._tUp = n;
+      this.tPos.clearUpdateRanges(); this.tPos.addUpdateRange(0, Math.max(1, n) * 12);
+      this.tCol.clearUpdateRanges(); this.tCol.addUpdateRange(0, Math.max(1, n) * 16);
+      this.tPos.needsUpdate = this.tCol.needsUpdate = true;
+    }
     this.tracers.length = 0;
   }
 

@@ -1,7 +1,7 @@
 // Штаб (ПВД «Полярный Лис»): 3D-помещение со стендом таблиц стрельбы, картой операций,
 // стендом личного состава, оружейной пирамидой и выходом в автопарк.
 import * as THREE from 'three';
-import { mergeStatic } from '../core/mergeStatic.js';
+import { mergeStatic, freezeStatic } from '../core/mergeStatic.js';
 import { buildFiringTable, TABLE_WEAPONS } from '../physics/firingTable.js';
 import { drawChart, drawTable } from '../ui/charts.js';
 import { woodTexture, textTexture } from '../world/textures.js';
@@ -11,7 +11,7 @@ import { thirdPersonGun, buildGun } from '../weapons/guns.js';
 import { MISSIONS } from '../data/missions.js';
 import { lethalityTable } from '../data/lethality.js';
 import { WEAPONS } from '../data/weapons.js';
-import { model, pbr, hdr as hdrAsset } from '../core/assets.js';
+import { model, pbr, hdr as hdrAsset, cheapGlass, singlePassTransparent } from '../core/assets.js';
 import { ROSTER } from '../data/squad.js';
 import { clamp } from '../core/math.js';
 
@@ -407,6 +407,8 @@ export class HQ {
     this.buildPeople();
     // неподвижное — в общие сетки по материалам (меньше вызовов отрисовки)
     this.merged = mergeStatic(S);
+    // неподвижное — без пересчёта матриц каждый кадр (люди и свет — двигаются/мигают)
+    this.frozen = freezeStatic(S, (o) => o.isLight || (o.userData && o.userData.dyn));
   }
 
   hangLamp(x, z, H) {
@@ -536,6 +538,16 @@ export class HQ {
     if (this.rpgMark) this.rpgMark.visible = !!s.launcher;
   }
 
+  // все шейдеры штаба — на экране загрузки, параллельно (без рывка при первом взгляде)
+  async compileShaders() {
+    const r = this.app.renderer;
+    cheapGlass(this.scene); singlePassTransparent(this.scene);
+    if (!r.compileAsync) return;
+    r.setRenderTarget(this.app.post.composer.renderTarget1);
+    try { await Promise.race([r.compileAsync(this.scene, this.camera), new Promise((res) => setTimeout(res, 15000))]); } catch (e) { /* */ }
+    r.setRenderTarget(null);
+  }
+
   enter() {
     this.pos.set(0, 0, 4.2); this.yaw = 0; this.pitch = -0.05;
   }
@@ -587,6 +599,7 @@ export class HQ {
     if (this.camera.aspect !== innerWidth / innerHeight) { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); }
     this.app.post.preset('day');
     this.app.post.bloom.enabled = this.app.settings.quality !== 'low';
+    this.app.post.keepBloom = true; // светильники штаба — со свечением
     this.app.post.setAO(true);
     // помещение неподвижно: тени пересчитываем не каждый кадр
     r.shadowMap.autoUpdate = false;

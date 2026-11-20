@@ -88,6 +88,18 @@ export class AudioSys {
     };
   }
 
+  // ограничение одновременных звуков: в перестрелке десятки бойцов, и каждый выстрел создаёт
+  // свою цепочку узлов Web Audio — тише всего и дальше всего пропускаем (своё и взрывы — всегда)
+  _voice(dur, prio = false, d = 0) {
+    const now = this.ctx.currentTime, V = this._voices || (this._voices = []);
+    let n = 0;
+    for (let i = 0; i < V.length; i++) if (V[i] > now) V[n++] = V[i];
+    V.length = n;
+    if (!prio && (n >= 28 || (n >= 16 && d > 300))) return false;
+    V.push(now + dur);
+    return true;
+  }
+
   _out(sp, revAmt = 0.4) {
     const ctx = this.ctx;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = sp.lp;
@@ -130,6 +142,7 @@ export class AudioSys {
     const pr = SOUNDS[profileId] || SOUNDS.r545;
     const sp = own ? { d: 0, gain: 0.9, pan: 0, delay: 0, lp: 16000 } : this._spatial(pos);
     if (sp.d > 2500) return;
+    if (!this._voice(sp.delay + 0.6, own, sp.d)) return;
     const t0 = this.ctx.currentTime + sp.delay;
     const out = this._out(sp, 0.55);
     this._noiseBurst(out, t0, 0.025 + pr.decay * 0.15, { type: 'highpass', freq: pr.freq * 1.6, gain: pr.crack, q: 0.5 });
@@ -178,6 +191,7 @@ export class AudioSys {
     if (!this.ctx) return;
     const sp = this._spatial(pos);
     if (sp.d > 120) return;
+    if (!this._voice(sp.delay + 0.3, false, sp.d * 3)) return;
     const t0 = this.ctx.currentTime + sp.delay;
     const out = this._out(sp, 0.2);
     if (mat === 'metal') {
@@ -206,6 +220,7 @@ export class AudioSys {
     if (!this.ctx) return;
     const sp = this._spatial(pos);
     if (sp.d > 150) return;
+    if (!this._voice(sp.delay + 0.5, false, sp.d * 3)) return;
     const t0 = this.ctx.currentTime + sp.delay;
     const out = this._out(sp, 0.3);
     const o = this.ctx.createOscillator(); o.type = 'sine';
@@ -218,6 +233,7 @@ export class AudioSys {
     if (!this.ctx) return;
     const sp = own ? { d: 0, gain: 1, pan: 0, delay: 0, lp: 6000 } : this._spatial(pos);
     if (sp.d > 40) return;
+    if (!own && !this._voice(0.2, false, 400)) return;
     const t0 = this.ctx.currentTime + sp.delay;
     const out = this._out(sp, 0.05);
     this._noiseBurst(out, t0, 0.12, { type: 'bandpass', freq: 700 + Math.random() * 500, gain: loud, q: 1.2, attack: 0.015 });

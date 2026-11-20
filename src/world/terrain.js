@@ -280,7 +280,7 @@ export class Terrain {
       mat.map = snowMap; mat.normalMap = texAsset('snow_02_nor.jpg', { srgb: false }); mat.roughnessMap = texAsset('snow_02_rough.jpg', { srgb: false });
       mat.normalScale.set(0.7, 0.7); mat.roughness = 1;
     }
-    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 }, uSnowAvg: { value: snowMap ? 0.5 : 0.93 }, uWindDir: { value: new THREE.Vector2(1, 0) }, uDetail: { value: 1 } };
+    this.terrainUniforms = { uRock: { value: rock }, uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSparkle: { value: 1 }, uSnowAvg: { value: snowMap ? 0.5 : 0.93 }, uWindDir: { value: new THREE.Vector2(1, 0) }, uDetail: { value: 1 }, uDetailFar: { value: 240 } };
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.terrainUniforms);
       sh.vertexShader = sh.vertexShader
@@ -289,7 +289,7 @@ export class Terrain {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
 varying vec3 vWPos; varying vec3 vWNrm;
-uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle; uniform float uSnowAvg; uniform vec2 uWindDir; uniform float uDetail;
+uniform sampler2D uRock; uniform vec3 uSunDir; uniform float uSparkle; uniform float uSnowAvg; uniform vec2 uWindDir; uniform float uDetail; uniform float uDetailFar;
 float tHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
 float tN(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
   return mix(mix(tHash(i), tHash(i+vec2(1,0)), f.x), mix(tHash(i+vec2(0,1)), tHash(i+vec2(1,1)), f.x), f.y); }
@@ -302,11 +302,14 @@ vec3 triRock(vec3 p, vec3 n){
         .replace('#include <map_fragment>', `
   vec3 sn1 = texture2D(map, vWPos.xz / 3.0).rgb;
   vec3 sn2 = texture2D(map, vWPos.xz / 23.0 + 0.37).rgb;
-  float macro = texture2D(map, vWPos.xz / 380.0).r * 0.5 + texture2D(map, vWPos.xz / 97.0 + 0.5).g * 0.5;
+  // макро-вариация — одной выборкой (было две)
+  float macro = texture2D(map, vWPos.xz / 190.0 + 0.5).g;
   vec3 snowC = mix(sn1, sn2, 0.45) / uSnowAvg * 0.93 * (0.94 + (macro / uSnowAvg - 1.0) * 0.8);
   float slope = 1.0 - normalize(vWNrm).y;
   float rockW = smoothstep(0.2, 0.42, slope + (sn2.r - 0.93) * 2.0);
-  vec3 rockC = triRock(vWPos, normalize(vWNrm)) * vec3(0.95, 0.97, 1.02) * 1.15;
+  // камень (3 выборки триплана) — только там, где он есть
+  vec3 rockC = vec3(0.0);
+  if (rockW > 0.001) rockC = triRock(vWPos, normalize(vWNrm)) * vec3(0.95, 0.97, 1.02) * 1.15;
   vec4 sampledDiffuseColor = vec4(mix(snowC, rockC / max(vColor.rgb, vec3(0.2)), rockW), 1.0);
   diffuseColor *= sampledDiffuseColor;
   float snowW = 1.0 - rockW;`)
@@ -314,7 +317,7 @@ vec3 triRock(vec3 p, vec3 n){
   // заструги — гребни надувного снега вдоль ветра, пятнами; видны при низком солнце
   float snDist = length(cameraPosition - vWPos);
   {
-    float fadeS = (1.0 - smoothstep(70.0, 240.0, snDist)) * uDetail * snowW * smoothstep(0.86, 0.97, normalize(vWNrm).y);
+    float fadeS = (1.0 - smoothstep(uDetailFar * 0.3, uDetailFar, snDist)) * uDetail * snowW * smoothstep(0.86, 0.97, normalize(vWNrm).y);
     if (fadeS > 0.001) {
       vec2 wd = uWindDir, wn = vec2(-wd.y, wd.x);
       vec2 q = vec2(dot(vWPos.xz, wd), dot(vWPos.xz, wn));
@@ -329,7 +332,7 @@ vec3 triRock(vec3 p, vec3 n){
   }`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
   float snGlint = 0.0;
-  {
+  if (snDist < 60.0 && uSparkle > 0.0 && snowW > 0.01) {
     vec2 cell = floor(vWPos.xz * 22.0);
     float h = tHash(cell);
     vec3 V = normalize(cameraPosition - vWPos);

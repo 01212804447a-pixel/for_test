@@ -430,7 +430,7 @@ export function snowify(mat, amount = 1) {
   m.onBeforeCompile = (sh) => {
     sh.uniforms.snAmt = { value: amount };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vSnN;\nvarying vec3 vSnP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSnN = normalize(mat3(modelMatrix) * normal);\nvSnP = (modelMatrix * vec4(position, 1.0)).xyz;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n#ifdef USE_INSTANCING\nmat4 snM = modelMatrix * instanceMatrix;\n#else\nmat4 snM = modelMatrix;\n#endif\nvSnN = normalize(mat3(snM) * normal);\nvSnP = (snM * vec4(position, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 varying vec3 vSnN; varying vec3 vSnP; uniform float snAmt;
 float sn_h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }

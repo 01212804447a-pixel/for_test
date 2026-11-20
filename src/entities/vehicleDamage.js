@@ -127,6 +127,9 @@ function wreckMats() {
   return WRECK;
 }
 
+// для прогрева шейдеров на загрузке: все материалы остова и следов попаданий
+export function damageMaterials() { return [...Object.values(wreckMats()), ...Object.keys(TEX).map(decalMat)]; }
+
 // ---------- отлетевшие части (колёса, башня): баллистика, отскок, остановка ----------
 const PARTS = [];
 export function updateFlyingParts(game, dt) {

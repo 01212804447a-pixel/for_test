@@ -133,9 +133,10 @@ class App {
     this.hud.hide();
     if (!this.hq) {
       this.ui.loading('Штаб «Полярный Лис»');
-      setTimeout(() => {
+      setTimeout(async () => {
         this.hq = new HQ(this);
         this.hq.build(this.save.completed);
+        await this.hq.compileShaders();
         this.ui.close();
         this._enterHQ();
       }, 60);
@@ -155,12 +156,15 @@ class App {
     this.disposeMission();
     this.ui.loading(def.title);
     this.mode = 'loading';
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const squad = def.noSquad ? [] : this.save.squad.filter((x) => !(this.save.hospital[x] > 0));
         const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv, atgm: !!this.save.atgm });
         this.hud.reset();
         m.build();
+        // шейдеры — заранее и параллельно (без «Страница не отвечает» и рывков в бою)
+        this.ui.loading(`${def.title} — подготовка шейдеров`);
+        await m.compileShaders();
         this.mission = m;
         this.ui.close();
         this.hud.show();
@@ -205,7 +209,7 @@ class App {
     this.ui._netClear && this.ui._netClear();
     this.ui.loading(`${def.title} — ${room.mode === 'pvp' ? 'противостояние' : 'кооператив'}`);
     this.mode = 'loading';
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const session = new NetSession(this, this.net, start);
         const pvp = room.mode === 'pvp';
@@ -217,6 +221,8 @@ class App {
         const m = new Mission(this, def, { squad: [], primary, launcher: kit.heavy || null, grenades: kit.grenades, smokes: kit.smokes ?? 2, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: false, net: session });
         this.hud.reset();
         m.build();
+        this.ui.loading(`${def.title} — подготовка шейдеров`);
+        await m.compileShaders(8000); // в сети ждём не дольше 8 с
         this.mission = m;
         this.ui.close();
         this.hud.show();

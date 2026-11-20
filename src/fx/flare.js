@@ -6,7 +6,7 @@ import * as THREE from 'three';
 
 const I0 = 200000; // сила света в единицах сцены (≈ 1 у земли под факелом на 450 м; луна — 0,35)
 
-function flareModel() {
+export function flareModel() {
   const g = new THREE.Group();
   const cloth = new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.9, side: THREE.DoubleSide });
   const dome = new THREE.Mesh(new THREE.SphereGeometry(1.4, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2.4), cloth);

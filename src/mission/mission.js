@@ -1,5 +1,6 @@
 // Рантайм миссии: мир, бойцы, техника, снаряды, камера, прицелы, задачи и скрипты
 import * as THREE from 'three';
+import { freezeStatic } from '../core/mergeStatic.js';
 import { Terrain } from '../world/terrain.js';
 import { World } from '../world/world.js';
 import { makeLighting } from '../world/sky.js';
@@ -9,15 +10,15 @@ import { Effects } from '../fx/effects.js';
 import * as POI from '../world/poi.js';
 import { scatterGround, GroundCover, snowify } from '../world/flora.js';
 import { Props } from '../world/props.js';
-import { hdr as hdrAsset, texture as texAsset, hasAssets, model as modelAsset } from '../core/assets.js';
+import { hdr as hdrAsset, texture as texAsset, hasAssets, model as modelAsset, cheapGlass, singlePassTransparent } from '../core/assets.js';
 import { Soldier, solverFor } from '../entities/soldier.js';
 import { Player, makeState } from '../entities/player.js';
 import { Vehicle, VEHICLE_TYPES } from '../entities/vehicle.js';
-import { updateFlyingParts, clearFlyingParts } from '../entities/vehicleDamage.js';
+import { updateFlyingParts, clearFlyingParts, damageMaterials } from '../entities/vehicleDamage.js';
 import { SnowTrails } from '../world/trails.js';
 import { WIND } from '../world/shaders.js';
 import { SmokeScreens } from '../fx/smoke.js';
-import { Flares } from '../fx/flare.js';
+import { Flares, flareModel } from '../fx/flare.js';
 import { AmmoPiles } from '../artillery/ammoPile.js';
 import { buildArmory } from './armory.js';
 import { precomputeTables } from '../core/bgTables.js';
@@ -34,7 +35,7 @@ import { mulberry32, clamp, lerp, rand, randn, MIL, wrapAngle } from '../core/ma
 import { Howitzer } from '../artillery/howitzer.js';
 import { Mortar } from '../artillery/mortar.js';
 import { Kpv } from '../artillery/kpv.js';
-import { Atgm } from '../artillery/atgm.js';
+import { Atgm, missileModel } from '../artillery/atgm.js';
 import { canCarry } from '../artillery/emplace.js';
 import { pvpMap, NET_ROLES, kitOf } from '../data/pvp.js';
 import { grenadeModel, smokeGrenadeModel } from '../weapons/guns.js';
@@ -224,6 +225,65 @@ export class Mission {
     fx.smoke.n = snap.smoke; fx.glow.n = snap.glow; fx.tracers.length = snap.tracers; fx.emitters = snap.emitters; fx._di = snap.di; fx.decals.count = snap.dc;
     for (const l of fx.lights) l.intensity = 0;
     fx.update(0);
+  }
+
+  // Компиляция всех шейдеров сцены заранее, на экране загрузки, без блокировки страницы
+  // (KHR_parallel_shader_compile). Включает то, чего на сцене ещё нет: остов, следы попаданий,
+  // факел, «лом», снаряды и мины в руках, ракету ПТРК. Варианты: основной конвейер (цель
+  // композера, туман), врезка камеры снаряда (прямо в окно, без тумана), окно БПЛА.
+  // всё, что двигается: остальное на сцене к этому моменту — неподвижная статика
+  _freezeStatic() {
+    const dyn = new Set();
+    const add = (o) => { if (o) dyn.add(o); };
+    for (const v of this.vehicles) { add(v.mesh); add(v.blob); }
+    for (const s of this.soldiers) { if (s.model) add(s.model.root); add(s.blob); }
+    for (const h of this.guns) { if (h.model) add(h.model.root); if (h.box) add(h.box.mesh); for (const c of h.crew || []) { if (c.man) add(c.man.root); if (c.model && c.model.root) add(c.model.root); } }
+    for (const d of this.drones || []) { add(d.mesh); add(d.root); }
+    if (this.props) for (const b of this.props.list || this.props.bodies || []) add(b.mesh);
+    if (this.ammoPiles) for (const d of this.ammoPiles.pool) add(d.mesh);
+    if (this.lights) { add(this.lights.sky && this.lights.sky.mesh); add(this.lights.sun && this.lights.sun.target); }
+    const fx = this.fx; if (fx) { add(fx.smoke.points); add(fx.glow.points); add(fx.decals); add(fx.tracerMesh); }
+    const keep = (o) => dyn.has(o) || o.isLight || o.isCamera || o.isPoints || o.isSkinnedMesh || (o.userData && o.userData.dyn) || o.type === 'Bone';
+    this.frozen = freezeStatic(this.scene, (o) => {
+      if (keep(o)) return true;
+      let moving = false;
+      o.traverse((c) => { if (!moving && (c.isSkinnedMesh || c.isLight || dyn.has(c))) moving = true; });
+      return moving;
+    });
+  }
+
+  async compileShaders(limitMs = 20000) {
+    const r = this.renderer, cam = this.camera, post = this.app.post;
+    this._freezeStatic();
+    cheapGlass(this.scene); singlePassTransparent(this.scene); singlePassTransparent(this.vmScene);
+    if (!r.compileAsync) return;
+    const temp = new THREE.Group();
+    temp.position.copy(cam.position);
+    const box = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+    try {
+      for (const m of damageMaterials()) temp.add(new THREE.Mesh(box, m));
+      temp.add(flareModel(), this.projectiles.dartMesh(), missileModel());
+      const I = crewItems(); temp.add(I.shell.clone(), I.charge.clone(), I.mine.clone());
+    } catch (e) { /* что-то не собралось — прогреется в игре */ }
+    this.scene.add(temp);
+    const t0 = performance.now();
+    const step = async (target, scene, camera) => {
+      if (performance.now() - t0 > limitMs) return;
+      r.setRenderTarget(target);
+      await Promise.race([r.compileAsync(scene, camera), new Promise((res) => setTimeout(res, Math.max(100, limitMs - (performance.now() - t0))))]);
+    };
+    try {
+      await step(post.composer.renderTarget1, this.scene, cam);
+      await step(post.composer.renderTarget1, this.vmScene, this.vmCamera);
+      const fog = this.scene.fog;
+      this.scene.fog = null;
+      await step(null, this.scene, cam);
+      this.scene.fog = fog;
+      if (this.myDrone && this._dvInit) { const dv = this._dvInit(); await step(dv.rt, this.scene, cam); }
+    } catch (e) { console.warn('compileShaders', e); }
+    r.setRenderTarget(null);
+    this.scene.remove(temp);
+    this.shaderMs = Math.round(performance.now() - t0);
   }
 
   _build() {
@@ -431,6 +491,7 @@ export class Mission {
       });
     }
     this.world.finalize({ navCenter: def.navCenter || { x: 0, z: 0 }, navSize: def.navSize || 800 });
+    this._buildModelBatches();
     const qk = this.settings.quality === 'low' ? 0.5 : this.settings.quality === 'high' ? 1.4 : 1;
     scatterGround(this.scene, this.terrain, this.world, { seed: def.terrain.seed, wind: this.wind, grass: Math.floor(9000 * qk), shrubs: Math.floor(3000 * qk), stones: Math.floor(1500 * qk), drifts: Math.floor(500 * qk), radius: 950, center: def.groundCenter || { x: 0, z: 0 }, avoid: [{ x: def.start.x, z: def.start.z, r: 12 }, ...(def.clearZones || [])] });
     for (const sp of this.world.smokes) this.fx.addSmoke(sp, 1);
@@ -439,6 +500,9 @@ export class Mission {
     this.cover = new GroundCover(this.scene, this.terrain, this.world, { density: qk, radius: this.settings.quality === 'low' ? 100 : 150 });
     this.terrain.terrainUniforms.uSunDir.value.copy(this.lights.sunDir);
     this.terrain.terrainUniforms.uSparkle.value = e.time === 'night' ? 0.25 : e.time === 'dusk' ? 0.6 : 1;
+    // заструги: на низком качестве нет, на среднем — ближе
+    this.terrain.terrainUniforms.uDetail.value = this.settings.quality === 'low' ? 0 : 1;
+    this.terrain.terrainUniforms.uDetailFar.value = this.settings.quality === 'high' ? 240 : 140;
     // ветер для застругов, качания деревьев и травы
     { const wl = Math.hypot(this.wind.x, this.wind.z) || 1; this.terrain.terrainUniforms.uWindDir.value.set(this.wind.x / wl, this.wind.z / wl); }
     this.terrain.terrainUniforms.uDetail.value = this.settings.quality === 'low' ? 0 : 1;
@@ -674,16 +738,48 @@ export class Mission {
   }
 
   // Статичная модель (камни, стволы) на рельефе со снегом и препятствием
+  // Неподвижная модель (камни, пни, стволы): не копия модели, а запись в пачку — после постройки
+  // мира все расстановки одной модели рисуются инстансами по плиткам 250×250 м (вызов
+  // отрисовки на плитку и деталь вместо сотен копий; дальние плитки скрываются)
   staticModel(name, x, z, { ry = 0, scale = 1, sink = 0.15, collide = 0, snow = 1, mat = 'rock' } = {}) {
     const g = modelAsset(name);
     if (!g) return null;
-    const o = g.scene.clone(true);
     const y0 = this.terrain.heightAt(x, z);
-    o.position.set(x, y0 - sink * scale, z); o.rotation.y = ry; o.scale.setScalar(scale);
-    o.traverse((m) => { if (m.isMesh) { m.material = snowify(m.material, snow); m.castShadow = true; m.receiveShadow = true; } });
-    this.scene.add(o);
+    const key = name + '|' + snow;
+    const B = this._batches || (this._batches = new Map());
+    if (!B.has(key)) B.set(key, { g, snow, list: [] });
+    B.get(key).list.push(new THREE.Matrix4().compose(new THREE.Vector3(x, y0 - sink * scale, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry), new THREE.Vector3(scale, scale, scale)));
     if (collide) this.world.addCylCollider({ x, z, y0: y0 - 0.5, r: collide * scale, h: 1.2 * scale + 0.5, mat });
-    return o;
+    if (this._batchesDone) this._buildModelBatches(); // поставлена уже после постройки мира
+    return true;
+  }
+
+  _buildModelBatches() {
+    const TILE = 250;
+    for (const { g, snow, list } of (this._batches || new Map()).values()) {
+      g.scene.updateMatrixWorld(true);
+      const parts = [];
+      g.scene.traverse((m) => { if (m.isMesh) parts.push({ geo: m.geometry, mat: snowify(m.material, snow), local: m.matrixWorld.clone() }); });
+      const tiles = new Map();
+      for (const M of list) {
+        const k = Math.floor(M.elements[12] / TILE) + ',' + Math.floor(M.elements[14] / TILE);
+        if (!tiles.has(k)) tiles.set(k, []);
+        tiles.get(k).push(M);
+      }
+      const tmp = new THREE.Matrix4();
+      for (const mats of tiles.values()) for (const p of parts) {
+        const im = new THREE.InstancedMesh(p.geo, p.mat, mats.length);
+        mats.forEach((M, i) => im.setMatrixAt(i, tmp.multiplyMatrices(M, p.local)));
+        im.instanceMatrix.needsUpdate = true;
+        im.castShadow = true; im.receiveShadow = true;
+        im.matrixAutoUpdate = false; im.matrixWorldAutoUpdate = false; im.updateMatrixWorld(true);
+        im.computeBoundingSphere();
+        this.scene.add(im);
+        this.world.staticTiles.push({ mesh: im, c: im.boundingSphere.center, r: im.boundingSphere.radius });
+      }
+    }
+    this._batches = null;
+    this._batchesDone = true;
   }
 
   scatter({ x, z, r, rocks = 0, trees = 0, avoid = [], road = false, seed = 7, forest = false, lite = false }) {
@@ -1659,7 +1755,25 @@ export class Mission {
     return (2 * Math.atan(t) * 180) / Math.PI;
   }
 
+  // квадрат вокруг круга окуляра (прицел танка, оптика, панорама/ОП4М, ПТРК): только он
+  // и рисуется — остальной экран закрыт маской. В прицеле это ≈ треть пикселей
+  _eyepiece() {
+    const p = this.player, W = innerWidth, H = innerHeight;
+    let R = 0, ox = 0, oy = 0;
+    const v = p.vehicle;
+    if (v && v.tank && p.seat === 2 && !v.tank.hatch && (v.tank.view === 'gunner' || v.tank.view === 'tkn')) R = Math.min(W, H) * 0.47;
+    else if (p.gun && p.gun.kind === 'atgm' && p.gun.zoom) R = Math.min(W, H) * 0.46;
+    else if (p.gun && p.gun.ui && p.gun.ui.ret && (p.gun.view === 'pano' || p.gun.view === 'op4m')) R = H * 0.46;
+    else if (this.scopeDraw) { R = H * 0.46; ox = this.scopeDraw.offX || 0; oy = this.scopeDraw.offY || 0; }
+    if (!R) return null;
+    R += 3;
+    const cx = W / 2 + ox, cy = H / 2 + oy;
+    if (cx - R > W || cx + R < 0 || cy - R > H || cy + R < 0) return null;
+    return { x: cx - R, y: cy - R, w: 2 * R, h: 2 * R };
+  }
+
   render() {
+    this.app.post.keepBloom = false;
     // тени солнца: на низком и среднем качестве — через кадр (камера тени следует за игроком плавно)
     const sq = this.settings.quality;
     this._shF = (this._shF || 0) + 1;
@@ -1669,7 +1783,7 @@ export class Mission {
     const dvOn = this._droneViewOn();
     if (dvOn) this._droneRT(fogD);
     this.world.cullStatic(this.camera.position, fogD);
-    this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60);
+    this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60, this._eyepiece());
     this._droneOverlay(dvOn);
     if (dvOn) this._droneBlit();
     const hc = this.hitcam;
@@ -1718,7 +1832,8 @@ export class Mission {
     if (this.dv) { this.dv.rt.dispose(); this.dv.box.remove(); }
     if (this.net) this.net.dispose();
     if (this.hitcam) this.hitcam.box.remove();
-    for (const h of this.guns || []) if (h.ui) { h.ui.panel.remove(); h.ui.ret.remove(); }
+    for (const h of this.guns || []) if (h.ui) { if (h.ui.panel) h.ui.panel.remove(); if (h.ui.ret) h.ui.ret.remove(); }
+    for (const v of this.vehicles || []) if (v.tank) v.tank.dispose(); // прицел и панель танка
     this.hud.root.classList.remove('gunner');
     this.audio.stopAllEngines();
     this.projectiles.clear();

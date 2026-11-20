@@ -214,7 +214,9 @@ export class Soldier {
           stance: this.stance, aimPitch: mountGun ? V.gunPitch + V.pitch * Math.cos(V.turretYaw) : this.aimPitch, aimYaw: this.aimYaw, aiming: mountGun ? true : this.brain ? this.brain.aiming : !!this.netAiming, dead: !this.alive,
           reload: this.reloadT > 0 ? 1 - this.reloadT / (this.reloadTotal || 2.5) : -1, groundY: this.pos.y,
         });
-        m.root.updateMatrixWorld(true);
+        // матрицы скелета считаем сами (сцена их не обходит): вдали — только когда обновлялась поза
+        if (m.root.matrixWorldAutoUpdate) m.root.matrixWorldAutoUpdate = false;
+        if (m.skinUpdate || camD2 < 6400 || mountGun) m.root.updateMatrixWorld(true);
         if (m.anim) {
           if (mountGun && this.alive) {
             mountGun.updateWorldMatrix(true, false);

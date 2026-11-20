@@ -1,5 +1,6 @@
 // Рантайм миссии: мир, бойцы, техника, снаряды, камера, прицелы, задачи и скрипты
 import * as THREE from 'three';
+import { LOG } from '../core/gamelog.js';
 import { freezeStatic } from '../core/mergeStatic.js';
 import { Terrain } from '../world/terrain.js';
 import { World } from '../world/world.js';
@@ -167,7 +168,7 @@ export class Mission {
     const ids = new Set(['ak74m', 'rpg7', 'pkm']);
     for (const so of this.soldiers) if (so.weaponId) ids.add(so.weaponId);
     for (const v of this.vehicles) if (v.type.gun) ids.add(v.type.gun);
-    for (const id of ids) if (WEAPONS[id]) solverFor(id, this.zeroEnv);
+    for (const id of ids) if (WEAPONS[id]) { try { solverFor(id, this.zeroEnv); } catch (e) { console.warn('warmup solver ' + id, e); } }
     const pl = this.player;
     for (const ws of pl.slots) {
       if (!ws || ws.grenade || ws.binocular) continue;
@@ -908,6 +909,7 @@ export class Mission {
     const prev = this.stages[this.stageIdx];
     if (prev && prev.onDone) prev.onDone();
     this.stageIdx++;
+    LOG.ev('этап', { i: this.stageIdx, mt: Math.round(this.time) });
     const st = this.stages[this.stageIdx];
     if (!st) { this.success(); return; }
     if (this.stageIdx > 0) { this.hud.message('Задача выполнена', 2.5); this.audio.radio(); }
@@ -1160,6 +1162,7 @@ export class Mission {
   onDestructible(d, by) {
     if (!d.alive) return;
     d.alive = false;
+    LOG.crumb('разрушено: ' + d.kind);
     if (d.kind === 'ammo') { d.gun.boxExplode(by); return; }
     if (d.kind === 'pile') { this.ammoPiles.explode(d, by); return; }
     if (d.kind === 'art') {
@@ -1187,6 +1190,7 @@ export class Mission {
   }
 
   onVehicleDestroyed(v, by) {
+    LOG.ev('техника уничтожена', { type: v.type.id, team: v.team });
     if (v.team === 'negs' && v.crewTeam !== 'denter') this.hud.message(`${v.type.name} уничтожен!`, 3);
     else this.hud.message(`Техника противника уничтожена: ${v.type.name}`, 3);
   }
@@ -1414,6 +1418,7 @@ export class Mission {
     const inp = this.input;
     const net = this.net, host = !net || net.isHost;
     if (net) net.preUpdate(dt);
+    LOG.mark('обн.сеть');
     if (inp.bh('map') && !this.player.gun) this.mapVisible = !this.mapVisible;
     // БПЛА: Y — окно камеры, U — облёт точки, куда смотрит игрок (или прицел орудия)
     const myDrone = this.myDrone;
@@ -1436,19 +1441,32 @@ export class Mission {
     }
     this.squadVisible = inp.bd('squad') && !net;
     if (!net || inp.active) this.player.update(dt);
-    for (const s of this.soldiers) s.update(dt);
+    LOG.mark('обн.игрок');
+    if (LOG.on) {
+      // журнал: самый долгий боец кадра (зависший поиск пути, перебор целей)
+      let wMs = 0, wS = null;
+      for (const s of this.soldiers) { const a = performance.now(); s.update(dt); const d = performance.now() - a; if (d > wMs) { wMs = d; wS = s; } }
+      LOG.slowest('боец', wMs, wS);
+    } else for (const s of this.soldiers) s.update(dt);
+    LOG.mark('обн.бойцы');
     if (host) for (const g of this.groups) g.update(dt);
+    LOG.mark('обн.ИИгрупп');
     for (const v of this.vehicles) v.update(dt);
+    LOG.mark('обн.техника');
     updateFlyingParts(this, dt);
     this.trails.update(dt);
     this.smokeScreens.update(dt);
     this.flares.update(dt);
     WIND.uTime.value += dt;
+    LOG.mark('обн.обломки,следы,дым');
     for (const h of this.guns) h.update(dt);
+    LOG.mark('обн.орудия');
     for (const d of this.drones) d.update(dt, host);
     this.world.destr.update(dt);
     if (host) this._droneRespawn();
+    LOG.mark('обн.дроны,разрушения');
     this.projectiles.update(dt);
+    LOG.mark('обн.снаряды');
     if (this.props) this.props.update(dt);
     // мишени РЛС крутятся
     for (const d of this.world.destructibles) if (d.kind === 'radar' && d.spin) d.head.rotation.y += d.spin * dt;
@@ -1462,6 +1480,7 @@ export class Mission {
       }
       a.needsUpdate = true;
     }
+    LOG.mark('обн.предметы,флаги');
     // скрипты
     if (host) for (const fn of this.updaters) fn(dt);
     if (host) this.updateScouts(dt); else { for (const mk of this.marks) if (this.time - mk.t > mk.ttl) mk.alive = false; this.marks = this.marks.filter((mk) => mk.alive); }
@@ -1473,9 +1492,12 @@ export class Mission {
       if (all) this.nextStage();
     }
     this.noises = this.noises.filter((n) => this.time - n.time < 1.2);
+    LOG.mark('обн.сценарий');
     this.updateCamera(dt);
     this.updateHitcam(dt);
+    LOG.mark('обн.камера');
     this.fx.update(dt);
+    LOG.mark('обн.эффекты');
     if (this.snow) this.snow.update(dt, this.camPos);
     if (this.cover) this.cover.update(this.camPos);
     this.lights.sky.update(dt, this.camPos);
@@ -1487,8 +1509,11 @@ export class Mission {
     sun.position.copy(sun.target.position).addScaledVector(this.lights.sunDir, 220);
     this.audio.setListener(this.camPos.x, this.camPos.y, this.camPos.z, this.player.vehicle ? this.player.yaw : this.player.yaw);
     this.audio.setWind(this.wind.length() + (this.def.env.snow || 0) * 6);
+    LOG.mark('обн.небо,звук');
     this.hud.update(this, dt);
+    LOG.mark('обн.интерфейс');
     if (net) net.postUpdate(dt);
+    LOG.mark('обн.сеть');
   }
 
   updateCamera(dt) {
@@ -1780,12 +1805,17 @@ export class Mission {
     this.renderer.shadowMap.autoUpdate = sq === 'high' || (this._shF & 1) === 0;
     let fogD = this.scene.fog && this.scene.fog.density > 0 ? 2.0 / this.scene.fog.density : 1e9;
     if (this.wideMap) fogD = Math.min(fogD, this.settings.quality === 'low' ? 3500 : 6000);
+    LOG.mark('рис.подготовка');
     const dvOn = this._droneViewOn();
     if (dvOn) this._droneRT(fogD);
+    LOG.mark('рис.дрон');
     this.world.cullStatic(this.camera.position, fogD);
+    LOG.mark('рис.отсечение');
     this.app.post.render(this.scene, this.camera, this.vmVisible ? this.vmScene : null, this.vmCamera, 1 / 60, this._eyepiece());
+    LOG.mark('рис.сцена');
     this._droneOverlay(dvOn);
     if (dvOn) this._droneBlit();
+    LOG.mark('рис.дрон');
     const hc = this.hitcam;
     if (hc && hc.proj && (hc.on || (hc.shellCam && hc.proj.ammo.kind === 'shell'))) {
       const r = this.renderer;
@@ -1812,6 +1842,7 @@ export class Mission {
       sky.position.copy(skyPos);
       for (const [u, sc, fd] of fxU) { u.uScale.value = sc; u.uFogDensity.value = fd; }
       this.scene.fog = fog;
+      LOG.mark('рис.врезка');
     }
     const sc = this.hud.scopeCanvas;
     if (this.scopeDraw) {
@@ -1824,6 +1855,7 @@ export class Mission {
       sc.getContext('2d').clearRect(0, 0, sc.width, sc.height);
       sc.style.display = 'none';
     }
+    LOG.mark('рис.оптика2D');
   }
 
   dispose() {

@@ -202,7 +202,7 @@ function onMessage(c, raw) {
       if (m.ver !== VER) send(c, { t: 'err', msg: 'Версия игры не совпадает с сервером — обновите страницу.' });
       send(c, { t: 'rooms', list: roomList() });
       break;
-    case 'ping': send(c, { t: 'pong', c: m.c, s: now() }); if (typeof m.rtt === 'number') c.ping = Math.round(m.rtt); break;
+    case 'ping': send(c, { t: 'pong', c: m.c, s: now(), sl: loopLag }); if (typeof m.rtt === 'number') c.ping = Math.round(m.rtt); break;
     case 'list': send(c, { t: 'rooms', list: roomList() }); break;
     case 'create': {
       if (rooms.size >= MAX_ROOMS) { send(c, { t: 'err', msg: 'Сервер заполнен' }); break; }
@@ -348,6 +348,16 @@ setInterval(() => {
   }
 }, 1000);
 setInterval(() => { for (const ws of wss.clients) if (ws.readyState === 1) ws.ping(); }, 20000);
+
+// задержка цикла событий сервера (мс, максимум за ~2 с) — уходит игрокам в ответе на пинг,
+// попадает в их журнал игры: видно, тормозит ли сам сервер
+let loopLag = 0, lagMax = 0, lagT = Date.now(), lagWin = Date.now();
+setInterval(() => {
+  const t = Date.now(), d = t - lagT - 100;
+  lagT = t;
+  if (d > lagMax) lagMax = d;
+  if (t - lagWin >= 2000) { loopLag = Math.max(0, lagMax); lagMax = 0; lagWin = t; }
+}, 100);
 
 server.listen(PORT, HOST, () => {
   try { warm(); } catch {}

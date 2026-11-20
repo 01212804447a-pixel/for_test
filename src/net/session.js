@@ -7,6 +7,7 @@
 // проверяет попадание), по ИИ и технике — хосту. Хост считает ИИ, технику без водителя-
 // игрока, разрушаемые объекты и задачи и рассылает снимок мира 10 раз в секунду.
 import * as THREE from 'three';
+import { LOG } from '../core/gamelog.js';
 import { Soldier } from '../entities/soldier.js';
 import { WEAPONS } from '../data/weapons.js';
 import { pvpMap, TEAM_NAMES } from '../data/pvp.js';
@@ -133,6 +134,7 @@ export class NetSession {
 
   addPeer(p) {
     if (this.peers.has(p.id) || p.id === this.net.id) return;
+    LOG.ev('сеть: игрок в игре', { name: p.name, team: p.team, ping: p.ping });
     this.peers.set(p.id, { id: p.id, name: p.name, team: this.mode === 'pvp' ? p.team : 'negs', weapon: p.weapon || 'ak74m', last: null, interp: new Interp([3, 4]), soldier: null, ping: p.ping || 0 });
   }
   removePeer(id, name) {
@@ -141,6 +143,7 @@ export class NetSession {
     if (p.soldier) this.dropSoldier(p);
     if (p.tag) p.tag.remove();
     this.peers.delete(id);
+    LOG.ev('сеть: игрок вышел', { name: name || p.name });
     this.msg(`${esc(name || p.name)} покинул игру`);
   }
   dropSoldier(p) {

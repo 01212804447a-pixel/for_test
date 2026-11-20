@@ -15,7 +15,7 @@ export function solverFor(weaponId, env) {
     const a = AMMO[w.ammo];
     const max = a.kind === 'bullet' ? 1500 : a.kind === 'rocket' ? 700 : 420;
     const maxAng = a.kind === 'grenade' ? 0.75 : 0.35;
-    solverCache.set(key, new BallisticSolver(a, env, w.sight.h || 0.06, max, 25, maxAng));
+    solverCache.set(key, new BallisticSolver(a, env, (w.sight && w.sight.h) || 0.06, max, 25, maxAng));
   }
   return solverCache.get(key);
 }

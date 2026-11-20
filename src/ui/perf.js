@@ -3,6 +3,8 @@
 // работы JS заметно меньше длительности кадра), масштаб рендера плавно снижается до 50 %
 // от выбранного качеством; когда запас появляется — возвращается. Если же упираемся
 // в процессор (JS занимает почти весь кадр), разрешение не трогаем — толку не будет.
+import { LOG } from '../core/gamelog.js';
+
 export class Perf {
   constructor(app) {
     this.app = app;
@@ -47,6 +49,7 @@ export class Perf {
 
   apply() {
     const app = this.app;
+    LOG.ev('адаптивное разрешение', { scale: Math.round(this.scale * 100) / 100 });
     app.renderer.setPixelRatio(this.basePR * this.scale);
     app.renderer.setSize(innerWidth, innerHeight);
     if (app.post) app.post.resize();

@@ -13,6 +13,7 @@ import { CHARGES, MIL, firingTable, sightFor, fmtDiv, fmtSigned } from '../artil
 import { PVP_MAPS, PVP_WEAPONS, TEAM_NAMES, pvpMap, NET_ROLES, TOW_CHOICES, defaultKit, kitOf } from '../data/pvp.js';
 import { defaultServer } from '../net/net.js';
 import { lethalityTable } from '../data/lethality.js';
+import { LOG } from '../core/gamelog.js';
 
 const escH = (t) => String(t ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 
@@ -87,7 +88,12 @@ export class UI {
         <button class="btn" id="set">Настройки</button>
         <button class="btn" id="ctl">Управление</button>
       </div>
+      ${LOG.prevCrash ? `<div class="note" style="color:#ecd98a;margin-top:10px">Прошлая игра ${escH(LOG.prevCrash.crash)}. Журнал сохранён: <a href="#" id="crashlog" style="color:#ecd98a">скачать</a> (Настройки → Журналы…)</div>` : ''}
       <div class="foot">Реалистичная баллистика: сопротивление воздуха (G7), ветер, температура, деривация, сила Кориолиса, реактивные гранаты.<br>Нет прицельной точки — только целик и мушка или сетка оптического прицела.</div>`, { cls: 'mainmenu' });
+    const cl = this.panel.querySelector('#crashlog');
+    if (cl) cl.onclick = (e) => { e.preventDefault(); LOG.download(LOG.prevCrash.sid); };
+    // журнал прошлой сессии нашёлся позже, чем открылось меню — показать
+    LOG.onPrevCrash = () => { if (this.app.mode === 'menu' && this.panel && this.panel.querySelector('.mainmenu, .logo')) this.mainMenu(); };
     this.bind('#cont', () => { this.close(); this.app.toHQ(); });
     this.bind('#new', () => { this.app.newCampaign(); this.intro(); });
     this.bind('#range', () => { this.close(); this.app.startMission('range'); });
@@ -122,7 +128,8 @@ export class UI {
       <label>Качество графики <select id="q"><option value="low">Низкое</option><option value="medium">Среднее</option><option value="high">Высокое</option></select></label>
       <label><input type="checkbox" id="inv" ${st.invertY ? 'checked' : ''}> Инвертировать ось Y</label>
       <label><input type="checkbox" id="dyn" ${st.dynRes !== false ? 'checked' : ''}> Адаптивное разрешение: при нехватке кадров рендер становится мягче (до 50 %), чтобы держать ≈50 FPS</label>
-      <div class="row"><button class="btn sec" id="keys">Управление: назначить клавиши</button></div>
+      <label><input type="checkbox" id="glog" ${st.gameLog ? 'checked' : ''}> Журнал игры и зависаний — для разбора тормозов и ошибок (F8 в игре — поставить метку «вот тут лагнуло»)</label>
+      <div class="row"><button class="btn sec" id="keys">Управление: назначить клавиши</button><button class="btn sec" id="logs">Журналы…</button></div>
       <p class="note">Качество применяется при следующей загрузке задания. Справа внизу — FPS, время кадра и сколько из него занимает процессор (ЦП): если ЦП близко к времени кадра — упираемся в процессор, иначе — в видеокарту, тогда помогает качество «Низкое» и адаптивное разрешение.</p>
       <div class="row"><button class="btn" id="b">Готово</button></div>`);
     const p = this.panel;
@@ -133,8 +140,34 @@ export class UI {
     p.querySelector('#q').onchange = (e) => { st.quality = e.target.value; };
     p.querySelector('#inv').onchange = (e) => { st.invertY = e.target.checked; };
     p.querySelector('#dyn').onchange = (e) => { st.dynRes = e.target.checked; if (!st.dynRes && this.app.perf) { this.app.perf.scale = 1; this.app.perf.apply(); } };
+    p.querySelector('#glog').onchange = (e) => { st.gameLog = e.target.checked; if (st.gameLog) LOG.start(this.app); else LOG.stop(); this.app.persist(); };
     this.bind('#b', () => { this.app.persist(); back ? back() : this.close(); });
     this.bind('#keys', () => this.keybinds(() => this.settings(back)));
+    this.bind('#logs', () => this.logs(() => this.settings(back)));
+  }
+
+  // Журналы игры: текущий и сохранённые (после вылета — тоже здесь)
+  async logs(back) {
+    const fmt = (ms) => { const d = new Date(ms); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
+    const dur = (s) => { const m = Math.max(0, Math.round((s.last - s.start) / 60000)); return m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60} мин`; };
+    this.show(`<h1>Журналы</h1><p class="note">Загрузка списка…</p>`);
+    const list = (await LOG.sessions()) || [];
+    const cur = LOG.on ? LOG.meta : null;
+    const rows = [];
+    if (cur) rows.push({ ...cur, size: LOG.size, last: Date.now(), now: true });
+    for (const s of list) if (!cur || s.sid !== cur.sid) rows.push(s);
+    this.show(`<h1>Журналы</h1>
+      <p class="note">${LOG.on ? 'Журнал включён и пишется сейчас.' : 'Журнал выключен (Настройки → «Журнал игры и зависаний»). Включите его, поиграйте — один или с друзьями, — потом скачайте файл и отправьте его в чат для разбора: в нём система и видеокарта, FPS и время кадра по участкам каждую секунду, разбор каждого рывка, зависания, ошибки и сеть.'}
+      ${LOG.on && !LOG.dbOk ? '<br><span style="color:#ecd98a">Браузер не дал сохранить журнал на диск — доступен только журнал текущей сессии, пока страница открыта.</span>' : ''}</p>
+      ${rows.length ? `<table class="ctl">${rows.map((s, i) => `<tr><td><b>${fmt(s.start)}</b> · ${dur(s)}${s.now ? ' · <span style="color:#b9e6a4">текущая</span>' : ''}<br><span class="note">${escH(s.title || '—')} · рывков ${s.hitches || 0} · зависаний ${s.hangs || 0} · ошибок ${s.errors || 0} · ${Math.round((s.size || 0) / 1024)} КБ${s.crash ? ` · <span style="color:#f09a8a">${escH(s.crash)}</span>` : ''}</span></td>
+        <td style="white-space:nowrap"><button class="btn" data-dl="${i}">Скачать</button> <button class="btn sec" data-cp="${i}">Копировать</button></td></tr>`).join('')}</table>` : '<p class="note">Сохранённых журналов нет.</p>'}
+      <p class="note" id="lmsg"></p>
+      <div class="row"><button class="btn" id="b">Назад</button>${list.length > (cur ? 1 : 0) ? '<button class="btn sec" id="clr">Удалить сохранённые</button>' : ''}</div>`);
+    const p = this.panel, msg = (t) => { const e = p.querySelector('#lmsg'); if (e) e.textContent = t; };
+    p.querySelectorAll('[data-dl]').forEach((b) => { b.onclick = async () => { const s = rows[+b.dataset.dl]; msg('Готовлю файл…'); const name = await LOG.download(s.sid); msg(name ? `Сохранён файл ${name} (папка «Загрузки»). Если файл не появился — нажмите «Копировать» и вставьте текст в чат.` : 'Журнал пуст или недоступен.'); }; });
+    p.querySelectorAll('[data-cp]').forEach((b) => { b.onclick = async () => { const s = rows[+b.dataset.cp]; try { msg((await LOG.copy(s.sid)) ? 'Журнал скопирован в буфер обмена.' : 'Журнал пуст или недоступен.'); } catch (e) { msg('Браузер не дал скопировать: ' + e.message); } }; });
+    this.bind('#b', () => back());
+    this.bind('#clr', async () => { await LOG.clearSaved(); this.logs(back); });
   }
 
   // Переназначение клавиш: клик по кнопке → нажать новую клавишу или кнопку мыши

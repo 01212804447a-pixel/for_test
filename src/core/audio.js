@@ -1,6 +1,7 @@
 // Синтезированный звук (WebAudio): выстрелы с задержкой по скорости звука,
 // щелчки сверхзвуковых пуль, взрывы, шаги, двигатели, ветер, рация.
 import { SOUNDS } from '../data/weapons.js';
+import { LOG } from './gamelog.js';
 
 const SPEED_OF_SOUND = 325; // ~ при -20 °C
 
@@ -138,11 +139,12 @@ export class AudioSys {
   }
 
   shot(pos, profileId, own = false) {
+    LOG.count(own ? 'выстр.свои' : 'выстр');
     if (!this.ctx) return;
     const pr = SOUNDS[profileId] || SOUNDS.r545;
     const sp = own ? { d: 0, gain: 0.9, pan: 0, delay: 0, lp: 16000 } : this._spatial(pos);
     if (sp.d > 2500) return;
-    if (!this._voice(sp.delay + 0.6, own, sp.d)) return;
+    if (!this._voice(sp.delay + 0.6, own, sp.d)) { LOG.count('звук.пропущен'); return; }
     const t0 = this.ctx.currentTime + sp.delay;
     const out = this._out(sp, 0.55);
     this._noiseBurst(out, t0, 0.025 + pr.decay * 0.15, { type: 'highpass', freq: pr.freq * 1.6, gain: pr.crack, q: 0.5 });
@@ -175,8 +177,10 @@ export class AudioSys {
   }
 
   explosion(pos, size = 1) {
+    LOG.count('взрывы');
     if (!this.ctx) return;
     const sp = this._spatial(pos);
+    if (LOG.on) LOG.crumb(`взрыв ${size.toFixed(1)} в ${Math.round(sp.d)} м`);
     const t0 = this.ctx.currentTime + sp.delay;
     sp.gain = Math.min(1.6, sp.gain * 2.2 * size);
     const out = this._out(sp, 0.8);

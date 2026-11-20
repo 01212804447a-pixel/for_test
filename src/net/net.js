@@ -1,4 +1,6 @@
 // Соединение с игровым сервером (WebSocket): сообщения, пинг, оценка времени сервера
+import { LOG } from '../core/gamelog.js';
+
 export const NET_VER = 2;
 
 // Адрес сервера по умолчанию: если игра открыта с самого игрового сервера — он же
@@ -22,6 +24,8 @@ export class NetClient {
     this.ws = null; this.id = null; this.handlers = new Map();
     this.connected = false; this.rtt = 0; this.offset = 0; this.rooms = []; this.room = null;
     this._pingT = null;
+    // для журнала: трафик и провалы входящего потока (сбрасывается раз в секунду журналом)
+    this.stat = { inB: 0, outB: 0, inN: 0, outN: 0, gap: 0, lastIn: 0 };
   }
 
   on(type, fn) { if (!this.handlers.has(type)) this.handlers.set(type, new Set()); this.handlers.get(type).add(fn); return () => this.handlers.get(type).delete(fn); }
@@ -39,7 +43,13 @@ export class NetClient {
       ws.onopen = () => { this.send({ t: 'hello', name, ver: NET_VER }); };
       ws.onmessage = (e) => {
         let m;
-        try { m = JSON.parse(e.data); } catch { return; }
+        const st = this.stat, tn = performance.now();
+        st.inB += e.data.length || 0; st.inN++;
+        if (st.lastIn && tn - st.lastIn > st.gap) st.gap = tn - st.lastIn;
+        st.lastIn = tn;
+        try { m = JSON.parse(e.data); } catch { LOG.err('net', 'не разобрано сообщение сервера', null, String(e.data).slice(0, 120)); return; }
+        if (m.t === 'pong' && typeof m.sl === 'number') st.sl = m.sl;
+        LOG.phase('сеть:' + m.t);
         if (m.t === 'welcome') { clearTimeout(to); this.id = m.id; this.connected = true; this.offset = m.time - Date.now(); this._startPing(); resolve(this); }
         else if (m.t === 'pong') {
           const rtt = Date.now() - m.c;
@@ -47,10 +57,14 @@ export class NetClient {
           this.offset = m.s + rtt / 2 - Date.now();
         } else if (m.t === 'rooms') this.rooms = m.list;
         else if (m.t === 'room' || m.t === 'start' || m.t === 'end') this.room = m.room;
-        this.emit(m.t, m);
+        if (m.t === 'welcome') LOG.ev('сеть: подключено', { ver: NET_VER });
+        else if (m.t === 'start' || m.t === 'end' || m.t === 'error' || m.t === 'kicked') LOG.ev('сеть: ' + m.t, { mode: m.room && m.room.mode, mission: m.room && m.room.mission, players: m.room && m.room.players ? m.room.players.length : undefined, msg: m.msg || m.reason });
+        if (LOG.on) { const a = performance.now(); this.emit(m.t, m); const d = performance.now() - a; if (d > 8) LOG.crumb(`сеть: обработка ${m.t} ${Math.round(d)} мс`); }
+        else this.emit(m.t, m);
+        LOG.phase('i');
       };
-      ws.onclose = () => { clearTimeout(to); const was = this.connected; this.connected = false; this.room = null; clearInterval(this._pingT); if (was) this.emit('close', {}); else reject(new Error('Не удалось подключиться')); };
-      ws.onerror = () => {};
+      ws.onclose = (ev) => { LOG.ev('сеть: соединение закрыто', { code: ev && ev.code, was: this.connected }); clearTimeout(to); const was = this.connected; this.connected = false; this.room = null; clearInterval(this._pingT); if (was) this.emit('close', {}); else reject(new Error('Не удалось подключиться')); };
+      ws.onerror = () => { LOG.ev('сеть: ошибка соединения'); };
     });
   }
 
@@ -60,7 +74,13 @@ export class NetClient {
     this.send({ t: 'ping', c: Date.now() });
   }
 
-  send(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); }
+  send(m) {
+    if (this.ws && this.ws.readyState === 1) {
+      const s = JSON.stringify(m);
+      this.ws.send(s);
+      this.stat.outB += s.length; this.stat.outN++;
+    }
+  }
   get serverTime() { return Date.now() + this.offset; }
   close() { clearInterval(this._pingT); if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} } this.ws = null; this.connected = false; this.room = null; }
 }

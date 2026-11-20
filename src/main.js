@@ -1,6 +1,7 @@
 // N.E.G.S: Заполярье — точка входа: рендерер, режимы (меню / штаб / задание), цикл
 import * as THREE from 'three';
 import { Perf } from './ui/perf.js';
+import { LOG } from './core/gamelog.js';
 import { Input } from './core/input.js';
 import { AudioSys } from './core/audio.js';
 import { loadSave, writeSave, resetSave } from './core/save.js';
@@ -68,6 +69,9 @@ class App {
     this.post = new PostFX(this.renderer);
     this.perf = new Perf(this);
     this.applyQuality();
+    // журнал игры и зависаний (Настройки; по умолчанию выключен)
+    this.mode = 'menu';
+    if (this.settings.gameLog) LOG.start(this);
     this.hud = new HUD(document.getElementById('hud'));
     this.hud.hide();
     this.ui = new UI(this, document.getElementById('ui'));
@@ -93,18 +97,27 @@ class App {
       if (e.code === 'Escape' && this.mode === 'mission' && !this.ui.isOpen() && this.mission && !this.mission.finished) { this.input.releaseLock(); this.pause(); }
       else if (e.code === 'Escape' && this.mode === 'hq' && !this.ui.isOpen()) { this.input.releaseLock(); this.ui.clickToPlay('Нажмите на экран, чтобы продолжить'); }
       else if (e.code === 'Escape' && this.ui.isOpen() && this.mode !== 'menu' && this.mode !== 'loading' && !this.paused) this.ui.close();
+      // F8 — метка в журнале «вот тут лагнуло / баг»
+      if (e.code === 'F8') {
+        e.preventDefault();
+        const ok = LOG.userMark();
+        if (this.mode === 'mission' || this.mode === 'hq') this.hud.message(ok ? 'Метка в журнале поставлена (F8)' : 'Журнал выключен: Настройки → «Журнал игры и зависаний»', 2);
+      }
     });
     window.__game = this;
+    this.log = LOG;
     this.ready = false;
     if (hasAssets()) {
       this.ui.loading('Загрузка ресурсов');
+      const tA = performance.now();
+      LOG.phase('загрузка ресурсов');
       preload((f) => { const b = document.querySelector('.loadbar i'); if (b) { b.style.animation = 'none'; b.style.width = (f * 100).toFixed(0) + '%'; } })
-        .then(() => { this.ready = true; this.ui.mainMenu(); });
+        .then(() => { LOG.ev('ресурсы загружены', { ms: Math.round(performance.now() - tA) }); this.ready = true; this.ui.mainMenu(); });
     } else { this.ready = true; this.ui.mainMenu(); }
     requestAnimationFrame((t) => this.loop(t));
   }
 
-  persist() { writeSave(this.save); this.applyQuality(); }
+  persist() { writeSave(this.save); this.applyQuality(); LOG.settings(this.settings); }
 
   // Качество графики: разрешение рендера, сглаживание, мягкость теней, фоновое затенение
   applyQuality() {
@@ -112,6 +125,7 @@ class App {
     if (q === this._q) return;
     this._q = q;
     const pr = q === 'low' ? Math.min(devicePixelRatio, 0.85) : q === 'medium' ? Math.min(devicePixelRatio, 1) : Math.min(devicePixelRatio, 1.5);
+    LOG.ev('качество', { q, pr });
     if (this.perf) this.perf.basePR = pr;
     this.renderer.setPixelRatio(pr * (this.perf ? this.perf.scale : 1));
     this.renderer.setSize(innerWidth, innerHeight);
@@ -131,12 +145,17 @@ class App {
   toHQ() {
     this.disposeMission();
     this.hud.hide();
+    LOG.place('штаб');
     if (!this.hq) {
       this.ui.loading('Штаб «Полярный Лис»');
       setTimeout(async () => {
+        LOG.phase('загрузка штаба');
+        const t0 = performance.now();
         this.hq = new HQ(this);
         this.hq.build(this.save.completed);
+        const t1 = performance.now();
         await this.hq.compileShaders();
+        LOG.ev('штаб загружен', { buildMs: Math.round(t1 - t0), shaderMs: Math.round(performance.now() - t1), programs: this.renderer.info.programs.length });
         this.ui.close();
         this._enterHQ();
       }, 60);
@@ -159,12 +178,19 @@ class App {
     setTimeout(async () => {
       try {
         const squad = def.noSquad ? [] : this.save.squad.filter((x) => !(this.save.hospital[x] > 0));
-        const m = new Mission(this, def, { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv, atgm: !!this.save.atgm });
+        const setup = { squad, primary: this.save.primary, launcher: this.save.launcher, vehicles: this.save.vehicles, howitzer: !!this.save.howitzer, mortar: !!this.save.mortar, kpv: !!this.save.kpv, atgm: !!this.save.atgm };
+        LOG.place(def.title);
+        LOG.ev('задание: загрузка', { id, title: def.title, setup });
+        LOG.phase('загрузка задания');
+        const t0 = performance.now();
+        const m = new Mission(this, def, setup);
         this.hud.reset();
         m.build();
+        const t1 = performance.now();
         // шейдеры — заранее и параллельно (без «Страница не отвечает» и рывков в бою)
         this.ui.loading(`${def.title} — подготовка шейдеров`);
         await m.compileShaders();
+        LOG.ev('задание: загружено', { id, buildMs: Math.round(t1 - t0), shaderMs: Math.round(m.shaderMs || 0), programs: this.renderer.info.programs.length, soldiers: m.soldiers.length, vehicles: m.vehicles.length, frozen: m.frozen });
         this.mission = m;
         this.ui.close();
         this.hud.show();
@@ -218,11 +244,17 @@ class App {
         const kit = kitOf(me, room);
         const primary = WEAPONS[kit.weapon] ? kit.weapon : 'ak74m';
         const n = room.players.length;
+        LOG.place(`${def.title} (сеть, ${room.mode})`);
+        LOG.ev('сеть: задание загрузка', { id: def.id, mode: room.mode, players: n, host: session.isHost, kit });
+        LOG.phase('загрузка задания');
+        const t0 = performance.now();
         const m = new Mission(this, def, { squad: [], primary, launcher: kit.heavy || null, grenades: kit.grenades, smokes: kit.smokes ?? 2, vehicles: pvp ? [] : n > 2 ? ['tigr', 'niva'] : ['tigr'], howitzer: false, net: session });
         this.hud.reset();
         m.build();
+        const t1 = performance.now();
         this.ui.loading(`${def.title} — подготовка шейдеров`);
         await m.compileShaders(8000); // в сети ждём не дольше 8 с
+        LOG.ev('задание: загружено', { id: def.id, buildMs: Math.round(t1 - t0), shaderMs: Math.round(m.shaderMs || 0), programs: this.renderer.info.programs.length, soldiers: m.soldiers.length, vehicles: m.vehicles.length });
         this.mission = m;
         this.ui.close();
         this.hud.show();
@@ -240,6 +272,7 @@ class App {
 
   endNetMission(ok, reason, m, lost) {
     if (this.mission !== m) return;
+    LOG.ev('задание: итог', { id: m.def.id, ok, reason, net: true, mt: Math.round(m.time) });
     m.netStopped = true;
     this.input.releaseLock();
     this.paused = true;
@@ -263,6 +296,7 @@ class App {
 
   endMission(ok, reason, m) {
     if (this.mission !== m) return;
+    LOG.ev('задание: итог', { id: m.def.id, ok, reason, mt: Math.round(m.time), lost: m.stats.lost });
     // госпиталь и опыт
     const s = this.save;
     for (const id of Object.keys(s.hospital)) if (s.hospital[id] > 0) s.hospital[id]--;
@@ -287,25 +321,34 @@ class App {
   loop(t) {
     requestAnimationFrame((tt) => this.loop(tt));
     this.perf.begin();
+    LOG.frameBegin();
     let dt = (t - this.last) / 1000;
     this.last = t;
     if (dt > 0.1) dt = 0.1;
     this.fps = this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
     if (this.mode === 'menu' || this.mode === 'loading') {
       this.menuScene.update(dt);
+      LOG.mark('обн.меню');
+      LOG.phase('r');
       this.menuScene.render(this.renderer);
+      LOG.mark('рис.меню');
     } else if (this.mode === 'hq' && this.hq) {
       if (this.input.active) this.ui.hqPrompt(this.hq.current ? this.hq.current.label : null);
       if (this.input.active || this.ui.isOpen()) this.hq.update(dt);
+      LOG.mark('обн.штаб');
+      LOG.phase('r');
       this.hq.render();
+      LOG.mark('рис.штаб');
     } else if (this.mode === 'mission' && this.mission) {
       const mp = !!this.mission.net;
       if (mp ? !this.mission.netStopped : (!this.paused && this.input.active)) this.mission.update(dt);
       else if (!this.paused && !this.mission.started) { this.mission.updateCamera(0); }
       if (this.input.active) this.mission.started = true;
+      LOG.phase('r');
       this.mission.render();
     }
     this.input.endFrame();
+    LOG.frameEnd();
     this.perf.end();
   }
 }

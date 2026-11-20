@@ -658,16 +658,24 @@ class GameLog {
   }
   async download(sid = this.sid) {
     const t = await this.text(sid);
-    if (!t) return false;
+    if (!t) return { ok: false, msg: 'Журнал пуст или недоступен.' };
     const meta = (this.saved || []).find((s) => s.sid === sid) || this.meta;
     const name = `negs-log_${stamp(new Date(meta.start || Date.now()))}.txt`;
-    const body = this.summarize(t) + '\n' + t;
+    const blob = new Blob([this.summarize(t) + '\n' + t], { type: 'text/plain;charset=utf-8' });
+    // страница на claude.ai: сохранение файла — через платформу (браузер там скачивать не даёт)
+    if (window.claude && window.claude.use) {
+      const d = await window.claude.use('downloads');
+      if (d) {
+        try { await d.save({ filename: name, data: blob }); return { ok: true, name }; }
+        catch (e) { return { ok: false, msg: e && e.code === 'declined' ? 'Сохранение отменено.' : 'Не удалось сохранить: ' + ((e && (e.message || e.code)) || e) + '. Нажмите «Копировать».' }; }
+      }
+    }
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([body], { type: 'text/plain;charset=utf-8' }));
+    a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
-    return name;
+    return { ok: true, name };
   }
   async copy(sid = this.sid) {
     const t = await this.text(sid);
